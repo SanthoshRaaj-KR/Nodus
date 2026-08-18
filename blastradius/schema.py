@@ -42,6 +42,8 @@ NODE_LABELS = (
 
 DEPENDS_ON = "DEPENDS_ON"          # Service|PackageVersion -> PackageVersion
 REQUIRED_BY = "REQUIRED_BY"        # inverse; spans PV->PV and PV->Service
+PRESENT_IN = "PRESENT_IN"          # PackageVersion -> Service, transitive closure
+HAS_PACKAGE = "HAS_PACKAGE"        # inverse
 CONTAINS = "CONTAINS"              # File -> Function
 CALLS = "CALLS"                    # Function -> Function
 CALLED_BY = "CALLED_BY"            # inverse
@@ -56,8 +58,16 @@ DECLARED_IN = "DECLARED_IN"        # File -> Service
 
 #: Written at ingest so that backward reachability is a pinned-source forward
 #: walk. Nothing else in the codebase may assume a reversed traversal works.
+#:
+#: PRESENT_IN is different in kind: it is the *transitive closure* of
+#: DEPENDS_ON, flattened in Python at ingest. It exists because a variable-
+#: length traversal must declare a maximum depth, and a real npm tree is
+#: routinely deeper than any bound we would want to hardcode -- so a bounded
+#: walk would silently under-report exposure. One hop over PRESENT_IN is both
+#: exact at any depth and far faster.
 INVERSE_OF = {
     DEPENDS_ON: REQUIRED_BY,
+    PRESENT_IN: HAS_PACKAGE,
     CALLS: CALLED_BY,
     CALLS_EXTERNAL: IMPORT_USED_BY,
     HANDLED_BY: HANDLES,
@@ -67,6 +77,8 @@ INVERSE_OF = {
 EDGE_TYPES = (
     DEPENDS_ON,
     REQUIRED_BY,
+    PRESENT_IN,
+    HAS_PACKAGE,
     CONTAINS,
     CALLS,
     CALLED_BY,

@@ -1,0 +1,10 @@
+{
+  "advisory_id": "GHSA-cln-0000-0003",
+  "ecosystem": "npm",
+  "package": "debug",
+  "affected_range": ">=5.0.0",
+  "published_at": 1747900800,
+  "withdrawn_at": 4102444800,
+  "severity": "moderate",
+  "iocs": { "paths": [], "content_markers": [] }
+}

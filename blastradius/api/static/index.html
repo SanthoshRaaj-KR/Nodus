@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blast Radius</title>
+<style>
+:root {
+  --bg: #0d1117; --panel: #161b22; --panel-2: #1c2128; --line: #30363d;
+  --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+  --p0: #f85149; --p1: #ff7b45; --p2: #d29922; --p3: #3fb950;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ffffff; --panel: #f6f8fa; --panel-2: #eaeef2; --line: #d0d7de;
+    --text: #1f2328; --muted: #59636e; --accent: #0969da;
+    --p0: #cf222e; --p1: #bc4c00; --p2: #9a6700; --p3: #1a7f37;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+header {
+  border-bottom: 1px solid var(--line); padding: 14px 22px;
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+}
+h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+.sub { color: var(--muted); font-size: 13px; }
+.spacer { flex: 1; }
+#counts { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+main { display: grid; grid-template-columns: 340px 1fr; min-height: calc(100vh - 56px); }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+aside { border-right: 1px solid var(--line); padding: 18px; }
+section { padding: 18px 22px; overflow-x: auto; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 0 0 10px; }
+.adv {
+  border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px;
+  margin-bottom: 9px; cursor: pointer; background: var(--panel);
+}
+.adv:hover { border-color: var(--accent); }
+.adv.on { border-color: var(--accent); background: var(--panel-2); }
+.adv .pkg { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+.adv .id { color: var(--muted); font-size: 11.5px; font-family: var(--mono); }
+.adv .rng { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 3px; }
+button {
+  width: 100%; margin-top: 12px; padding: 11px; border-radius: 8px; cursor: pointer;
+  background: var(--p0); color: #fff; border: none; font-size: 14px; font-weight: 600;
+  font-family: inherit;
+}
+button:disabled { opacity: .5; cursor: default; }
+.clock {
+  display: flex; gap: 26px; align-items: baseline; margin-bottom: 18px; flex-wrap: wrap;
+  border: 1px solid var(--line); border-radius: 8px; padding: 14px 18px; background: var(--panel);
+}
+.clock .big { font-family: var(--mono); font-size: 30px; font-weight: 700; letter-spacing: -0.02em; }
+.clock .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; }
+.tier { border-left: 3px solid var(--line); padding: 11px 14px; margin-bottom: 10px; background: var(--panel); border-radius: 0 8px 8px 0; }
+.tier.t0 { border-left-color: var(--p0); }
+.tier.t1 { border-left-color: var(--p1); }
+.tier.t2 { border-left-color: var(--p2); }
+.tier.t3 { border-left-color: var(--p3); }
+.tier .head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.badge { font-family: var(--mono); font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; color: #fff; white-space: nowrap; }
+.t0 .badge { background: var(--p0); } .t1 .badge { background: var(--p1); }
+.t2 .badge { background: var(--p2); } .t3 .badge { background: var(--p3); }
+.svc { font-weight: 600; font-size: 15px; }
+.meta { color: var(--muted); font-size: 12.5px; font-family: var(--mono); }
+.detail { margin-top: 9px; font-family: var(--mono); font-size: 12.5px; }
+.detail div { padding: 2px 0; color: var(--muted); }
+.detail .hl { color: var(--text); }
+.method { display: inline-block; min-width: 46px; font-weight: 700; color: var(--accent); }
+.empty { color: var(--muted); padding: 26px; text-align: center; border: 1px dashed var(--line); border-radius: 8px; }
+.legend { margin-top: 20px; font-size: 12px; color: var(--muted); }
+.legend code { font-family: var(--mono); color: var(--text); }
+.legend p { margin: 6px 0; }
+.err { border: 1px solid var(--p0); border-radius: 8px; padding: 14px; color: var(--p0); font-family: var(--mono); font-size: 13px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Blast Radius</h1>
+  <span class="sub">supply-chain exposure across a fleet, lockfile + call graph</span>
+  <span class="spacer"></span>
+  <span id="counts">connecting...</span>
+</header>
+<main>
+  <aside>
+    <h2>Advisories</h2>
+    <div id="advisories"></div>
+    <button id="go" disabled>Simulate 09:00 compromise</button>
+    <div class="legend">
+      <p><strong style="color:var(--text)">Tiers</strong></p>
+      <p><code>P0</code> exposed <em>and</em> a persistence artifact is on disk &mdash; removing the package does not clear it.</p>
+      <p><code>P1</code> an HTTP route reaches the calling code.</p>
+      <p><code>P2</code> imported from source, no route path found.</p>
+      <p><code>P3</code> in the lockfile, never imported &mdash; safe to deprioritise.</p>
+    </div>
+  </aside>
+  <section>
+    <div class="clock">
+      <div><div class="lbl">Incident</div><div class="big" id="t0">09:00:00</div></div>
+      <div><div class="lbl">Answered</div><div class="big" id="t1">--:--:--</div></div>
+      <div><div class="lbl">Elapsed</div><div class="big" id="ms">&mdash;</div></div>
+      <div><div class="lbl">Services hit</div><div class="big" id="hit">&mdash;</div></div>
+    </div>
+    <div id="out"><div class="empty">Pick an advisory, then simulate the compromise.</div></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let advisories = [], selected = null;
+
+const pad = (n) => String(n).padStart(2, "0");
+const clockAt = (msOffset) => {
+  const s = Math.floor((9 * 3600 * 1000 + msOffset) / 1000);
+  return pad(Math.floor(s / 3600)) + ":" + pad(Math.floor(s / 60) % 60) + ":" + pad(s % 60);
+};
+
+async function health() {
+  try {
+    const r = await fetch("/api/health");
+    const d = await r.json();
+    if (!d.ok) { $("counts").textContent = "node unreachable"; return; }
+    const parts = Object.entries(d.counts).filter(([, n]) => n > 0)
+      .map(([k, n]) => k + " " + n.toLocaleString());
+    $("counts").textContent = parts.length ? parts.join("   ") : "graph is empty - run the ingest";
+  } catch (e) { $("counts").textContent = "api unreachable"; }
+}
+
+async function loadAdvisories() {
+  const r = await fetch("/api/advisories");
+  advisories = await r.json();
+  $("advisories").innerHTML = advisories.map((a, i) => {
+    const rng = (a.affected_versions && a.affected_versions.length)
+      ? a.affected_versions.join(", ") : (a.affected_range || "");
+    return '<div class="adv" data-i="' + i + '">' +
+      '<div class="pkg">' + a.package + '</div>' +
+      '<div class="id">' + a.advisory_id + '</div>' +
+      '<div class="rng">' + rng + '</div></div>';
+  }).join("");
+  document.querySelectorAll(".adv").forEach((el) => {
+    el.onclick = () => {
+      document.querySelectorAll(".adv").forEach((e) => e.classList.remove("on"));
+      el.classList.add("on");
+      selected = advisories[+el.dataset.i];
+      $("go").disabled = false;
+    };
+  });
+}
+
+function tierClass(t) {
+  const m = t.match(/P(\d)/);
+  return "t" + (m ? m[1] : "3");
+}
+
+function render(d) {
+  $("t1").textContent = clockAt(d.wall_ms);
+  $("ms").textContent = d.wall_ms.toFixed(0) + " ms";
+  $("hit").textContent = d.findings.length;
+
+  if (!d.affected_keys.length) {
+    $("out").innerHTML = '<div class="empty">No version of <strong>' + d.package +
+      '</strong> in this corpus matches the advisory. Nothing exposed.</div>';
+    return;
+  }
+  if (!d.findings.length) {
+    $("out").innerHTML = '<div class="empty">Affected versions present (' +
+      d.affected_keys.join(", ") + ') but no service depends on them.</div>';
+    return;
+  }
+
+  $("out").innerHTML = d.findings.map((f) => {
+    const bits = [];
+    if (f.routes.length) bits.push(f.routes.length + " route(s)");
+    if (f.functions.length) bits.push(f.functions.length + " function(s)");
+    if (f.artifacts.length) bits.push(f.artifacts.length + " artifact(s)");
+    if (f.dev_only) bits.push("dev-only");
+    bits.push("depth " + f.min_depth);
+
+    const arts = f.artifacts.map((a) =>
+      '<div style="color:var(--p0)">artifact ' + a.path + ' <span style="opacity:.7">[' + a.kind + ']</span></div>').join("");
+    const routes = f.routes.map((r) =>
+      '<div><span class="method">' + r.method + '</span><span class="hl">' + r.pattern +
+      '</span> &rarr; ' + r.handler + ' <span style="opacity:.6">(' + r.file + ':' + r.line + ')</span></div>').join("");
+    const fns = f.functions.map((fn) =>
+      '<div>calls <span class="hl">' + fn.specifier + '</span> from ' + fn.name +
+      '() <span style="opacity:.6">(' + fn.file + ':' + fn.line + ')</span></div>').join("");
+
+    return '<div class="tier ' + tierClass(f.tier) + '">' +
+      '<div class="head"><span class="badge">' + f.tier + '</span>' +
+      '<span class="svc">' + f.service + '</span>' +
+      '<span class="meta">' + f.packages.join(", ") + '</span>' +
+      '<span class="spacer"></span>' +
+      '<span class="meta">' + bits.join(" &middot; ") + '</span></div>' +
+      '<div class="detail">' + arts + routes + fns + '</div></div>';
+  }).join("");
+}
+
+$("go").onclick = async () => {
+  if (!selected) return;
+  $("go").disabled = true;
+  $("out").innerHTML = '<div class="empty">querying...</div>';
+  try {
+    const r = await fetch("/api/assess", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(selected),
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({ detail: r.statusText }));
+      $("out").innerHTML = '<div class="err">' + (e.detail || r.statusText) + '</div>';
+      return;
+    }
+    render(await r.json());
+  } catch (e) {
+    $("out").innerHTML = '<div class="err">' + e.message + '</div>';
+  } finally {
+    $("go").disabled = false;
+  }
+};
+
+health();
+loadAdvisories();
+setInterval(health, 15000);
+</script>
+</body>
+</html>

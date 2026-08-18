@@ -49,6 +49,11 @@ class ParsedLock:
     direct: set[tuple[str, str, bool]] = field(default_factory=set)
     #: (parent "name@version", child "name@version") -- transitive edges
     edges: set[tuple[str, str]] = field(default_factory=set)
+    #: package name -> "name@version" for the hoisted top-level copy. A
+    #: service's own source resolves from the repo root, so this is the version
+    #: an `import "lodash"` in application code actually loads -- which is not
+    #: necessarily the version some nested dependency sees.
+    root_level: dict[str, str] = field(default_factory=dict)
     #: dependency names that no entry satisfied, for the ingest report
     unresolved: set[str] = field(default_factory=set)
 
@@ -133,6 +138,8 @@ def parse_package_lock(path: Path | str, repo: str | None = None) -> ParsedLock:
                 resolved=entry.get("resolved", ""),
             )
             parsed.packages[pv.key] = pv
+            if entry_path == f"node_modules/{pv.name}":
+                parsed.root_level[pv.name] = pv.key
 
     # Pass 2: walk every entry's declared dependencies and resolve each one to
     # the exact tree entry that satisfies it.

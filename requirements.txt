@@ -1,0 +1,5 @@
+# The client speaks HTTP through urllib, so HydraDB itself needs no package.
+fastapi>=0.115
+uvicorn[standard]>=0.32
+# Optional: only needed if you switch the loader to the Bolt transport.
+# neo4j>=5.26
