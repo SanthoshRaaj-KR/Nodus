@@ -56,6 +56,12 @@ class Evidence:
     LIVE_WINDOW_OVERLAP = "LIVE_WINDOW_OVERLAP"
     TRANSITIVELY_EXPOSED = "TRANSITIVELY_EXPOSED"
     KNOWN_VULNERABILITY = "KNOWN_VULNERABILITY"
+    #: A project resolved the version under review, and nothing marks that
+    #: version as compromised or vulnerable. The fact is identical to
+    #: RESOLVES_COMPROMISED_VERSION; the claim is not, and the two must not
+    #: share an atom -- an atom whose name asserts a compromise cannot be
+    #: emitted for a version no incident and no advisory names.
+    RESOLVES_SUBJECT_VERSION = "RESOLVES_SUBJECT_VERSION"
     POSSIBLE_EXACT = "POSSIBLE_EXACT"
     POSSIBLE = "POSSIBLE"
     SHARED_MAINTAINER = "SHARED_MAINTAINER"
@@ -100,6 +106,9 @@ def derive_confidence(atoms: set[str]) -> str:
     if Evidence.POSSIBLE_EXACT in atoms:
         return Confidence.MEDIUM
     if Evidence.POSSIBLE in atoms:
+        return Confidence.LOW
+    if Evidence.RESOLVES_SUBJECT_VERSION in atoms:
+        # A true statement about an installation, not a finding about a threat.
         return Confidence.LOW
     if atoms & Evidence.RELATIONAL:
         return Confidence.INVESTIGATE
@@ -166,7 +175,11 @@ class BlastRadius:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     direct_dependents: list[dict] = field(default_factory=list)
+
+    #: Empty when ``analyse(include_transitive=False)`` skipped Q3. Empty here
+    #: means "not asked", not "none found" -- see the flag on analyse().
     transitive_dependents: list[dict] = field(default_factory=list)
+    transitive_measured: bool = True
     lockfile_entries: list[dict] = field(default_factory=list)
     exposed_projects: list[dict] = field(default_factory=list)
     live_window_projects: list[dict] = field(default_factory=list)
@@ -501,8 +514,18 @@ class BlastRadiusEngine:
         name: str,
         version: str,
         include_paths: bool = False,
+        include_transitive: bool = True,
     ) -> BlastRadius:
-        """Everything, for one compromised version."""
+        """Everything, for one compromised version.
+
+        ``include_transitive`` covers Q3 alone -- the bounded reverse walk that
+        lists every version transitively admitting this one. It is the most
+        expensive query here (~110 ms against ~3 ms for the exposure answer)
+        and nothing downstream of it changes a verdict, so an interactive
+        caller redrawing on every click turns it off. When it is off the field
+        stays empty and callers must not read the empty list as a measured
+        zero.
+        """
         target = f"{name}@{version}"
         result = BlastRadius(target=target)
 
@@ -511,6 +534,7 @@ class BlastRadiusEngine:
             return result
         result.target_id = version_id
 
+        result.transitive_measured = include_transitive
         result.metadata = self.package_version(result, version_id)
         result.exists = bool(result.metadata)
         if not result.exists:
@@ -520,7 +544,10 @@ class BlastRadiusEngine:
         result.advisories = self.advisories_for(result, version_id)
 
         result.direct_dependents = self.direct_dependents(result, version_id)
-        result.transitive_dependents = self.transitive_dependents(result, version_id)
+        if include_transitive:
+            result.transitive_dependents = self.transitive_dependents(
+                result, version_id
+            )
         result.lockfile_entries = self.lockfile_entries(result, version_id)
         result.exposed_projects = self.exposed_projects(result, version_id)
 
@@ -584,13 +611,22 @@ class BlastRadiusEngine:
             ))
 
         live = {p["service"] for p in result.live_window_projects}
+        # Exposure needs something to be exposed *to*. With no incident and no
+        # advisory, "this project resolves this version" is a true statement
+        # about an installation and nothing more; calling it exposure would
+        # paint every project in the corpus red the moment anyone looked up a
+        # perfectly healthy package.
+        flagged = compromised or bool(result.advisories)
 
         for project in result.exposed_projects:
             direct = project.get("depth", 0) == schema.DIRECT_DEPTH
-            atoms = {Evidence.RESOLVES_COMPROMISED_VERSION}
-            if not direct:
-                atoms.add(Evidence.TRANSITIVELY_EXPOSED)
-            if project["service"] in live:
+            if flagged:
+                atoms = {Evidence.RESOLVES_COMPROMISED_VERSION}
+                if not direct:
+                    atoms.add(Evidence.TRANSITIVELY_EXPOSED)
+            else:
+                atoms = {Evidence.RESOLVES_SUBJECT_VERSION}
+            if flagged and project["service"] in live:
                 atoms.add(Evidence.LIVE_WINDOW_OVERLAP)
 
             via = project.get("via_direct", "")
@@ -610,10 +646,14 @@ class BlastRadiusEngine:
                     "resolution window does not overlap the incident window"
                 )
 
+            if flagged:
+                status = "DIRECTLY_EXPOSED" if direct else "TRANSITIVELY_EXPOSED"
+            else:
+                status = "RESOLVES_VERSION"
             findings.append(Finding(
                 entity=project["service"],
                 entity_type="Project",
-                status="DIRECTLY_EXPOSED" if direct else "TRANSITIVELY_EXPOSED",
+                status=status,
                 atoms=atoms,
                 path=path,
                 reason=(

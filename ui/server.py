@@ -23,6 +23,9 @@ from fastapi.staticfiles import StaticFiles
 
 from blastradius import schema
 from blastradius.hydra_client import HydraClient, HydraError
+from blastradius.ids import IdAllocator
+from blastradius.pkg import graphview as pkgview
+from blastradius.pkg import incident as pkgincident
 from blastradius.query import blast, graphview
 from blastradius.query.advisory import Advisory
 
@@ -32,6 +35,11 @@ ADVISORIES = HERE.parent / "advisories"
 
 app = FastAPI(title="Blast Radius Explorer", version="1.0.0")
 client = HydraClient()
+
+#: purl -> integer id, shared with the CLI. Held open for the process
+#: because every package-view request resolves a target through it, and
+#: reopening a sqlite file per keystroke is the one avoidable round trip.
+ids = IdAllocator()
 
 
 @app.get("/api/health")
@@ -125,6 +133,88 @@ def assess(package: str, version: str = "", range: str = ""):
             for f in sorted(result.findings, key=lambda f: (f.rank, f.service))
         ],
     }
+
+
+
+# -- package blast radius --------------------------------------------------
+#
+# The third view. Where /api/graph returns a whole-graph sweep for the browser
+# to highlight, these return an answer already computed against HydraDB: which
+# projects resolved one exact version, and with what evidence. The difference
+# is the point -- see blastradius/pkg/graphview.py.
+
+
+def _split_spec(spec: str) -> tuple[str, str]:
+    """`lodash@4.17.21` -> ("lodash", "4.17.21"). Scoped names keep their @."""
+    trimmed = spec.strip()
+    at = trimmed.rfind("@")
+    if at <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"expected name@version, got {spec!r}",
+        )
+    return trimmed[:at], trimmed[at + 1 :]
+
+
+@app.get("/api/pkg/graph")
+def pkg_graph(spec: str):
+    name, version = _split_spec(spec)
+    try:
+        return pkgview.package_graph(client, ids, name, version)
+    except HydraError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.get("/api/pkg/targets")
+def pkg_targets(limit: int = 6):
+    """Versions worth marking, so the demo is one click rather than typing."""
+    try:
+        return pkgview.suggested_targets(client, limit=limit)
+    except HydraError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.post("/api/pkg/incident")
+def pkg_mark(spec: str, window_hours: int = 6):
+    """Mark one exact version as compromised.
+
+    Synthetic throughout: this writes an Incident node in our own database
+    pointing at an ordinary, healthy public package. Nothing is downloaded,
+    nothing is executed, and no package is modified. The edge lands on the
+    PackageVersion and never on the Package, which is what keeps 4.17.20
+    untouched when 4.17.21 is marked.
+    """
+    name, version = _split_spec(spec)
+    try:
+        incident = pkgincident.create_incident(
+            client, ids, name, version,
+            incident_id=pkgincident.incident_id_for(name, version),
+            window_hours=window_hours,
+            verbose=False,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except HydraError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    return {
+        "marked": True,
+        "spec": f"{name}@{version}",
+        "incident_id": incident.incident_id,
+        "live_from": incident.live_from,
+        "live_until": incident.live_until,
+        "synthetic": True,
+    }
+
+
+@app.delete("/api/pkg/incident")
+def pkg_unmark(spec: str):
+    """Retract the simulated compromise, so the same target can be re-run."""
+    name, version = _split_spec(spec)
+    try:
+        removed = pkgincident.clear_incident(client, ids, name, version)
+    except HydraError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    return {"marked": False, "spec": f"{name}@{version}", "removed": removed}
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

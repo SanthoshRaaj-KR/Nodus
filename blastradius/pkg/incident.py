@@ -33,7 +33,13 @@ from ..ids import IdAllocator
 from .identity import version_key
 from .writer import PackageGraphWriter
 
-__all__ = ["SyntheticIncident", "create_incident", "SIMULATED_COMPROMISED"]
+__all__ = [
+    "SyntheticIncident",
+    "create_incident",
+    "clear_incident",
+    "incident_id_for",
+    "SIMULATED_COMPROMISED",
+]
 
 SIMULATED_COMPROMISED = "SIMULATED_COMPROMISED"
 
@@ -120,3 +126,44 @@ def create_incident(
         print(f"  live window: {since} .. {until} ({window_hours}h)")
         print("  synthetic: no real malicious package, nothing downloaded or run")
     return incident
+
+
+def incident_id_for(package: str, version: str) -> str:
+    """A stable incident id per target, so marking is per-version.
+
+    The Explorer lets one person mark several versions in a session. A single
+    shared id would make each mark silently *move* the previous one, and the
+    graph would then disagree with the two chips showing as marked.
+    """
+    return f"SIM-{version_key(package, version)}"
+
+
+def clear_incident(
+    client: HydraClient,
+    ids: IdAllocator,
+    package: str,
+    version: str,
+    incident_id: str | None = None,
+) -> bool:
+    """Retract a simulated compromise. Returns whether a node was there.
+
+    The allocated id is deliberately *not* released. Re-marking the same
+    version has to land on the same id or ``MERGE`` would mint a second
+    Incident node for one incident, and the allocator is the only thing that
+    remembers which id that was.
+    """
+    incident_id = incident_id or incident_id_for(package, version)
+    node_id = ids.lookup(schema.INCIDENT, incident_id)
+    if node_id is None:
+        return False
+    rows = client.query(
+        "MATCH (i:Incident {id: $id}) RETURN i.incident_id AS incident_id",
+        {"id": node_id},
+    )
+    if not len(rows):
+        return False
+    # DETACH DELETE removes the COMPROMISES edge with the node. Leaving a
+    # dangling reified relationship behind would make every later query that
+    # walks it MATCH an endpoint that no longer exists.
+    client.query("MATCH (i:Incident {id: $id}) DETACH DELETE i", {"id": node_id})
+    return True

@@ -13,6 +13,7 @@ corruption; a counter is dense, auditable, and makes `MERGE` by id idempotent.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 from . import schema
@@ -26,12 +27,21 @@ class IdAllocator:
     The natural key is whatever uniquely identifies the thing in the source
     data -- ``"lodash@4.17.21"`` for a PackageVersion, ``"payment-api::src/auth.ts::verify::42"``
     for a Function. Same key in, same id out, across runs.
+
+    Safe to share across threads. The UI server runs sync endpoints in a
+    worker pool, so an allocator opened at import time is used from whichever
+    thread serves the request; sqlite refuses that outright unless the
+    connection is opened with ``check_same_thread=False``. That flag alone
+    only removes the guard, so every statement is serialised behind a lock --
+    ``get`` in particular reads a counter and writes it back, and two threads
+    interleaving there would hand the same id to two different keys.
     """
 
     def __init__(self, db_path: Path | str = DEFAULT_DB):
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
+        self.conn = sqlite3.connect(self.path, check_same_thread=False)
+        self._lock = threading.RLock()
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(
             """
@@ -59,19 +69,20 @@ class IdAllocator:
         if cached is not None:
             return cached
 
-        row = self.conn.execute(
-            "SELECT id FROM ids WHERE kind = ? AND key = ?", (kind, key)
-        ).fetchone()
-        if row is not None:
-            self._cache[(kind, key)] = row[0]
-            return row[0]
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT id FROM ids WHERE kind = ? AND key = ?", (kind, key)
+            ).fetchone()
+            if row is not None:
+                self._cache[(kind, key)] = row[0]
+                return row[0]
 
-        new_id = self._next(kind)
-        self.conn.execute(
-            "INSERT INTO ids (kind, key, id) VALUES (?, ?, ?)", (kind, key, new_id)
-        )
-        self._cache[(kind, key)] = new_id
-        return new_id
+            new_id = self._next(kind)
+            self.conn.execute(
+                "INSERT INTO ids (kind, key, id) VALUES (?, ?, ?)", (kind, key, new_id)
+            )
+            self._cache[(kind, key)] = new_id
+            return new_id
 
     def get_many(self, kind: str, keys: list[str]) -> dict[str, int]:
         """Bulk :meth:`get`, in the order given."""
@@ -82,16 +93,18 @@ class IdAllocator:
         cached = self._cache.get((kind, key))
         if cached is not None:
             return cached
-        row = self.conn.execute(
-            "SELECT id FROM ids WHERE kind = ? AND key = ?", (kind, key)
-        ).fetchone()
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT id FROM ids WHERE kind = ? AND key = ?", (kind, key)
+            ).fetchone()
         return row[0] if row else None
 
     def key_for(self, node_id: int) -> tuple[str, str] | None:
         """Reverse lookup: id -> (kind, key). Used to label query results."""
-        row = self.conn.execute(
-            "SELECT kind, key FROM ids WHERE id = ?", (node_id,)
-        ).fetchone()
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT kind, key FROM ids WHERE id = ?", (node_id,)
+            ).fetchone()
         return (row[0], row[1]) if row else None
 
     def _next(self, kind: str) -> int:
@@ -114,20 +127,23 @@ class IdAllocator:
     # -- lifecycle --------------------------------------------------------
 
     def commit(self) -> None:
-        self.conn.commit()
+        with self._lock:
+            self.conn.commit()
 
     def counts(self) -> dict[str, int]:
         """Allocated count per kind, for the ingest summary."""
-        return {
-            kind: n
-            for kind, n in self.conn.execute(
-                "SELECT kind, count(*) FROM ids GROUP BY kind ORDER BY kind"
-            )
-        }
+        with self._lock:
+            return {
+                kind: n
+                for kind, n in self.conn.execute(
+                    "SELECT kind, count(*) FROM ids GROUP BY kind ORDER BY kind"
+                )
+            }
 
     def close(self) -> None:
-        self.conn.commit()
-        self.conn.close()
+        with self._lock:
+            self.conn.commit()
+            self.conn.close()
 
     def __enter__(self) -> "IdAllocator":
         return self

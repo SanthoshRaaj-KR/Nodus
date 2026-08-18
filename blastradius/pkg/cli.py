@@ -19,7 +19,7 @@ from ..ids import IdAllocator
 from .bench import run_benchmarks
 from .blast import BlastRadiusEngine, Confidence
 from .corpus import generate_corpus
-from .incident import create_incident
+from .incident import clear_incident, create_incident, incident_id_for
 from .ingest import IngestConfig, ingest
 from .registry import RegistryClient
 
@@ -99,7 +99,8 @@ def cmd_simulate(args) -> int:
     try:
         incident = create_incident(
             client, ids, name, version,
-            incident_id=args.incident_id, window_hours=args.window_hours,
+            incident_id=args.incident_id or incident_id_for(name, version),
+            window_hours=args.window_hours,
         )
     except LookupError as exc:
         raise SystemExit(str(exc))
@@ -186,6 +187,23 @@ def cmd_simulate(args) -> int:
     print("PERFORMANCE")
     print(RULE)
     print(result.timing_table())
+    ids.close()
+    return 0
+
+
+def cmd_retract(args) -> int:
+    """Take a simulated incident back off a version."""
+    name, version = _split_spec(args.spec)
+    client = _client(args)
+    _require_node(client)
+    ids = IdAllocator(args.ids)
+    removed = clear_incident(
+        client, ids, name, version, incident_id=args.incident_id
+    )
+    print(
+        f"incident on {name}@{version}: "
+        + ("retracted" if removed else "nothing was marked")
+    )
     ids.close()
     return 0
 
@@ -293,12 +311,19 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("simulate", help="create a synthetic incident and report")
     p.add_argument("spec", help="name@version, e.g. lodash@4.17.21")
-    p.add_argument("--incident-id", default="SYNTHETIC-001")
+    p.add_argument("--incident-id", default=None,
+                   help="default: one id per target, so simulating a second "
+                        "version does not leave the first still marked")
     p.add_argument("--window-hours", type=int, default=6)
     p.add_argument("--max-depth", type=int, default=5)
     p.add_argument("--paths", action="store_true", help="reconstruct whole paths")
     p.add_argument("--why", default=None, help="explain one entity in full")
     p.set_defaults(func=cmd_simulate)
+
+    p = sub.add_parser("retract", help="remove a simulated incident")
+    p.add_argument("spec")
+    p.add_argument("--incident-id", default=None)
+    p.set_defaults(func=cmd_retract)
 
     p = sub.add_parser("compare", help="range-only candidates vs lockfile truth")
     p.add_argument("spec")

@@ -144,9 +144,17 @@ python -m blastradius.pkg.cli simulate lodash@4.17.21 --why legacy-pinned-servic
 # The accuracy claim, measured: range-only leads vs lockfile truth
 python -m blastradius.pkg.cli compare lodash@4.17.21
 
+# Take the simulated incident back off
+python -m blastradius.pkg.cli retract lodash@4.17.21
+
 # Latency + the two experiments
 python -m blastradius.pkg.cli bench lodash@4.17.21
 ```
+
+Each simulated incident is keyed to its exact target (`SIM-pkg:npm/lodash@4.17.21`), so marking a second
+version leaves the first alone. A single shared id used to mean the second `simulate` added another edge to
+the same incident node, which then claimed two versions at once — the tool's own demo undoing the
+distinction it exists to draw.
 
 `simulate` prints direct dependents, transitive dependents, lockfiles resolving the exact version, exposed
 projects with depth and witness, live-window matches, shared maintainer / repository / publisher, typosquat
@@ -160,7 +168,7 @@ downloaded, nothing is executed, and no package is modified. We are testing grap
 ## 7. Testing it
 
 ```powershell
-python -m pytest tests/ -q                              # 246 tests
+python -m pytest tests/ -q                              # 261 tests
 python tests/verify_constraints.py                      # HydraDB behaviour vs assumptions
 python tests/difftest_semver.py --semver-dir <dir with node_modules/semver>
 ```
@@ -178,7 +186,12 @@ relaxing depths to a fixed point instead of breadth-first. Two implementations b
 are unlikely to be wrong identically. The lockfiles under test were written by npm, not by us.
 
 **`verify_constraints.py`** — asks the running node whether each assumed constraint is real. 17/18 hold;
-the one divergence is documented in §8.
+the one divergence is documented in §9.
+
+**`test_findings.py`** — that a true fact never becomes a false claim. Looking up an ordinary, healthy
+package used to flag every project holding it as EXPOSED, because "this lockfile resolved this version" is
+the same graph row whether or not anything marks the version. It is not the same claim, and the atom whose
+name asserts a compromise is now emitted only when an incident or an advisory actually names the version.
 
 To check the version-awareness claim by hand:
 
@@ -191,7 +204,72 @@ Different projects. If those ever return the same set, the version-awareness is 
 
 ---
 
-## 8. What measurement changed
+## 8. Seeing it: the Explorer
+
+`python -m blastradius.cli ui` serves the Explorer on port 8100. It already had two tabs, both owned by the
+code-graph half. **Package · Blast Radius** is the third, and it does not work the way they do.
+
+The other two fetch the whole graph and compute the highlight in the browser by walking edges backwards from
+whatever you typed. That is right for them. It would be wrong here: exposure is a fact already stored on an
+edge, so re-deriving it client-side by matching package names would put the range-only guess back in on top
+of the query built to replace it. **The server marks each node and says with which evidence atoms**, and the
+browser only draws.
+
+The six columns are the argument:
+
+```
+THREAT  ->  COMPROMISED VERSION  ->  RANGE ADMITS  ->  LOCKFILE RESOLVES
+                                                   ->  EXPOSED PROJECTS  |  RELATED BY IDENTITY
+```
+
+`RANGE ADMITS` is a **dead end** — it connects to nothing on its right, because admitting a version is not
+installing it. On `debug@4.4.3` that column holds 45 and the projects column holds 5. `RELATED BY IDENTITY`
+sits directly beside the compromised node and stays cold, which is the evidence rule drawn rather than
+described: a shared maintainer never raises a finding above INVESTIGATE.
+
+### Marking something as vulnerable
+
+Pick a target from the chips (each states the gap it will show: `45 admit · 5 installed`), or type
+`name@version` and press Enter. Then press **mark compromised**.
+
+```
+POST   /api/pkg/incident?spec=debug@4.4.3     mark
+DELETE /api/pkg/incident?spec=debug@4.4.3     retract
+GET    /api/pkg/graph?spec=debug@4.4.3        the scoped view
+GET    /api/pkg/targets                       suggestions, ranked by that gap
+```
+
+Before marking, the graph draws in normal colours and the badges read `RESOLVED` and `INSTALLED`. After,
+a THREAT column appears, the confirmed chain turns red and animates, the 45 range-only leads dim, and the
+badges become `CONFIRMED` and `EXPOSED`. **retract incident** puts it back. Marking is scoped to the exact
+version, so `lodash@4.17.21` and `lodash@4.17.20` can be marked independently and light up different
+projects.
+
+That before/after is not cosmetic. An unmarked version used to render its projects as `EXPOSED` too, because
+"this lockfile resolved this version" is the same row either way — see §7.
+
+### Clicking a node
+
+The panel shows the verdict, the evidence atoms that fired, and **what was looked for and not found**:
+
+```
+body-parser@2.2.1        range admits it — unconfirmed
+  Unconfirmed — its declared range admits the version, but no lockfile resolved it
+  declares ^4.4.3, which admits debug@4.4.3
+  EVIDENCE               POSSIBLE_EXACT
+  LOOKED FOR, NOT FOUND  no lockfile in the corpus resolved this pairing
+```
+
+The negative half is what makes an INVESTIGATE verdict safe to act on. A finding that only lists what fired
+invites the reader to assume everything else fired too.
+
+**Note on the other two tabs.** Macro and Micro read `PRESENT_IN`, `DEPENDS_ON`, `Function` and `Route`,
+which this half does not write. With only the package corpus ingested they render their services and no
+packages. Run the code-graph scan to fill them; nothing here changed them.
+
+---
+
+## 9. What measurement changed
 
 Three design decisions were settled by asking the database rather than by reasoning about it.
 
@@ -220,7 +298,7 @@ to answer.
 
 ---
 
-## 9. Measured numbers
+## 10. Measured numbers
 
 Corpus: 12 projects, 649 lockfile entries, 400 packages, 1,319 versions, 3,277 nodes, 18,224 edges.
 Ingest 4.5 s warm (1.9 s writing, 23 statements).
@@ -244,7 +322,7 @@ version, not graph size — but that has not been measured at 100k nodes and is 
 
 ---
 
-## 10. Known gaps
+## 11. Known gaps
 
 - **CVSS base score is not derived from the vector.** The OSV CSV leaves `severity_score` empty while
   populating `cvss_vector`. The score stays at its sentinel and the UI shows the vector; showing a number
@@ -252,9 +330,11 @@ version, not graph size — but that has not been measured at 100k nodes and is 
 - **The supplied OSV CSV is 100% PyPI.** The reader is ecosystem-generic and routes on the `ecosystem`
   column; the graph and enrichment are npm. PyPI rows ingest as advisories and are reported as
   out-of-scope-for-enrichment rather than silently dropped. An npm-shaped CSV exercises the full path.
-- **No visualization yet for the package graph.** The Explorer UI on `master` renders the macro/micro code
-  graph and its `KIND` registry is a fixed set, so package-graph node types (Maintainer, Repository,
-  Incident) cannot be expressed without editing it. Next step, and worth agreeing on the approach first.
+- **The package view is scoped to one version at a time.** That is deliberate — the answer is a single-hop
+  lookup, and a whole-graph package sweep would be 3,277 nodes of DOM. But it means there is no "show me
+  every marked version at once" overview yet.
+- **The relational columns are capped at 24 drawn nodes.** The count in the header and the footer metric is
+  the true one, so the cap never understates; but a package with 300 siblings shows 24 of them.
 - **Typosquat coverage depends on download data.** npm's bulk endpoint declines scoped packages; unknown
   popularity is treated as unknown, not zero, so scoped packages are not assessed for asymmetry. Correct,
   but it means scoped squats are currently out of reach.
