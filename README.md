@@ -70,6 +70,19 @@ python -m uvicorn blastradius.api.main:app --port 8000
 
 Then open <http://127.0.0.1:8000>, pick an advisory, and hit **Simulate 09:00**.
 
+### Or from the terminal
+
+```powershell
+python -m blastradius.cli stats                            # what is in the graph
+python -m blastradius.cli services                         # ingested services
+python -m blastradius.cli check vulnerable-pkg@1.0.5       # one package
+python -m blastradius.cli check express --range ">=4.18.0 <4.19.0"
+python -m blastradius.cli advisory advisories\GHSA-vuln-pkg-2026.json
+```
+
+`check` prints the macro answer, the micro answer, and the verdict in one pass,
+and exits non-zero when anything lands in P0 or P1 — so it doubles as a CI gate.
+
 Run everything Docker-related from **PowerShell, never Git Bash**. Git Bash
 rewrites container-side absolute paths — `/data/store` arrives as
 `C:/Program Files/Git/data/store` — and the node dies with a bare
