@@ -71,7 +71,7 @@ cd scanner; npm install; cd ..        # ts-morph, once
 python -m blastradius.cli doctor      # checks every prerequisite, names the fix
 python -m blastradius.cli up          # start the HydraDB container
 python -m blastradius.cli ingest      # scan the corpus into the graph
-python -m blastradius.cli serve       # UI on http://127.0.0.1:8000
+python -m blastradius.cli ui          # Blast Radius Explorer, port 8100
 ```
 
 If `Activate.ps1` is blocked, either use the `.bat` above or run
@@ -82,6 +82,40 @@ this project needs it.
 Docker from Python and is the supported path.
 
 Then open <http://127.0.0.1:8000>, pick an advisory, and hit **Simulate 09:00**.
+
+## The Explorer
+
+`ui/` is a separate frontend server from `blastradius/api/`. That one is the
+machine-facing assessment API a CI job would call; this is the human-facing
+explorer. Keeping them apart means the demo surface can be restarted or
+re-skinned without touching what other tools depend on, and it reads HydraDB
+directly rather than proxying — one fewer moving part to fail on stage.
+
+**Macro — the supply chain.** Services, then packages by resolved depth. The
+queried package and everything that reaches it burn red; the rest dims.
+
+![Macro view](docs/screens/macro.png)
+
+**Micro — the call graph.** The claim no lockfile scanner can make:
+`src/index.ts → POST /login → handleLogin() → verify() → import 'vulnerable-pkg'`.
+
+![Micro view](docs/screens/micro.png)
+
+Note what is *dimmed* there: `GET /health`, `unusedHelper()`, `import 'express'`.
+That is the "safe to ignore" signal, and it is the half of an incident response
+that actually saves time.
+
+Clicking any node opens metadata and the reachability path:
+
+![Detail panel](docs/screens/detail-panel.png)
+
+The whole graph is sent to the browser once per view and the blast radius is a
+reverse BFS in JS, so typing in the search box costs no round trips. That only
+works because the graph is small; at fleet scale the highlighting moves server
+side, onto the same `PRESENT_IN` and `CALLED_BY` edges the CLI already uses.
+
+The design came from a Claude Design project and is implemented here in vanilla
+JS — the source `.dc.html` targets a React template runtime we do not ship.
 
 ### Or from the terminal
 
