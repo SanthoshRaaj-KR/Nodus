@@ -123,7 +123,14 @@ def init_volume(verbose: bool = True) -> None:
     )
     if verbose:
         print("  seeding volume (store, cache, auth token)")
-    _docker("run", "--rm", "-v", f"{VOLUME}:/data", "--entrypoint", "/bin/sh", IMAGE, "-c", script)
+    # `--user 0:0` is required: a freshly created volume is owned by root, and
+    # the image's default user (uid 10001) cannot mkdir inside it. Without
+    # this the seed fails with a bare `mkdir: cannot create directory
+    # '/data/store': Permission denied` and the node then never starts.
+    _docker(
+        "run", "--rm", "--user", "0:0", "-v", f"{VOLUME}:/data",
+        "--entrypoint", "/bin/sh", IMAGE, "-c", script,
+    )
 
 
 def up(wait: int = 90, verbose: bool = True) -> None:
