@@ -25,6 +25,16 @@ DEFAULT_CELL = "cell-0"
 #: rejection is an HTTP 429 that names the limit. Stay under it.
 DEFAULT_TIMEOUT_MS = 25_000
 
+#: Rows per page. The server caps a page on its own (512 was observed) and
+#: hands back `next_cursor` to continue. A client that ignores the cursor
+#: silently truncates every large result, which is indistinguishable from
+#: "the graph does not contain those rows" -- the worst way to be wrong in a
+#: tool whose job is to say what you are exposed to.
+PAGE_SIZE = 2_000
+
+#: Guard against an unbounded cursor loop on a runaway query.
+MAX_PAGES = 200
+
 #: One statement per request and no transactions, so a batch is a single
 #: UNWIND. Large enough to amortise the round trip, small enough that a failed
 #: chunk is cheap to replay.
@@ -115,6 +125,7 @@ class HydraClient:
             "cell_id": self.cell,
             "query": statement,
             "timeout_ms": self.timeout_ms,
+            "page_size": PAGE_SIZE,
         }
         if parameters:
             body["parameters"] = parameters
@@ -159,17 +170,54 @@ class HydraClient:
                     ) from None
                 time.sleep(0.5 * (2**attempt))
 
-        elapsed = (time.perf_counter() - started) * 1000
         columns = raw.get("columns") or []
-        rows = []
-        for row in raw.get("rows") or []:
-            if isinstance(row, list):
-                rows.append({c: _flatten(v) for c, v in zip(columns, row)})
-            else:
-                rows.append({k: _flatten(v) for k, v in row.items()})
+        rows = self._decode(raw, columns)
+
+        # Follow next_cursor to the end. Without this a result larger than one
+        # page comes back quietly short, and every caller here treats "fewer
+        # rows" as "less exposure".
+        cursor = raw.get("next_cursor")
+        pages = 1
+        while cursor and pages < MAX_PAGES:
+            page = self._fetch({**body, "cursor": cursor})
+            rows.extend(self._decode(page, page.get("columns") or columns))
+            cursor = page.get("next_cursor")
+            pages += 1
+        if cursor:
+            raise HydraError(
+                f"result exceeded {MAX_PAGES} pages ({len(rows):,} rows so far). "
+                f"Narrow the query rather than trusting a truncated answer."
+            )
+
+        elapsed = (time.perf_counter() - started) * 1000
         if raw.get("bookmark"):
             self.last_bookmark = raw["bookmark"]
         return QueryResult(columns, rows, raw.get("bookmark"), elapsed)
+
+    @staticmethod
+    def _decode(raw: dict, columns: list) -> list[dict]:
+        out = []
+        for row in raw.get("rows") or []:
+            if isinstance(row, list):
+                out.append({c: _flatten(v) for c, v in zip(columns, row)})
+            else:
+                out.append({k: _flatten(v) for k, v in row.items()})
+        return out
+
+    def _fetch(self, body: dict) -> dict:
+        """One HTTP round trip. Used for cursor continuation pages."""
+        request = urllib.request.Request(
+            f"{self.base_url}/v1/graphs/{self.graph}/query",
+            data=json.dumps(body).encode("utf-8"),
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "X-Graph-Namespace": self.namespace,
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout_ms / 1000 + 5) as response:
+            return json.loads(response.read().decode("utf-8"))
 
     def batch(
         self,
