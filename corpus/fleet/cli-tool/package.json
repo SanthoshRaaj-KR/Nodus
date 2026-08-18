@@ -1,0 +1,11 @@
+{
+  "name": "cli-tool",
+  "version": "1.0.0",
+  "private": true,
+  "description": "cli-tool service (generated corpus)",
+  "dependencies": {
+    "inquirer": "^8.2.0",
+    "chalk": "^4.1.2",
+    "commander": "^11.1.0"
+  }
+}
