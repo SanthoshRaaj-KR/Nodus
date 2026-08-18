@@ -70,9 +70,24 @@ cd scanner; npm install; cd ..        # ts-morph, once
 
 python -m blastradius.cli doctor      # checks every prerequisite, names the fix
 python -m blastradius.cli up          # start the HydraDB container
-python -m blastradius.cli ingest      # scan the corpus into the graph
+
+# Two ingests, because the two views read different tiers.
+python -m blastradius.cli ingest                # code graph + lockfile tier -> Micro
+python -m blastradius.pkg.cli ingest --offline  # package tier               -> Macro
+
+python -m blastradius.cli status      # both tiers should be non-zero
 python -m blastradius.cli ui          # Blast Radius Explorer, port 8100
 ```
+
+**Both ingests are required.** They populate different halves of the graph and
+neither backfills the other: `blastradius.cli ingest` builds the code graph and
+the lockfile tier the Micro view walks, and `blastradius.pkg.cli ingest` builds
+the package tier — declared ranges, lockfile resolutions, maintainer and
+repository identity — that the Macro view queries. Run only the first and the
+Explorer opens on an empty Macro tab with no targets to pick.
+
+`--offline` reads `data/registry-cache/`, which is committed, so the ingest is
+reproducible with the network off. Drop the flag to refresh from npm.
 
 If `Activate.ps1` is blocked, either use the `.bat` above or run
 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once. Nothing else in
@@ -81,7 +96,41 @@ this project needs it.
 `hydra.ps1` still exists and does the same job, but `blastradius.node` drives
 Docker from Python and is the supported path.
 
-Then open <http://127.0.0.1:8000>, pick an advisory, and hit **Simulate 09:00**.
+Then open <http://127.0.0.1:8100> and pick a target chip, or type
+`name@version` and press Enter. The assessment API and its simpler UI are a
+separate server — `python -m blastradius.cli serve`, port 8000 — and that is
+the one with **Simulate 09:00**.
+
+### Starting clean
+
+Two levels, and the difference matters. Both clear the id map in `data/`, which
+is the "memory" mapping a natural key like `lodash@4.17.21` to a node id. The
+graph and that map have to go together: drop one without the other and the next
+ingest allocates fresh ids and writes a second copy of everything beside the
+first.
+
+```powershell
+python -m blastradius.cli reset       # empty the graph + id map, keep the container
+python -m blastradius.cli wipe        # destroy container, volume and id map (asks first)
+```
+
+`reset` is the everyday one. It deletes every node this project creates, across
+both tiers, and edges go with them. Re-run both ingests afterwards.
+
+`wipe` is for when the node itself is wrong — a bad volume, a half-written
+store. It takes the container with it, so follow with `up` before ingesting.
+
+`data/registry-cache/` survives both on purpose: it is a build input rather than
+graph state, and keeping it is what lets the rebuild run `--offline`.
+
+A full rebuild from nothing:
+
+```powershell
+python -m blastradius.cli reset
+python -m blastradius.cli ingest
+python -m blastradius.pkg.cli ingest --offline
+python -m blastradius.cli stats       # node and edge counts, both tiers
+```
 
 ## The Explorer
 
@@ -220,8 +269,9 @@ want something meaningful in the graph.
 Without the bridge an import carries no resolved version, so searching by
 package name still highlights but "which version" stays a macro-graph question.
 
-**Clearing state:** `reset` drops every node *and* deletes `data/ids.sqlite`.
-Those must go together. Deleting the Docker volume alone is harmless (ids just
+**Clearing state:** see [Starting clean](#starting-clean) above. `reset` drops
+every node across both tiers *and* deletes `data/ids.sqlite`. Those must go
+together. Deleting the Docker volume alone is harmless (ids just
 continue from a higher counter), but deleting `ids.sqlite` while the graph
 still holds data gives every node a fresh id and duplicates the lot.
 
@@ -230,13 +280,30 @@ still holds data gives every node a fresh id and duplicates the lot.
 ```powershell
 python -m blastradius.cli stats                            # what is in the graph
 python -m blastradius.cli services                         # ingested services
-python -m blastradius.cli check ua-parser-js@0.7.29       # one package
+python -m blastradius.cli check ua-parser-js@0.7.29        # one package
 python -m blastradius.cli check express --range ">=4.18.0 <4.19.0"
-python -m blastradius.cli advisory advisories\GHSA-vuln-pkg-2026.json
+python -m blastradius.cli advisory advisories\GHSA-ua-parser-js-2021.json
 ```
 
 `check` prints the macro answer, the micro answer, and the verdict in one pass,
 and exits non-zero when anything lands in P0 or P1 — so it doubles as a CI gate.
+
+The package tier has its own terminal surface, and it is the quickest way to
+see what the Macro view is drawing:
+
+```powershell
+python -m blastradius.pkg.cli compare lodash@4.17.21     # range-only leads vs lockfile truth
+python -m blastradius.pkg.cli simulate lodash@4.17.21    # mark it compromised, print the report
+python -m blastradius.pkg.cli retract lodash@4.17.21     # take the mark back off
+python -m blastradius.pkg.cli bench lodash@4.17.21       # query latency
+```
+
+`compare` is the one that states the case without any UI: it prints how many
+versions a declared range admits against how many a lockfile actually resolved.
+`simulate` writes an `Incident` node in our own database pointing at an
+ordinary, healthy public package — nothing is downloaded, nothing is executed,
+and no package is modified. The edge lands on the `PackageVersion`, never the
+`Package`, which is why marking `4.17.21` leaves `4.17.20` untouched.
 
 Run everything Docker-related from **PowerShell, never Git Bash**. Git Bash
 rewrites container-side absolute paths — `/data/store` arrives as
