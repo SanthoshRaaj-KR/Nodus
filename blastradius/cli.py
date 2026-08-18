@@ -234,19 +234,25 @@ def _service_id(client: HydraClient, name: str) -> int:
     ).scalar("id")
 
 
+#: Both tiers materialise their own inverses, and stats prints one list, so
+#: the tag has to know both maps or it silently promotes fifteen derived edge
+#: types to looking like primary ones.
+_INVERSES = frozenset(schema.INVERSE_OF.values()) | frozenset(schema.PKG_INVERSE_OF.values())
+
+
 def cmd_stats(args) -> int:
     client = HydraClient(base_url=args.url)
     print()
     print(rule("graph contents"))
-    counts = client.counts_by_label(schema.NODE_LABELS)
+    counts = client.counts_by_label(schema.ALL_NODE_LABELS)
     for label, n in counts.items():
         print(f"  {label:22} {n:>8,}")
     print()
     print(rule("edges"))
-    for etype in schema.EDGE_TYPES:
+    for etype in schema.ALL_EDGE_TYPES:
         n = client.query(f"MATCH ()-[r:{etype}]->() RETURN count(*) AS n").scalar("n") or 0
         if n:
-            tag = DIM("  (materialised inverse)") if etype in schema.INVERSE_OF.values() else ""
+            tag = DIM("  (materialised inverse)") if etype in _INVERSES else ""
             print(f"  {etype:22} {n:>8,}{tag}")
     print()
     return 0
@@ -341,7 +347,7 @@ def cmd_status(args) -> int:
     print()
     print(rule("graph contents"))
     client = HydraClient(base_url=args.url)
-    counts = client.counts_by_label(schema.NODE_LABELS)
+    counts = client.counts_by_label(schema.ALL_NODE_LABELS)
     if not any(counts.values()):
         print(DIM("  empty -- run: python -m blastradius.cli ingest"))
     for label, n in counts.items():
@@ -352,10 +358,17 @@ def cmd_status(args) -> int:
 
 
 def cmd_reset(args) -> int:
-    """Delete every node this project creates; edges go with them."""
+    """Delete every node this project creates; edges go with them.
+
+    ALL_NODE_LABELS, not NODE_LABELS: the package tier adds nine labels, and
+    clearing only the original seven while still deleting the id map is the
+    worst of both -- the Package, Lockfile and Incident nodes survive, but the
+    map that addressed them is gone, so the next ingest allocates fresh ids
+    and writes a second copy of everything alongside the first.
+    """
     client = HydraClient(base_url=args.url)
     print()
-    for label in schema.NODE_LABELS:
+    for label in schema.ALL_NODE_LABELS:
         client.query(f"MATCH (n:{label}) DETACH DELETE n")
         print(f"  cleared {label}")
     ids_db = Path(__file__).resolve().parent.parent / "data" / "ids.sqlite"

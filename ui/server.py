@@ -45,7 +45,7 @@ ids = IdAllocator()
 @app.get("/api/health")
 def health():
     try:
-        counts = client.counts_by_label(schema.NODE_LABELS)
+        counts = client.counts_by_label(schema.ALL_NODE_LABELS)
         return {"ok": True, "counts": counts, "empty": not any(counts.values())}
     except HydraError as exc:
         return JSONResponse(status_code=503, content={"ok": False, "error": str(exc)})

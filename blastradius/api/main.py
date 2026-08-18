@@ -47,7 +47,7 @@ class AdvisoryIn(BaseModel):
 def health() -> dict:
     """Is the node up, and what is in the graph right now?"""
     try:
-        counts = client.counts_by_label(schema.NODE_LABELS)
+        counts = client.counts_by_label(schema.ALL_NODE_LABELS)
         return {"ok": True, "counts": counts}
     except HydraError as exc:
         return JSONResponse(

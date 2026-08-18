@@ -11,3 +11,4 @@ corpus/*/node_modules/
 corpus/*
 !corpus/payment-api/
 !corpus/fleet/
+registry-cache
