@@ -130,6 +130,27 @@ side, onto the same `PRESENT_IN` and `CALLED_BY` edges the CLI already uses.
 The design came from a Claude Design project and is implemented here in vanilla
 JS — the source `.dc.html` targets a React template runtime we do not ship.
 
+### Scanning any Node app (micro graph only)
+
+The macro graph needs a resolved lockfile. The call graph needs only source, so
+it has its own entry point that skips the lockfile and the bridge entirely:
+
+```powershell
+python -m blastradius.cli reset                    # clear graph + id map together
+python -m blastradius.cli scan ..\some-node-app
+python -m blastradius.cli ui
+```
+
+![Real application](docs/screens/real-app.png)
+
+Without the bridge an import carries no resolved version, so searching by
+package name still highlights but "which version" stays a macro-graph question.
+
+**Clearing state:** `reset` drops every node *and* deletes `data/ids.sqlite`.
+Those must go together. Deleting the Docker volume alone is harmless (ids just
+continue from a higher counter), but deleting `ids.sqlite` while the graph
+still holds data gives every node a fresh id and duplicates the lot.
+
 ### Or from the terminal
 
 ```powershell

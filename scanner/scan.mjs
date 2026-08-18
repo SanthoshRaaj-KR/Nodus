@@ -45,16 +45,53 @@ const ROUTE_METHODS = new Set([
 /** Express-ish router receivers. Heuristic, and reported as such in stats. */
 const ROUTER_NAMES = /^(app|router|server|api|r)$/i;
 
-const SOURCE_GLOBS = [
-  "**/*.{ts,tsx,js,jsx,mjs,cjs,mts,cts}",
-  "!**/node_modules/**",
-  "!**/dist/**",
-  "!**/build/**",
-  "!**/.next/**",
-  "!**/coverage/**",
-  "!**/*.d.ts",
-  "!**/*.min.js",
-];
+const SOURCE_EXT = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]);
+
+/** Directories never worth walking into. Pruned, not filtered afterwards. */
+const PRUNE = new Set([
+  "node_modules", ".git", "dist", "build", "out", ".next", ".nuxt", ".svelte-kit",
+  "coverage", ".cache", ".turbo", ".vercel", "vendor", "__pycache__", ".venv",
+  "venv", ".idea", ".vscode", "public", "static", "assets",
+]);
+
+/**
+ * Collect source files by walking and *pruning*, rather than globbing with
+ * negative patterns.
+ *
+ * ts-morph's glob still descends into every excluded directory before
+ * discarding it, so on a real application -- 75k files, 400 packages in
+ * node_modules -- the scan appears to hang before it has parsed a single line.
+ * Refusing to enter those directories at all turns minutes into milliseconds.
+ */
+function collectSources(root, maxFiles) {
+  const out = [];
+  const stack = [root];
+  let skipped = 0;
+  while (stack.length) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      // isDirectory() is false for symlinks, so a link loop cannot trap us.
+      if (entry.isDirectory()) {
+        if (!PRUNE.has(entry.name) && !entry.name.startsWith(".")) stack.push(full);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name);
+      if (!SOURCE_EXT.has(ext)) continue;
+      if (entry.name.endsWith(".d.ts") || entry.name.endsWith(".min.js")) continue;
+      if (out.length >= maxFiles) { skipped += 1; continue; }
+      out.push(full);
+    }
+  }
+  return { files: out, skipped };
+}
 
 /** Stable, human-readable keys. The Python side maps these to graph ids. */
 const fileKey = (service, rel) => `${service}::${rel}`;
@@ -200,7 +237,13 @@ export function scan(root, serviceName) {
     ? new Project({ tsConfigFilePath: tsconfig, skipAddingFilesFromTsConfig: true })
     : new Project({ compilerOptions: { allowJs: true, checkJs: false } });
 
-  project.addSourceFilesAtPaths(SOURCE_GLOBS.map((g) => path.join(root, g)));
+  const maxFiles = Number(process.env.BLASTRADIUS_MAX_FILES || 3000);
+  const collected = collectSources(root, maxFiles);
+  if (collected.skipped) {
+    console.error(`  warning: capped at ${maxFiles} source files, skipped ${collected.skipped}.`);
+    console.error("  raise BLASTRADIUS_MAX_FILES to include them.");
+  }
+  collected.files.forEach((f) => project.addSourceFileAtPath(f));
 
   const files = [];
   const functions = [];

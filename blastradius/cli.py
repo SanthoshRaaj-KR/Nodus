@@ -382,6 +382,39 @@ def cmd_ingest(args) -> int:
     return 0
 
 
+def cmd_scan(args) -> int:
+    """Micro graph only, for an arbitrary Node project with no lockfile."""
+    from .ids import IdAllocator
+    from .ingest.load import ingest_micro
+
+    client = HydraClient(base_url=args.url)
+    try:
+        with IdAllocator() as ids:
+            report = ingest_micro(
+                Path(args.project),
+                client,
+                ids,
+                service_name=args.service,
+                verbose=not args.quiet,
+            )
+    except (HydraError, FileNotFoundError, RuntimeError) as exc:
+        print()
+        print(RED(str(exc)), file=sys.stderr)
+        print()
+        return 2
+
+    print()
+    print(report.render())
+    print()
+    functions = report.nodes.get(schema.FUNCTION, 0)
+    if functions > 4000:
+        print(YELLOW(f"  {functions:,} functions is past what the Explorer draws well."))
+        print(DIM("  It ships the whole graph to the browser; expect it to crawl."))
+        print(DIM("  The CLI queries stay fast -- those run in the database."))
+        print()
+    return 0
+
+
 def cmd_serve(args) -> int:
     import uvicorn
 
@@ -532,6 +565,12 @@ def main(argv: list[str] | None = None) -> int:
     lg = sub.add_parser("logs", help="tail the node log")
     lg.add_argument("--tail", type=int, default=60)
     lg.set_defaults(func=cmd_logs)
+
+    scan = sub.add_parser("scan", help="micro graph only, from any Node project")
+    scan.add_argument("project", help="path to the application directory")
+    scan.add_argument("--service", default=None, help="name to file it under")
+    scan.add_argument("--quiet", action="store_true")
+    scan.set_defaults(func=cmd_scan)
 
     ing = sub.add_parser("ingest", help="scan the corpus into the graph")
     ing.add_argument("--corpus", default="corpus")

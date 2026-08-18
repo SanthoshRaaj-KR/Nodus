@@ -274,8 +274,11 @@ function layout(g) {
   const H = TOP + maxCount * (NH + ROWG) + 40;
   layers.forEach((l) => {
     const list = byLayer[l];
-    const span = list.length * (NH + ROWG) - ROWG;
-    const start = TOP + (H - TOP - 40 - span) / 2;
+    // Top-aligned, not centred. Centring looks tidy when every column holds a
+    // similar count, but a real application has ~4 routes against ~170
+    // functions -- and centring then pushes the short columns entirely off
+    // screen, hiding exactly the entry points the view exists to show.
+    const start = TOP;
     // Columns are indexed by declared layer, not by position in `layers`, so a
     // view with an empty column still lines up with its header.
     list.forEach((n, i) => { pos[n.id] = { x: l * COLW, y: start + i * (NH + ROWG) }; });
