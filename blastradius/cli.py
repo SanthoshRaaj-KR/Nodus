@@ -390,6 +390,17 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def cmd_ui(args) -> int:
+    """Run the Blast Radius Explorer frontend."""
+    import uvicorn
+
+    print(f"
+  Blast Radius Explorer -> http://127.0.0.1:{args.port}
+")
+    uvicorn.run("ui.server:app", host="127.0.0.1", port=args.port, log_level="warning")
+    return 0
+
+
 def cmd_doctor(args) -> int:
     """Check every prerequisite and say exactly what to do about each gap."""
     import shutil
@@ -496,9 +507,13 @@ def main(argv: list[str] | None = None) -> int:
     ing.add_argument("--quiet", action="store_true")
     ing.set_defaults(func=cmd_ingest)
 
-    srv = sub.add_parser("serve", help="run the web UI")
+    srv = sub.add_parser("serve", help="run the assessment API + simple UI")
     srv.add_argument("--port", type=int, default=8000)
     srv.set_defaults(func=cmd_serve)
+
+    explorer = sub.add_parser("ui", help="run the Blast Radius Explorer frontend")
+    explorer.add_argument("--port", type=int, default=8100)
+    explorer.set_defaults(func=cmd_ui)
 
     rst = sub.add_parser("reset", help="empty the graph, keep the container")
     rst.set_defaults(func=cmd_reset)

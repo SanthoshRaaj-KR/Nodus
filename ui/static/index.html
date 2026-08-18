@@ -220,19 +220,23 @@ function hotSet(g, query) {
   // A scoped name (@scope/pkg) has an @ at index 0 that is not a separator.
   const name = at > 0 ? q.slice(0, at) : q;
   const ver = at > 0 ? q.slice(at + 1) : '';
-  const seeds = g.nodes.filter((n) =>
+  const matched = g.nodes.filter((n) =>
     n.pkg && n.pkg.toLowerCase().includes(name) && (!ver || (n.version || '').startsWith(ver)));
-  if (!seeds.length) return new Set();
+  if (!matched.length) return { hot: new Set(), seeds: new Set() };
 
   const rev = {};
   g.edges.forEach(([a, b]) => { (rev[b] = rev[b] || []).push(a); });
-  const hot = new Set(seeds.map((n) => n.id));
+  const hot = new Set(matched.map((n) => n.id));
   const queue = [...hot];
   while (queue.length) {
     const cur = queue.shift();
     (rev[cur] || []).forEach((p) => { if (!hot.has(p)) { hot.add(p); queue.push(p); } });
   }
-  return hot;
+  // The CVE badge belongs on whatever the query actually matched. Inferring it
+  // from "hot node with no outgoing edge" only works when the vulnerable
+  // package is a leaf -- ours has its own dependencies, so that rule would
+  // leave the badge on nothing at all.
+  return { hot, seeds: new Set(matched.map((n) => n.id)) };
 }
 
 /* ------------------------------------------------------------------ */
@@ -251,14 +255,10 @@ function render() {
   }
 
   const { pos, H, W, layers, byLayer } = layout(g);
-  const hot = hotSet(g, state.query);
+  const found = hotSet(g, state.query);
+  const hot = found ? found.hot : null;
+  const seedIds = found ? found.seeds : new Set();
   const nodeById = {}; g.nodes.forEach((n) => { nodeById[n.id] = n; });
-
-  // A seed is a matched package with no outgoing edge inside the hot set --
-  // the end of the chain, i.e. the thing the advisory is actually about.
-  const seedIds = new Set(hot
-    ? g.nodes.filter((n) => n.pkg && hot.has(n.id) && !g.edges.some(([a]) => a === n.id)).map((n) => n.id)
-    : []);
 
   canvas.style.width = W + 'px';
   canvas.style.height = H + 'px';
