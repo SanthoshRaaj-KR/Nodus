@@ -1,0 +1,14 @@
+{
+  "name": "blastradius-scanner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ts-morph AST scanner: emits the micro graph (files, functions, calls, external imports, routes) as JSON",
+  "bin": { "blastradius-scan": "./scan.mjs" },
+  "scripts": {
+    "scan": "node scan.mjs"
+  },
+  "dependencies": {
+    "ts-morph": "^23.0.0"
+  }
+}
