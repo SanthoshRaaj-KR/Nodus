@@ -143,6 +143,18 @@ python -m blastradius.cli ui
 
 ![Real application](docs/screens/real-app.png)
 
+**Paths.** The argument is an ordinary relative or absolute directory path,
+resolved against your current working directory. In **Git Bash** use forward
+slashes: a backslash is an escape character there, so `..\GenReal.ai` silently
+becomes `..GenReal.ai` before Python ever sees it. Backslashes are fine in
+PowerShell and cmd. If a path does not resolve, the error prints what it
+resolved to, your working directory, and any nearby directory that looks like
+what you meant.
+
+**Service name** comes from `package.json`'s `name`, falling back to the folder
+name. Many templates ship with `"name": "project"`, so pass `--service` when you
+want something meaningful in the graph.
+
 Without the bridge an import carries no resolved version, so searching by
 package name still highlights but "which version" stays a macro-graph question.
 

@@ -382,6 +382,56 @@ def cmd_ingest(args) -> int:
     return 0
 
 
+def _suggest_paths(raw: str) -> None:
+    r"""Explain a path that did not resolve, and offer the likely intent.
+
+    Git Bash silently eats an unrecognised backslash escape, so `..\GenReal.ai`
+    reaches Python as `..GenReal.ai` -- a name with no separator in it at all,
+    and an error that reads as though the directory is missing rather than as a
+    quoting problem. Worth naming, because the message otherwise sends you
+    looking for the wrong bug.
+    """
+    cwd = Path.cwd()
+    print()
+    print(RED(f"  no such directory: {raw}"))
+    print(DIM(f"  resolved to : {Path(raw).resolve()}"))
+    print(DIM(f"  working dir : {cwd}"))
+
+    if "\\" in raw or ("/" not in raw and not Path(raw).exists()):
+        print()
+        print(YELLOW("  If you typed a backslash in Git Bash, the shell ate it."))
+        print(DIM("  Use forward slashes here; backslashes only work in PowerShell."))
+
+    # Offer real directories whose name resembles what was asked for, ignoring
+    # separators and punctuation -- which is exactly what got mangled.
+    def norm(text: str) -> str:
+        return "".join(c for c in text.lower() if c.isalnum())
+
+    wanted = norm(Path(raw).name or raw)
+    seen: list[str] = []
+    for parent in (cwd, cwd / "corpus", cwd.parent):
+        if not parent.is_dir():
+            continue
+        for child in sorted(parent.iterdir()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            candidate = norm(child.name)
+            if wanted and (wanted in candidate or candidate in wanted):
+                try:
+                    rel = child.relative_to(cwd).as_posix()
+                except ValueError:
+                    rel = child.as_posix()
+                if rel not in seen:
+                    seen.append(rel)
+
+    if seen:
+        print()
+        print("  Did you mean:")
+        for rel in seen[:5]:
+            print(GREEN(f"    python -m blastradius.cli scan {rel}"))
+    print()
+
+
 def cmd_scan(args) -> int:
     """Micro graph only, for an arbitrary Node project with no lockfile."""
     from .ids import IdAllocator
@@ -397,7 +447,10 @@ def cmd_scan(args) -> int:
                 service_name=args.service,
                 verbose=not args.quiet,
             )
-    except (HydraError, FileNotFoundError, RuntimeError) as exc:
+    except FileNotFoundError:
+        _suggest_paths(args.project)
+        return 2
+    except (HydraError, RuntimeError) as exc:
         print()
         print(RED(str(exc)), file=sys.stderr)
         print()
