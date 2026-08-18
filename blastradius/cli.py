@@ -241,6 +241,202 @@ def cmd_stats(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# Node lifecycle -- so nothing here needs an unsigned .ps1 to run
+# --------------------------------------------------------------------------
+
+
+def cmd_up(args) -> int:
+    from . import node
+
+    print()
+    try:
+        node.up(verbose=True)
+    except node.NodeError as exc:
+        print(RED(f"\n{exc}\n"), file=sys.stderr)
+        return 2
+    print(GREEN("  node is up at http://127.0.0.1:8443"))
+    print(DIM("  next: python -m blastradius.cli ingest"))
+    print()
+    return 0
+
+
+def cmd_down(args) -> int:
+    from . import node
+
+    print()
+    try:
+        node.down()
+    except node.NodeError as exc:
+        print(RED(f"{exc}"), file=sys.stderr)
+        return 2
+    print()
+    return 0
+
+
+def cmd_logs(args) -> int:
+    from . import node
+
+    try:
+        print(node.logs(args.tail))
+    except node.NodeError as exc:
+        print(RED(f"{exc}"), file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_wipe(args) -> int:
+    from . import node
+
+    ids_db = Path(__file__).resolve().parent.parent / "data" / "ids.sqlite"
+    print()
+    print(YELLOW("  This destroys the container, the volume and the id map."))
+    if input("  Type 'wipe' to confirm: ").strip() != "wipe":
+        print("  cancelled\n")
+        return 1
+    try:
+        node.wipe()
+    except node.NodeError as exc:
+        print(RED(f"{exc}"), file=sys.stderr)
+        return 2
+    for leftover in ids_db.parent.glob("ids.sqlite*"):
+        leftover.unlink()
+        print(f"  removed {leftover.name}")
+    print()
+    return 0
+
+
+def cmd_status(args) -> int:
+    from . import node
+
+    print()
+    print(rule("environment"))
+    daemon = node.daemon_ready()
+    print(f"  docker daemon   : {GREEN('up') if daemon else RED('not reachable')}")
+    if not daemon:
+        print(DIM("    Start Docker Desktop, wait for the tray icon to settle, retry."))
+        print()
+        return 2
+
+    state = node.container_state()
+    print(f"  container       : {state if state != 'running' else GREEN('running')}")
+    ready = node.readyz()
+    print(f"  readyz          : {GREEN('200 OK') if ready else RED('unreachable')}")
+    if not ready:
+        print(DIM("    Run: python -m blastradius.cli up"))
+        print()
+        return 2
+
+    print()
+    print(rule("graph contents"))
+    client = HydraClient(base_url=args.url)
+    counts = client.counts_by_label(schema.NODE_LABELS)
+    if not any(counts.values()):
+        print(DIM("  empty -- run: python -m blastradius.cli ingest"))
+    for label, n in counts.items():
+        if n:
+            print(f"  {label:22} {n:>8,}")
+    print()
+    return 0
+
+
+def cmd_reset(args) -> int:
+    """Delete every node this project creates; edges go with them."""
+    client = HydraClient(base_url=args.url)
+    print()
+    for label in schema.NODE_LABELS:
+        client.query(f"MATCH (n:{label}) DETACH DELETE n")
+        print(f"  cleared {label}")
+    ids_db = Path(__file__).resolve().parent.parent / "data" / "ids.sqlite"
+    for leftover in ids_db.parent.glob("ids.sqlite*"):
+        leftover.unlink()
+    print(DIM("  id map deleted too, so the next ingest allocates fresh ids"))
+    print()
+    return 0
+
+
+def cmd_ingest(args) -> int:
+    from .ids import IdAllocator
+    from .ingest.load import ingest_corpus
+
+    client = HydraClient(base_url=args.url)
+    corpus = Path(args.corpus)
+    try:
+        with IdAllocator() as ids:
+            report = ingest_corpus(corpus, client, ids, verbose=not args.quiet)
+    except (HydraError, FileNotFoundError) as exc:
+        print(RED(f"\n{exc}\n"), file=sys.stderr)
+        return 2
+    print("\n" + report.render() + "\n")
+    return 0
+
+
+def cmd_serve(args) -> int:
+    import uvicorn
+
+    print(f"\n  UI at http://127.0.0.1:{args.port}\n")
+    uvicorn.run("blastradius.api.main:app", host="127.0.0.1", port=args.port, log_level="warning")
+    return 0
+
+
+def cmd_doctor(args) -> int:
+    """Check every prerequisite and say exactly what to do about each gap."""
+    import shutil
+    import subprocess
+
+    print()
+    print(rule("prerequisites"))
+    ok = True
+
+    print(f"  python          : {GREEN(sys.version.split()[0])}")
+
+    node_exe = shutil.which("node")
+    if node_exe:
+        version = subprocess.run(
+            [node_exe, "--version"], capture_output=True, text=True
+        ).stdout.strip()
+        print(f"  node            : {GREEN(version)}")
+    else:
+        print(f"  node            : {RED('not found')}  {DIM('install Node.js 18+')}")
+        ok = False
+
+    root = Path(__file__).resolve().parent.parent
+    ts_morph = root / "scanner" / "node_modules" / "ts-morph"
+    if ts_morph.is_dir():
+        print(f"  ts-morph        : {GREEN('installed')}")
+    else:
+        print(f"  ts-morph        : {RED('missing')}  {DIM('cd scanner && npm install')}")
+        ok = False
+
+    for module in ("fastapi", "uvicorn"):
+        try:
+            __import__(module)
+            print(f"  {module:16}: {GREEN('installed')}")
+        except ImportError:
+            print(f"  {module:16}: {RED('missing')}  {DIM('pip install -r requirements.txt')}")
+            ok = False
+
+    from . import node as node_mod
+
+    if node_mod.daemon_ready():
+        print(f"  docker daemon   : {GREEN('up')}")
+        print(f"  hydradb         : {GREEN('ready') if node_mod.readyz() else YELLOW('not started')}")
+        if not node_mod.readyz():
+            print(DIM("                    python -m blastradius.cli up"))
+    else:
+        print(f"  docker daemon   : {RED('not reachable')}  {DIM('start Docker Desktop')}")
+        ok = False
+
+    corpus = root / "corpus"
+    locks = [p for p in corpus.rglob("package-lock.json") if "node_modules" not in p.parts]
+    print(f"  corpus          : {len(locks)} lockfile(s) under {corpus.name}/")
+
+    print()
+    print(GREEN("  all good") if ok else YELLOW("  fix the items above, then re-run doctor"))
+    print()
+    return 0 if ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="blastradius",
@@ -266,6 +462,38 @@ def main(argv: list[str] | None = None) -> int:
 
     st = sub.add_parser("stats", help="node and edge counts")
     st.set_defaults(func=cmd_stats)
+
+    # -- lifecycle --
+    doctor = sub.add_parser("doctor", help="check every prerequisite")
+    doctor.set_defaults(func=cmd_doctor)
+
+    up = sub.add_parser("up", help="start the HydraDB container")
+    up.set_defaults(func=cmd_up)
+
+    dn = sub.add_parser("down", help="stop the container, keep the data")
+    dn.set_defaults(func=cmd_down)
+
+    stat = sub.add_parser("status", help="daemon, container, readiness, contents")
+    stat.set_defaults(func=cmd_status)
+
+    lg = sub.add_parser("logs", help="tail the node log")
+    lg.add_argument("--tail", type=int, default=60)
+    lg.set_defaults(func=cmd_logs)
+
+    ing = sub.add_parser("ingest", help="scan the corpus into the graph")
+    ing.add_argument("--corpus", default="corpus")
+    ing.add_argument("--quiet", action="store_true")
+    ing.set_defaults(func=cmd_ingest)
+
+    srv = sub.add_parser("serve", help="run the web UI")
+    srv.add_argument("--port", type=int, default=8000)
+    srv.set_defaults(func=cmd_serve)
+
+    rst = sub.add_parser("reset", help="empty the graph, keep the container")
+    rst.set_defaults(func=cmd_reset)
+
+    wp = sub.add_parser("wipe", help="destroy container, volume and id map")
+    wp.set_defaults(func=cmd_wipe)
 
     args = parser.parse_args(argv)
     try:

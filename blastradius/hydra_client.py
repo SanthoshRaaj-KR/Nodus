@@ -20,6 +20,11 @@ DEFAULT_NAMESPACE = "default"
 DEFAULT_GRAPH = "default"
 DEFAULT_CELL = "cell-0"
 
+#: Admission control rejects any request asking for more runtime than
+#: `client_query_runtime_ms` allows (30s on the stock node), and the
+#: rejection is an HTTP 429 that names the limit. Stay under it.
+DEFAULT_TIMEOUT_MS = 25_000
+
 #: One statement per request and no transactions, so a batch is a single
 #: UNWIND. Large enough to amortise the round trip, small enough that a failed
 #: chunk is cheap to replay.
@@ -87,7 +92,7 @@ class HydraClient:
         namespace: str = DEFAULT_NAMESPACE,
         graph: str = DEFAULT_GRAPH,
         cell: str = DEFAULT_CELL,
-        timeout_ms: int = 60_000,
+        timeout_ms: int = DEFAULT_TIMEOUT_MS,
     ):
         self.base_url = base_url.rstrip("/")
         self.token = token

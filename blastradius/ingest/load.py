@@ -85,7 +85,13 @@ class Loader:
         self.ids = ids
         self.verbose = verbose
         self._nodes: dict[str, dict[int, dict]] = {}
-        self._edges: dict[str, dict[int, dict]] = {}
+        # Keyed by (edge type, source label, destination label): the server
+        # requires UNWIND MATCH endpoints to carry exactly one label each, so a
+        # single edge type that spans several label pairs -- REQUIRED_BY covers
+        # both PackageVersion->PackageVersion and PackageVersion->Service --
+        # has to be written as one batch per pair.
+        self._edges: dict[tuple[str, str, str], dict[int, dict]] = {}
+        self._label_of: dict[int, str] = {}
         self.report = IngestReport()
 
     # -- staging ----------------------------------------------------------
@@ -102,6 +108,7 @@ class Loader:
         for prop in NODE_PROPS[label]:
             row[prop] = props.get(prop, schema.UNKNOWN_STR)
         self._nodes.setdefault(label, {})[node_id] = row
+        self._label_of[node_id] = label
         return node_id
 
     def edge(self, etype: str, src: int, dst: int, **props) -> None:
@@ -112,10 +119,19 @@ class Loader:
             self._stage_edge(inverse, dst, src, props)
 
     def _stage_edge(self, etype: str, src: int, dst: int, props: dict) -> None:
+        try:
+            src_label = self._label_of[src]
+            dst_label = self._label_of[dst]
+        except KeyError as exc:
+            raise KeyError(
+                f"cannot write a {etype} edge touching node {exc.args[0]}: it was "
+                f"never staged, so its label is unknown and the MATCH cannot be "
+                f"written. Stage both endpoints before the edge."
+            ) from None
         rel_id = self.ids.get(etype, f"{src}->{dst}")
         row = {"rel": rel_id, "src": src, "dst": dst}
         row.update(props)
-        self._edges.setdefault(etype, {})[rel_id] = row
+        self._edges.setdefault((etype, src_label, dst_label), {})[rel_id] = row
 
     # -- writing ----------------------------------------------------------
 
@@ -132,23 +148,23 @@ class Loader:
             )
             self.report.nodes[label] = sent
 
-        for etype, rows in self._edges.items():
+        for (etype, src_label, dst_label), rows in self._edges.items():
             values = list(rows.values())
             extra = [k for k in values[0] if k not in ("rel", "src", "dst")]
-            # Endpoints are matched on bare id rather than by label: a single
-            # REQUIRED_BY batch spans PackageVersion->PackageVersion and
-            # PackageVersion->Service, and a labelled MATCH could not.
             statement = (
                 "UNWIND $rows AS row "
-                "MATCH (s {id: row.src}), (d {id: row.dst}) "
+                f"MATCH (s:{src_label} {{id: row.src}}), (d:{dst_label} {{id: row.dst}}) "
                 f"MERGE (s)-[r:{etype} {{id: row.rel}}]->(d)"
             )
             if extra:
                 statement += " SET " + ", ".join(f"r.{p} = row.{p}" for p in extra)
             sent = self.client.batch(
-                statement, values, progress=self.verbose, label=etype
+                statement,
+                values,
+                progress=self.verbose,
+                label=f"{etype} ({src_label}->{dst_label})",
             )
-            self.report.edges[etype] = sent
+            self.report.edges[etype] = self.report.edges.get(etype, 0) + sent
 
         self.ids.commit()
         return self.report

@@ -3,6 +3,17 @@
 Every traversal here pins its source id and walks forward, because HydraDB
 accepts nothing else. Where a query needs to run "backwards" it walks a
 materialised inverse edge instead -- see :mod:`blastradius.schema`.
+
+Two rules about UNWIND that are exact opposites, and are both enforced:
+
+* ``UNWIND ... MATCH ... MERGE`` (a write) requires every endpoint to carry
+  **exactly one label**.
+* ``UNWIND ... MATCH ... RETURN`` (a read) **rejects labels entirely** --
+  "UNWIND batch node patterns do not support labels".
+
+So the writers in :mod:`blastradius.ingest.load` are label-qualified and the
+readers below are not. Do not "tidy" one to match the other; the server will
+reject whichever you change.
 """
 
 from __future__ import annotations
@@ -125,7 +136,7 @@ def exposed_services(client: HydraClient, package_ids: list[int]) -> list[dict]:
         return []
     result = client.query(
         "UNWIND $rows AS row "
-        "MATCH (p:PackageVersion {id: row.id})-[e:PRESENT_IN]->(s:Service) "
+        "MATCH (p {id: row.id})-[e:PRESENT_IN]->(s) "
         "RETURN s.name AS service, p.key AS package, e.depth AS depth, "
         "e.dev AS dev, e.direct AS direct",
         {"rows": [{"id": i} for i in package_ids]},
@@ -185,8 +196,7 @@ def calling_functions(client: HydraClient, package_ids: list[int]) -> list[dict]
         return []
     result = client.query(
         "UNWIND $rows AS row "
-        "MATCH (p:PackageVersion {id: row.id})-[:IMPORTED_AS]->(e:ExternalImport)"
-        "-[:IMPORT_USED_BY]->(f:Function) "
+        "MATCH (p {id: row.id})-[:IMPORTED_AS]->(e)-[:IMPORT_USED_BY]->(f) "
         "RETURN f.id AS id, f.name AS name, f.file AS file, f.line AS line, "
         "f.service AS service, e.specifier AS specifier",
         {"rows": [{"id": i} for i in package_ids]},
@@ -222,7 +232,7 @@ def reachable_routes(
     callers: dict[int, int] = {fid: 0 for fid in function_ids}
     result = client.query(
         "UNWIND $rows AS row "
-        f"MATCH (f:Function {{id: row.id}})-[:CALLED_BY*1..{max_depth}]->(c:Function) "
+        f"MATCH (f {{id: row.id}})-[:CALLED_BY*1..{max_depth}]->(c) "
         "RETURN c.id AS id",
         {"rows": [{"id": i} for i in function_ids]},
     )
@@ -232,7 +242,7 @@ def reachable_routes(
     # Step 2: which of those are dispatched to by a route.
     routes = client.query(
         "UNWIND $rows AS row "
-        "MATCH (f:Function {id: row.id})-[:HANDLES]->(r:Route) "
+        "MATCH (f {id: row.id})-[:HANDLES]->(r) "
         "RETURN r.method AS method, r.pattern AS pattern, r.service AS service, "
         "r.file AS file, r.line AS line, f.name AS handler",
         {"rows": [{"id": i} for i in callers]},
@@ -251,7 +261,7 @@ def artifacts_for(client: HydraClient, services: list[str]) -> list[dict]:
         return []
     result = client.query(
         "UNWIND $rows AS row "
-        "MATCH (s:Service {id: row.id})-[:HAS_ARTIFACT]->(a:PersistenceArtifact) "
+        "MATCH (s {id: row.id})-[:HAS_ARTIFACT]->(a) "
         "RETURN s.name AS service, a.path AS path, a.kind AS kind, a.sha256 AS sha256",
         {"rows": [{"id": i} for i in services]},
     )
