@@ -22,7 +22,7 @@
   input::placeholder { color:oklch(0.6 0.02 265); }
 
   #shell {
-    height:100vh; width:100%; display:grid;
+    height:100vh; height:100dvh; width:100%; display:grid;
     grid-template-rows:auto 1fr auto; grid-template-columns:minmax(0,1fr);
     max-width:100vw; overflow:hidden;
     background:
@@ -39,7 +39,7 @@
   }
   .brand      { font:600 17px 'Space Grotesk',sans-serif; letter-spacing:-0.01em; }
   .brand-sub  { font:400 11px 'JetBrains Mono',monospace; color:oklch(0.7 0.02 265); letter-spacing:0.04em; }
-  .tabs { display:flex; gap:4px; padding:4px; border-radius:12px; background:oklch(0.23 0.03 265); border:1px solid oklch(0.32 0.03 265); }
+  .tabs { display:flex; gap:4px; padding:4px; border-radius:12px; background:oklch(0.23 0.03 265); border:1px solid oklch(0.32 0.03 265); flex:none; }
   .tab {
     cursor:pointer; padding:9px 15px; border-radius:9px;
     font:500 12.5px 'Space Grotesk',sans-serif; letter-spacing:0.01em;
@@ -47,7 +47,7 @@
   }
   .tab.on { background:oklch(0.78 0.14 265); color:oklch(0.18 0.03 265); box-shadow:0 4px 18px oklch(0.6 0.16 265 / 0.4); }
   .search {
-    display:flex; align-items:center; gap:10px; flex:1; min-width:0; max-width:520px;
+    display:flex; align-items:center; gap:10px; flex:1 1 260px; min-width:0; max-width:520px;
     padding:0 14px; height:44px; border-radius:12px;
     background:oklch(0.22 0.03 265); border:1px solid oklch(0.34 0.04 265);
   }
@@ -55,21 +55,25 @@
   .search input { flex:1; min-width:0; background:transparent; border:0; outline:0; color:oklch(0.95 0.01 265); font:500 14px 'JetBrains Mono',monospace; }
   .search .clear { cursor:pointer; font:500 11px 'JetBrains Mono',monospace; color:oklch(0.68 0.02 265); padding:4px 6px; border-radius:6px; }
   .search .clear:hover { background:oklch(0.3 0.03 265); }
-  .chips { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .chips-label { font:400 11px 'JetBrains Mono',monospace; color:oklch(0.65 0.02 265); }
+  .chips { display:flex; align-items:center; gap:8px; min-width:0; max-width:100%; }
+  #chips { display:flex; gap:8px; overflow-x:auto; padding-bottom:2px; }
+  .chips-label { font:400 11px 'JetBrains Mono',monospace; color:oklch(0.65 0.02 265); flex:none; }
   .chip {
     cursor:pointer; padding:6px 10px; border-radius:8px; white-space:nowrap;
     font:500 11px 'JetBrains Mono',monospace;
-    background:oklch(0.24 0.03 265); border:1px solid oklch(0.34 0.03 265); color:oklch(0.8 0.01 265);
+    background:oklch(0.24 0.03 265); border:1px solid oklch(0.34 0.03 265); color:oklch(0.8 0.01 265); flex:none;
   }
   .chip.on { background:oklch(0.32 0.1 25); border-color:oklch(0.6 0.16 25); color:oklch(0.9 0.09 25); }
 
   #stage { position:relative; overflow:hidden; min-width:0; }
   #scroll { position:absolute; inset:0; overflow:auto; padding:26px; }
-  #canvas { position:relative; flex:none; }
+  #sizer  { position:relative; }
+  #canvas { position:relative; transform-origin:0 0; }
   .colhead { position:absolute; padding-bottom:10px; }
   .colhead .t { font:600 10px 'JetBrains Mono',monospace; letter-spacing:0.16em; }
   .colhead .c { font:400 10px 'JetBrains Mono',monospace; color:oklch(0.55 0.02 265); margin-top:4px; }
+  /* Chevron in the gutter between headers: says which way the graph reads. */
+  .flowmark { position:absolute; font:600 15px 'JetBrains Mono',monospace; color:oklch(0.46 0.03 265); user-select:none; }
   svg#wires { position:absolute; inset:0; overflow:visible; z-index:1; pointer-events:none; }
   .node {
     position:absolute; display:flex; align-items:center; gap:11px; padding:10px 12px;
@@ -102,15 +106,18 @@
   .stack-row { display:flex; gap:10px; align-items:flex-start; padding:9px 11px; border-radius:9px; background:oklch(0.23 0.025 265); }
   .stack-row .i { font:500 10px 'JetBrains Mono',monospace; color:oklch(0.6 0.02 265); padding-top:2px; }
   .stack-row .n { font:500 12px 'JetBrains Mono',monospace; color:oklch(0.94 0.01 265); word-break:break-all; }
+  /* Arrow between reachability steps: the panel reads as a chain, not a list. */
+  .chain-arrow { font:600 11px 'JetBrains Mono',monospace; color:oklch(0.5 0.03 265); margin:-11px 0 -11px 18px; }
   .stack-row .l { font:400 10.5px 'JetBrains Mono',monospace; color:oklch(0.66 0.02 265); margin-top:2px; }
 
-  footer { display:flex; align-items:center; gap:22px; flex-wrap:wrap; padding:16px 26px; border-top:1px solid oklch(0.3 0.03 265); background:oklch(0.19 0.025 265); }
-  .metric { padding:14px 18px; min-width:178px; border-radius:16px; background:oklch(0.21 0.025 265 / 0.86); backdrop-filter:blur(12px); box-shadow:0 10px 30px oklch(0.12 0.02 265 / 0.5); }
+  footer { display:flex; align-items:center; gap:22px; min-width:0; padding:16px 26px; border-top:1px solid oklch(0.3 0.03 265); background:oklch(0.19 0.025 265); }
+  #metrics { display:flex; gap:12px; overflow-x:auto; min-width:0; padding-bottom:2px; }
+  .metric { padding:14px 18px; min-width:178px; flex:none; border-radius:16px; background:oklch(0.21 0.025 265 / 0.86); backdrop-filter:blur(12px); box-shadow:0 10px 30px oklch(0.12 0.02 265 / 0.5); }
   .metric .l { font:400 10px 'JetBrains Mono',monospace; letter-spacing:0.12em; color:oklch(0.72 0.02 265); text-transform:uppercase; }
   .metric .r { display:flex; align-items:flex-end; gap:8px; margin-top:6px; }
   .metric .v { font:700 34px 'Space Grotesk',sans-serif; letter-spacing:-0.03em; line-height:1; }
   .metric .o { font:400 11px 'JetBrains Mono',monospace; color:oklch(0.68 0.02 265); padding-bottom:4px; }
-  .legend { display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin-left:auto; }
+  .legend { display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin-left:auto; flex:none; }
   .legend .item { display:flex; align-items:center; gap:7px; }
   .legend .sw { width:9px; height:9px; border-radius:50%; }
   .legend .t { font:400 11px 'JetBrains Mono',monospace; color:oklch(0.78 0.01 265); }
@@ -141,17 +148,23 @@
 
     <div class="chips">
       <span class="chips-label">advisories</span>
-      <div id="chips" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+      <div id="chips"></div>
     </div>
   </header>
 
   <div id="stage">
-    <div id="scroll"><div id="canvas"></div></div>
+    <div id="scroll"><div id="sizer"><div id="canvas"></div></div></div>
+    <div id="zoom">
+      <button id="zoomOut" title="Zoom out">&minus;</button>
+      <span class="pct" id="zoomPct">100%</span>
+      <button id="zoomIn" title="Zoom in">+</button>
+      <button class="fit" id="zoomFit" title="Fit graph to window">fit</button>
+    </div>
     <div id="panel" style="display:none"></div>
   </div>
 
   <footer>
-    <div id="metrics" style="display:flex;gap:12px;flex-wrap:wrap"></div>
+    <div id="metrics"></div>
     <div class="legend" id="legend"></div>
   </footer>
 </div>
