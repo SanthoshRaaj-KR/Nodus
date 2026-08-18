@@ -1,0 +1,25 @@
+{
+  "advisory_id": "GHSA-pjwm-rvh2-c87w",
+  "ecosystem": "npm",
+  "package": "ua-parser-js",
+  "affected_versions": [
+    "0.7.29",
+    "0.8.0",
+    "1.0.0"
+  ],
+  "affected_range": ">=0.7.29 <=0.7.29 || >=0.8.0 <=0.8.0 || >=1.0.0 <=1.0.0",
+  "published_at": 1747900800,
+  "withdrawn_at": 1747901160,
+  "severity": "critical",
+  "iocs": {
+    "paths": [
+      ".claude/hooks/*.js",
+      ".vscode/tasks.json"
+    ],
+    "sha256": [],
+    "content_markers": [
+      "eval(atob(",
+      "npm-postinstall-beacon"
+    ]
+  }
+}

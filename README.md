@@ -26,7 +26,7 @@ TypeScript compiler API, and the bridge between them:
 ```
 [Service: payment-api]
        |
-       +--> (macro / lockfile) ----> [PackageVersion: vulnerable-pkg@1.0.5]
+       +--> (macro / lockfile) ----> [PackageVersion: ua-parser-js@0.7.29]
        |                                          ^
        +--> (micro / AST)                         | RESOLVES_TO
             [File: src/token.ts]                  |
@@ -97,7 +97,7 @@ queried package and everything that reaches it burn red; the rest dims.
 ![Macro view](docs/screens/macro.png)
 
 **Micro — the call graph.** The claim no lockfile scanner can make:
-`src/index.ts → POST /login → handleLogin() → verify() → import 'vulnerable-pkg'`.
+`src/index.ts → POST /login → handleLogin() → verify() → import 'ua-parser-js'`.
 
 ![Micro view](docs/screens/micro.png)
 
@@ -113,6 +113,20 @@ Clicking any node opens metadata and the reachability path:
 
 ![Detail panel](docs/screens/detail-panel.png)
 
+**Focus mode** is what makes this usable on a real application. Drawing all 474
+functions produces a canvas metres tall that answers nobody's question, so by
+default the view shows only the blast radius plus **one hop of context** either
+side -- what else calls these, what else they reach -- so the boundary is
+visible and not just a bare chain. Each column reports `1 of 471` and offers
+`+470 more`, which opens that column alone.
+
+![Focus mode](docs/screens/focus.png)
+
+With no query there is no blast radius to compute, so each column falls back to
+its ten most-connected nodes: the hubs are what is worth seeing first. Toggling
+`focus` off draws everything, which is occasionally what you want and never
+what you want first.
+
 It is responsive down to phone width: the graph auto-fits (shrink only — a
 four-node graph blown up to fill a monitor implies more than is there), the
 detail drawer becomes a bottom sheet, chips and metrics scroll sideways, and
@@ -121,6 +135,31 @@ zoom/fit control sits bottom-right; touching it hands you manual control and
 stops the auto-fit from fighting you on resize.
 
 ![Phone width](docs/screens/mobile.png)
+
+### Making it fast
+
+Measured rather than guessed, and the answer was not where it looked:
+
+| Query shape | Median |
+|---|---|
+| Pinned-id 2-hop | 4.7 ms |
+| Pinned-id variable-length `*1..8` | 6.3 ms |
+| Label scan + property filter | 36.6 ms |
+| **Unpinned edge sweep** `(a)-[e]->(b)` | **500-770 ms** |
+
+Traversal was never the problem. Unpinned sweeps are ~100x slower than pinned
+traversals and dominated everything, so both fixes target those:
+
+- **Names resolve locally.** `held_versions` was a label scan, because there is
+  no index behind `p.name`. `data/ids.sqlite` already maps `name@version -> id`
+  and SQLite indexes it -- 0.02 ms instead of 36 ms. Candidates are then
+  confirmed against the graph in a single `UNION ALL` of pinned lookups, since
+  the id map outlives the graph and would otherwise name versions that are no
+  longer there.
+- **The Explorer caches each view against the node's `read_epoch`**, which
+  advances only when writes land. Building a view costs six unpinned sweeps;
+  serving it again costs one pinned lookup. **macro 2553 ms -> 58 ms, micro
+  1198 ms -> 54 ms**, and an ingest invalidates it automatically.
 
 The whole graph is sent to the browser once per view and the blast radius is a
 reverse BFS in JS, so typing in the search box costs no round trips. That only
@@ -168,7 +207,7 @@ still holds data gives every node a fresh id and duplicates the lot.
 ```powershell
 python -m blastradius.cli stats                            # what is in the graph
 python -m blastradius.cli services                         # ingested services
-python -m blastradius.cli check vulnerable-pkg@1.0.5       # one package
+python -m blastradius.cli check ua-parser-js@0.7.29       # one package
 python -m blastradius.cli check express --range ">=4.18.0 <4.19.0"
 python -m blastradius.cli advisory advisories\GHSA-vuln-pkg-2026.json
 ```

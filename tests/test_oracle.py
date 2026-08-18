@@ -124,7 +124,7 @@ def test_nested_resolution_prefers_the_nested_copy():
     """The case that silently misattributes a vulnerable version if wrong."""
     packages = json.loads(FIXTURE.read_text(encoding="utf-8"))["packages"]
     nested = resolve_dep("node_modules/express", "debug", packages)
-    hoisted = resolve_dep("node_modules/vulnerable-pkg", "debug", packages)
+    hoisted = resolve_dep("node_modules/ua-parser-js", "debug", packages)
     assert packages[nested]["version"] == "2.6.9"
     assert packages[hoisted]["version"] == "4.3.4"
 
@@ -148,8 +148,11 @@ def test_advisory_negative_control():
 
 
 def test_advisory_matches_only_affected():
-    advisory = Advisory.load(ROOT / "advisories" / "GHSA-vuln-pkg-2026.json")
-    assert advisory.keys_among(["1.0.3", "1.0.5", "1.0.6"]) == ["vulnerable-pkg@1.0.5"]
+    advisory = Advisory.load(ROOT / "advisories" / "GHSA-ua-parser-js-2021.json")
+    # 0.7.28 is clean, 0.7.29 and 0.8.0 are the compromised releases, 0.8.1 is
+    # the fix. Only the middle two may come back.
+    held = ["0.7.28", "0.7.29", "0.8.0", "0.8.1"]
+    assert advisory.keys_among(held) == ["ua-parser-js@0.7.29", "ua-parser-js@0.8.0"]
 
 
 def test_semver_boundaries():

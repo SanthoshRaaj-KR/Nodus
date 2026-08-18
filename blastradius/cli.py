@@ -4,7 +4,7 @@ Prints the macro (lockfile) answer and the micro (call graph) answer side by
 side, because they answer different questions and the gap between them is the
 whole point -- "you have it" versus "a request can reach it".
 
-    python -m blastradius.cli check vulnerable-pkg@1.0.5
+    python -m blastradius.cli check ua-parser-js@0.7.29
     python -m blastradius.cli check express --range ">=4.18.0 <4.19.0"
     python -m blastradius.cli advisory advisories/GHSA-vuln-pkg-2026.json
     python -m blastradius.cli services
@@ -585,7 +585,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     check = sub.add_parser("check", help="assess one package[@version]")
-    check.add_argument("package", help="e.g. vulnerable-pkg@1.0.5 or just express")
+    check.add_argument("package", help="e.g. ua-parser-js@0.7.29 or just express")
     check.add_argument("--range", default="", help='npm range, e.g. ">=4.18.0 <4.19.0"')
     check.add_argument("--id", default="AD-HOC", help="advisory id for the report header")
     check.add_argument("--no-paths", action="store_true", help="skip the MSpaths section")

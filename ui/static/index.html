@@ -149,6 +149,23 @@
   .notice b { color:oklch(0.95 0.01 265); font-weight:600; }
   .notice code { color:oklch(0.82 0.14 200); }
 
+  .more {
+    position:absolute; z-index:2; cursor:pointer; text-align:center;
+    padding:11px 10px; border-radius:12px;
+    font:500 11.5px 'JetBrains Mono',monospace; color:oklch(0.74 0.02 265);
+    background:oklch(0.22 0.02 265 / 0.6); border:1px dashed oklch(0.4 0.03 265);
+    transition:all 0.15s;
+  }
+  .more:hover { color:oklch(0.95 0.01 265); border-color:oklch(0.62 0.04 265); background:oklch(0.26 0.03 265); }
+  .more.collapse { border-style:solid; color:oklch(0.66 0.02 265); }
+
+  #focus {
+    cursor:pointer; padding:9px 14px; border-radius:10px; white-space:nowrap; flex:none;
+    font:500 12px 'JetBrains Mono',monospace;
+    background:oklch(0.24 0.03 265); border:1px solid oklch(0.34 0.03 265); color:oklch(0.78 0.01 265);
+  }
+  #focus.on { background:oklch(0.3 0.09 200); border-color:oklch(0.6 0.13 200); color:oklch(0.92 0.09 200); }
+
   #zoom {
     position:absolute; right:18px; bottom:18px; z-index:15; display:flex; align-items:center; gap:2px;
     padding:4px; border-radius:11px; background:oklch(0.21 0.025 265 / 0.92);
@@ -221,9 +238,11 @@
       <div class="tab" data-mode="package">Package · Blast Radius</div>
     </div>
 
+    <div id="focus" class="on" title="Show only the blast radius and one hop of context">focus</div>
+
     <div class="search">
       <div class="led"></div>
-      <input id="q" placeholder="trace a vulnerable package, e.g. vulnerable-pkg@1.0.5" autocomplete="off">
+      <input id="q" placeholder="trace a vulnerable package, e.g. ua-parser-js@0.7.29" autocomplete="off">
       <div class="clear" id="clear">clear</div>
     </div>
 
@@ -300,8 +319,14 @@ const state = {
   pkgError: '',
   serviceCount: 0,
   zoom: 1,
-  autoFit: true   // stays true until the user touches the zoom control
+  autoFit: true,  // stays true until the user touches the zoom control
+  focus: true,    // draw the blast radius and its boundary, not the whole graph
+  expanded: new Set()   // layers the user has asked to see in full
 };
+
+//: How many nodes a column shows when there is no query to focus on. Enough
+//: to read the shape of the layer, few enough to stay on one screen.
+const PEEK = 10;
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
@@ -310,27 +335,84 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
 /* ------------------------------------------------------------------ */
 /* layout — same column maths as the design                            */
 /* ------------------------------------------------------------------ */
-function layout(g) {
+function layout(visible, allLayers) {
+  // Every layer keeps its column header even when nothing in it is drawn: an
+  // empty HTTP ROUTES column is a finding, not a rendering gap.
   const byLayer = {};
-  g.nodes.forEach((n) => { (byLayer[n.layer] = byLayer[n.layer] || []).push(n); });
-  const layers = Object.keys(byLayer).map(Number).sort((a, b) => a - b);
+  allLayers.forEach((l) => { byLayer[l] = []; });
+  visible.forEach((n) => { (byLayer[n.layer] = byLayer[n.layer] || []).push(n); });
+  const layers = allLayers;
   if (!layers.length) return { pos: {}, H: 200, W: 400, layers: [], byLayer };
   const pos = {};
-  const maxCount = Math.max(...layers.map((l) => byLayer[l].length));
-  const H = TOP + maxCount * (NH + ROWG) + 40;
+  const maxCount = Math.max(1, ...layers.map((l) => byLayer[l].length));
+  // +90 leaves room for the "+N more" pill beneath the longest column.
+  const H = TOP + maxCount * (NH + ROWG) + 90;
   layers.forEach((l) => {
-    const list = byLayer[l];
     // Top-aligned, not centred. Centring looks tidy when every column holds a
     // similar count, but a real application has ~4 routes against ~170
     // functions -- and centring then pushes the short columns entirely off
     // screen, hiding exactly the entry points the view exists to show.
-    const start = TOP;
-    // Columns are indexed by declared layer, not by position in `layers`, so a
-    // view with an empty column still lines up with its header.
-    list.forEach((n, i) => { pos[n.id] = { x: l * COLW, y: start + i * (NH + ROWG) }; });
+    // Columns are indexed by declared layer, so an empty column still lines
+    // up with its header.
+    byLayer[l].forEach((n, i) => { pos[n.id] = { x: l * COLW, y: TOP + i * (NH + ROWG) }; });
   });
   const W = Math.max(...layers) * COLW + NW;
   return { pos, H, W, layers, byLayer };
+}
+
+/**
+ * Pick the nodes worth rendering.
+ *
+ * A real application has hundreds of functions, and drawing all of them makes
+ * a canvas metres tall that answers nobody's question. During an incident the
+ * interesting set is small and specific: the nodes on a path to the
+ * compromised package, plus one hop of context either side so the *boundary*
+ * shows too -- what else calls this, what else it reaches. The rest collapses
+ * behind a per-column "+N" the user can open.
+ *
+ * With no query there is no blast radius to compute, so each column falls back
+ * to its most-connected nodes: the hubs are what is worth seeing first.
+ */
+function selectVisible(g, hot) {
+  const byLayer = {};
+  g.nodes.forEach((n) => { (byLayer[n.layer] = byLayer[n.layer] || []).push(n); });
+  const counts = {};
+  Object.keys(byLayer).forEach((l) => { counts[l] = byLayer[l].length; });
+
+  if (!state.focus) return { visible: g.nodes, hidden: {}, counts };
+
+  let keep;
+  if (hot && hot.size) {
+    keep = new Set(hot);
+    g.edges.forEach(([a, b]) => {
+      if (hot.has(a)) keep.add(b);
+      if (hot.has(b)) keep.add(a);
+    });
+  } else {
+    const degree = {};
+    g.edges.forEach(([a, b]) => {
+      degree[a] = (degree[a] || 0) + 1;
+      degree[b] = (degree[b] || 0) + 1;
+    });
+    keep = new Set();
+    Object.keys(byLayer).forEach((l) => {
+      [...byLayer[l]]
+        .sort((x, y) => (degree[y.id] || 0) - (degree[x.id] || 0))
+        .slice(0, PEEK)
+        .forEach((n) => keep.add(n.id));
+    });
+  }
+
+  const hidden = {};
+  const visible = [];
+  Object.keys(byLayer).map(Number).sort((a, b) => a - b).forEach((l) => {
+    const list = byLayer[l];
+    if (state.expanded.has(l)) { list.forEach((n) => visible.push(n)); return; }
+    const shown = list.filter((n) => keep.has(n.id));
+    if (shown.length < list.length) hidden[l] = list.length - shown.length;
+    shown.forEach((n) => visible.push(n));
+  });
+  return { visible, hidden, counts };
 }
 
 /* ------------------------------------------------------------------ */
@@ -429,25 +511,35 @@ function render() {
     return;
   }
 
-  const { pos, H, W, layers, byLayer } = layout(g);
-  if (state.autoFit) state.zoom = fitZoom(W);
-
   const found = hotSet(g, state.query);
   const hot = found ? found.hot : null;
   const seedIds = found ? found.seeds : new Set();
   const nodeById = {}; g.nodes.forEach((n) => { nodeById[n.id] = n; });
+
+  const allLayers = [...new Set(g.nodes.map((n) => n.layer))].sort((a, b) => a - b);
+  const { visible, hidden, counts } = selectVisible(g, hot);
+  const { pos, H, W, layers, byLayer } = layout(visible, allLayers);
+  if (state.autoFit) state.zoom = fitZoom(W);
 
   canvas.style.width = W + 'px';
   canvas.style.height = H + 'px';
 
   let html = '';
 
+  // Colour comes from the whole graph, not the visible subset: a column can
+  // legitimately have nothing in it once focus is on, and an empty HTTP ROUTES
+  // column still needs its header.
+  const kindByLayer = {};
+  g.nodes.forEach((n) => { if (!(n.layer in kindByLayer)) kindByLayer[n.layer] = n.kind; });
+
   layers.forEach((l, i) => {
-    const kind = byLayer[l][0].kind;
+    const kind = kindByLayer[l];
     const accent = col(KIND[kind].hue, 0.78, 0.14);
     html += `<div class="colhead" style="left:${l * COLW}px;top:0;width:${NW}px;border-bottom:1px solid ${col(KIND[kind].hue, 0.4, 0.06)}">
       <div class="t" style="color:${accent}">${esc(g.cols[l] || '')}</div>
-      <div class="c">${byLayer[l].length} nodes</div></div>`;
+      <div class="c">${byLayer[l].length === counts[l]
+        ? counts[l] + ' nodes'
+        : byLayer[l].length + ' of ' + counts[l]}</div></div>`;
     // The graph reads left to right; a column layout with no arrows does not
     // say so on its own.
     if (i < layers.length - 1) {
@@ -485,7 +577,7 @@ function render() {
   });
   html += `<svg id="wires" width="${W}" height="${H}"><defs>${defs}</defs>${wires}</svg>`;
 
-  g.nodes.forEach((n) => {
+  visible.forEach((n) => {
     const k = KIND[n.kind], p = pos[n.id];
     if (!p) return;
     const isHot = hot && hot.has(n.id);
@@ -516,9 +608,40 @@ function render() {
     </div>`;
   });
 
+  // "+N more" under any column that is holding something back. Clicking it
+  // opens that column alone -- expanding everything at once is what we are
+  // trying to avoid.
+  layers.forEach((l) => {
+    const n = hidden[l];
+    if (!n) return;
+    const y = TOP + byLayer[l].length * (NH + ROWG);
+    html += `<div class="more" data-layer="${l}" style="left:${l * COLW}px;top:${y}px;width:${NW}px">
+      +${n} more &middot; show all</div>`;
+  });
+  layers.forEach((l) => {
+    if (!state.expanded.has(l)) return;
+    const y = TOP + byLayer[l].length * (NH + ROWG);
+    html += `<div class="more collapse" data-collapse="${l}" style="left:${l * COLW}px;top:${y}px;width:${NW}px">
+      collapse back to the blast radius</div>`;
+  });
+
   canvas.innerHTML = html;
   canvas.querySelectorAll('.node').forEach((el) => {
     el.onclick = () => { state.selected = el.dataset.id; render(); };
+  });
+  canvas.querySelectorAll('.more[data-layer]').forEach((el) => {
+    el.onclick = () => {
+      state.expanded.add(Number(el.dataset.layer));
+      state.autoFit = true;
+      render();
+    };
+  });
+  canvas.querySelectorAll('.more[data-collapse]').forEach((el) => {
+    el.onclick = () => {
+      state.expanded.delete(Number(el.dataset.collapse));
+      state.autoFit = true;
+      render();
+    };
   });
 
   applyZoom(W, H);
@@ -850,6 +973,7 @@ function syncChips() {
 async function setMode(mode) {
   state.mode = mode;
   state.selected = null;
+  state.expanded.clear();
   state.autoFit = true;   // the views are different widths
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.dataset.mode === mode));
 
@@ -877,13 +1001,26 @@ async function setMode(mode) {
 document.querySelectorAll('.tab').forEach((t) => { t.onclick = () => setMode(t.dataset.mode); });
 $('q').oninput = (e) => {
   if (state.mode === 'package') return;   // committed on Enter, see setMode
-  state.query = e.target.value; syncChips(); render();
+  state.query = e.target.value;
+  // A new query means a new blast radius; columns opened for the old one are
+  // not what the user is looking at any more.
+  state.expanded.clear();
+  state.autoFit = true;
+  syncChips();
+  render();
 };
 $('q').onkeydown = (e) => {
   if (e.key === 'Enter' && state.mode === 'package') setPkgTarget($('q').value.trim());
 };
 $('markBtn').onclick = toggleMark;
 $('clear').onclick = () => { state.query = ''; $('q').value = ''; syncChips(); render(); };
+$('focus').onclick = () => {
+  state.focus = !state.focus;
+  state.expanded.clear();
+  state.autoFit = true;
+  $('focus').classList.toggle('on', state.focus);
+  render();
+};
 $('zoomIn').onclick = () => setZoom(state.zoom + 0.15, true);
 $('zoomOut').onclick = () => setZoom(state.zoom - 0.15, true);
 $('zoomFit').onclick = () => { state.autoFit = true; render(); };

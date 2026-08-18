@@ -51,6 +51,26 @@ def health():
         return JSONResponse(status_code=503, content={"ok": False, "error": str(exc)})
 
 
+#: mode -> (read_epoch it was built from, payload). Building a view costs six
+#: unpinned edge sweeps at 500-770ms each; the result only changes when data
+#: does, so it is cached against the server's own write epoch.
+_graph_cache: dict[str, tuple[int | None, dict]] = {}
+
+
+def _read_epoch() -> int | None:
+    """The node's current read snapshot, or None if it did not report one.
+
+    Any query carries it back, so this is one cheap pinned lookup rather than
+    a scan. Returning None disables caching rather than risking a stale answer
+    -- for a tool that reports exposure, serving yesterday's graph is worse
+    than being slow.
+    """
+    try:
+        return client.query("MATCH (n {id: 0}) RETURN n.id AS id").read_epoch
+    except HydraError:
+        return None
+
+
 @app.get("/api/graph")
 def graph(mode: str = "macro"):
     """The whole layered graph for one view.
@@ -61,11 +81,21 @@ def graph(mode: str = "macro"):
     """
     if mode not in ("macro", "micro"):
         raise HTTPException(status_code=400, detail="mode must be 'macro' or 'micro'")
+
+    epoch = _read_epoch()
+    cached = _graph_cache.get(mode)
+    if cached and epoch is not None and cached[0] == epoch:
+        return cached[1]
+
     try:
         builder = graphview.macro_graph if mode == "macro" else graphview.micro_graph
-        return builder(client)
+        payload = builder(client)
     except HydraError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
+
+    if epoch is not None:
+        _graph_cache[mode] = (epoch, payload)
+    return payload
 
 
 @app.get("/api/advisories")

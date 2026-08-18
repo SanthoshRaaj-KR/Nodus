@@ -210,8 +210,12 @@ def micro_graph(client: HydraClient) -> dict:
                 "id": f"im:{imp['id']}",
                 "layer": 4,
                 "kind": "import",
-                "label": f"import '{imp['specifier']}'",
-                "sub": (f"{hit['version']} · " if hit else "") + (imp["names"] or "—"),
+                # The specifier alone, unwrapped. `import '<name>'` spends 9
+                # of a 214px card on punctuation and ellipsises away the one
+                # thing the node exists to tell you.
+                "label": imp["specifier"],
+                "sub": (f"{hit['version']} · " if hit else "")
+                + (imp["names"] or "side-effect import"),
                 "file": imp["file"],
                 "service": imp["service"],
                 # Carries the resolved package so the same query that lights up

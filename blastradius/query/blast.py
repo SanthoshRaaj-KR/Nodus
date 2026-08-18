@@ -33,6 +33,9 @@ from .advisory import Advisory
 #: truncated answer for a complete one.
 MAX_CALL_DEPTH = 8
 
+#: Beyond this many pinned lookups, a single scan is cheaper than a UNION.
+MAX_UNION_ARMS = 40
+
 TIER_CONFIRMED = "P0 CONFIRMED"
 TIER_REACHABLE = "P1 REACHABLE"
 TIER_IMPORTED = "P2 IMPORTED"
@@ -118,13 +121,62 @@ class Assessment:
 
 
 def held_versions(client: HydraClient, package: str) -> list[dict]:
-    """Every version of ``package`` present anywhere, with its node id."""
-    result = client.query(
-        "MATCH (p:PackageVersion) WHERE p.name = $name "
-        "RETURN p.id AS id, p.version AS version, p.key AS key ORDER BY version",
-        {"name": package},
+    """Every version of ``package`` present anywhere, with its node id.
+
+    Resolved through the local id map rather than the graph. The Cypher form is
+    a label scan with a property filter -- there is no index behind `p.name`,
+    so it costs 36ms on a small graph and grows linearly. The id map already
+    holds `name@version -> id` and SQLite indexes it, which is microseconds.
+
+    Each candidate is then confirmed with a pinned-id lookup, because the map
+    outlives the graph: clear the database without clearing `ids.sqlite` and
+    the map would happily name versions that are no longer there. Confirming
+    is cheap (pinned lookups are single-digit ms) and the alternative is
+    reporting a package as held when it is not.
+    """
+    candidates = _candidate_ids(package)
+    if candidates is None:
+        # No usable id map -- fall back to the scan rather than to silence.
+        return client.query(
+            "MATCH (p:PackageVersion) WHERE p.name = $name "
+            "RETURN p.id AS id, p.version AS version, p.key AS key ORDER BY version",
+            {"name": package},
+        ).rows
+
+    if not candidates:
+        return []
+    if len(candidates) > MAX_UNION_ARMS:
+        # Absurdly many versions of one package. One scan beats a statement
+        # with hundreds of arms.
+        return client.query(
+            "MATCH (p:PackageVersion) WHERE p.name = $name "
+            "RETURN p.id AS id, p.version AS version, p.key AS key ORDER BY version",
+            {"name": package},
+        ).rows
+
+    # One statement, not one per candidate. UNION arms must project identical
+    # column names, which pinned-id lookups do naturally.
+    arms = " UNION ALL ".join(
+        f"MATCH (p{i}:PackageVersion {{id: {int(node_id)}}}) "
+        f"RETURN p{i}.id AS id, p{i}.version AS version, p{i}.key AS key"
+        for i, (_, node_id) in enumerate(candidates)
     )
-    return result.rows
+    rows = client.query(arms).rows
+    rows.sort(key=lambda r: r["version"])
+    return rows
+
+
+def _candidate_ids(package: str) -> list[tuple[str, int]] | None:
+    """(key, id) pairs for a package name, or None if the map is unusable."""
+    from ..ids import DEFAULT_DB, IdAllocator
+
+    if not DEFAULT_DB.exists():
+        return None
+    try:
+        with IdAllocator(DEFAULT_DB) as ids:
+            return ids.keys_with_prefix(schema.PACKAGE_VERSION, package + "@")
+    except Exception:
+        return None
 
 
 # --------------------------------------------------------------------------
