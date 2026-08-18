@@ -162,6 +162,10 @@ class TyposquatFinding:
     def popularity_ratio(self) -> float:
         return self.target_popularity / max(1, self.candidate_popularity)
 
+    @property
+    def candidate_popularity_known(self) -> bool:
+        return self.candidate_popularity >= 0
+
     def explain(self) -> str:
         return (
             f"{self.candidate!r} resembles {self.target!r} "
@@ -238,12 +242,21 @@ class TyposquatIndex:
         c_scope, c_bare = split_scope(candidate)
         t_scope, t_bare = split_scope(target)
 
-        # A scoped package whose bare name equals the target's is a stub or a
-        # fork, e.g. @types/lodash beside lodash.
-        if c_scope and not t_scope and c_bare == t_bare:
+        # A scoped package whose bare name equals an unscoped target's is a
+        # stub or a fork, e.g. @types/lodash beside lodash.
+        if bool(c_scope) != bool(t_scope) and c_bare == t_bare:
             return True
+
+        # Two scoped packages sharing a bare name are only an imitation when
+        # the *scopes* are confusable: @typos/lodash against @types/lodash is
+        # an attack, whereas @types/lodash against @nestjs/lodash is two
+        # unrelated projects that happen to wrap the same library.
         if c_scope and t_scope and c_bare == t_bare:
-            return True
+            scope_distance = damerau_levenshtein(
+                c_scope.lstrip("@"), t_scope.lstrip("@"), 2
+            )
+            return scope_distance > 2 or scope_distance == 0
+
         for sep in (".", "-", "/", "_"):
             if c_bare.startswith(t_bare + sep) or t_bare.startswith(c_bare + sep):
                 return True
@@ -276,8 +289,37 @@ class TyposquatIndex:
 
     # -- the public call ---------------------------------------------------
 
-    def find(self, name: str, popularity: int = 0) -> list[TyposquatFinding]:
-        """Suspected targets for one package name, strongest first."""
+    @staticmethod
+    def _scopes_comparable(candidate: str, target: str) -> bool:
+        """May these two names be compared at all?
+
+        A scope is an account boundary, not decoration. ``@webpack-cli/serve``
+        is published under the webpack-cli organisation and is not pretending
+        to be ``semver``, however close the bare names look -- so names in
+        different scopes are only comparable when the bare names are
+        *identical*, which is the genuine scope-confusion attack
+        (``@types/lodash`` beside a hostile ``@typos/lodash``).
+
+        Without this rule every scoped package in a corpus matches some
+        unrelated popular name and the output is pure noise.
+        """
+        c_scope, c_bare = split_scope(candidate)
+        t_scope, t_bare = split_scope(target)
+        if c_scope == t_scope:
+            return True
+        return c_bare == t_bare
+
+    def find(
+        self, name: str, popularity: int | None = None
+    ) -> list[TyposquatFinding]:
+        """Suspected targets for one package name, strongest first.
+
+        ``popularity`` of None means *unknown*, which is not the same as zero.
+        Asymmetry cannot be established against an unknown, so nothing is
+        emitted rather than everything -- the npm bulk download endpoint
+        declines scoped packages, and reading that silence as "zero downloads"
+        made every scoped package look like a squat of something famous.
+        """
         try:
             name = normalize_name(name)
         except Exception:  # noqa: BLE001 - source data we do not control
@@ -286,14 +328,18 @@ class TyposquatIndex:
         _, bare = split_scope(name)
         if len(bare) < self.min_length:
             return []
+        if popularity is None:
+            return []
 
         findings: list[TyposquatFinding] = []
         for target in self._candidates(name):
             target_popularity = self.popular.get(target, 0)
 
+            if not self._scopes_comparable(name, target):
+                continue
             # The asymmetry guard. Without it every legitimate sibling and
             # fork in the ecosystem shows up as a squat.
-            if target_popularity < popularity * self.MIN_POPULARITY_RATIO:
+            if target_popularity < max(1, popularity) * self.MIN_POPULARITY_RATIO:
                 continue
             if self._is_namespace_convention(name, target):
                 continue
@@ -324,13 +370,17 @@ class TyposquatIndex:
         return findings
 
     def find_all(
-        self, candidates: Iterable[str] | Mapping[str, int]
+        self, candidates: Iterable[str] | Mapping[str, int | None]
     ) -> list[TyposquatFinding]:
-        """Run :meth:`find` across many candidates."""
+        """Run :meth:`find` across many candidates.
+
+        Given a bare iterable the popularity of each is unknown, so nothing is
+        emitted; pass a mapping to supply it.
+        """
         if isinstance(candidates, Mapping):
-            items: Sequence[tuple[str, int]] = list(candidates.items())
+            items: Sequence[tuple[str, int | None]] = list(candidates.items())
         else:
-            items = [(name, 0) for name in candidates]
+            items = [(name, None) for name in candidates]
         out: list[TyposquatFinding] = []
         for name, popularity in items:
             out.extend(self.find(name, popularity))

@@ -190,3 +190,64 @@ def test_deletion_index_never_misses_a_within_distance_pair():
         }
         got = {f.target for f in index.find(probe, popularity=1)}
         assert brute <= got, f"{probe}: index missed {brute - got}"
+
+
+# -- regressions found on the real corpus ---------------------------------
+
+
+def test_unknown_popularity_emits_nothing(index):
+    """None means unknown, which is not zero.
+
+    npm's bulk download endpoint declines scoped packages. Reading that
+    silence as "zero downloads" made the asymmetry guard pass unconditionally,
+    and every scoped package in the corpus was reported as a squat of
+    something famous.
+    """
+    assert index.find("lodahs", popularity=None) == []
+    assert index.find("lodahs") == []
+
+
+def test_scoped_package_is_not_a_squat_of_an_unscoped_one(index):
+    """A scope is an account boundary, not decoration.
+
+    These are the exact false positives the first real-corpus run produced:
+    every one is a legitimate package whose bare name happens to sit near a
+    popular unscoped name.
+    """
+    for scoped in (
+        "@webpack-cli/serve",     # was flagged against 'semver'
+        "@colors/colors",         # was flagged against 'color' and 'cors'
+        "@types/cors",            # was flagged against 'acorn'
+        "@xtuc/long",             # was flagged against 'clone'
+    ):
+        assert index.find(scoped, popularity=1) == [], scoped
+
+
+def test_same_scope_comparison_still_works():
+    """Scope confusion within one namespace is a real attack and must survive
+    the cross-scope rule."""
+    idx = TyposquatIndex({"@types/lodash": 9_000_000})
+    hits = idx.find("@types/lodahs", popularity=1)
+    assert [h.target for h in hits] == ["@types/lodash"]
+
+
+def test_identical_bare_name_across_scopes_is_still_comparable():
+    """@typos/lodash beside @types/lodash is the genuine scope-confusion
+    attack, so identical bare names stay comparable across scopes."""
+    idx = TyposquatIndex({"@types/lodash": 9_000_000})
+    assert idx.find("@typos/lodash", popularity=1)
+
+
+def test_real_corpus_produces_no_findings():
+    """Every package in the generated fleet is legitimate, so a correct
+    detector reports nothing. This is the regression that matters: the first
+    run produced seven findings and all seven were wrong."""
+    legit = {
+        "@webpack-cli/serve": 5_000, "@colors/colors": 9_000,
+        "@types/cors": 3_000, "@xtuc/long": 1_000, "@types/node": 8_000,
+    }
+    idx = TyposquatIndex({
+        "semver": 700_000_000, "color": 34_000_000, "cors": 50_000_000,
+        "acorn": 211_000_000, "once": 128_000_000, "clone": 69_000_000,
+    })
+    assert idx.find_all(legit) == []

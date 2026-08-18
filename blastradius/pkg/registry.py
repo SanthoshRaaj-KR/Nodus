@@ -348,15 +348,15 @@ class RegistryClient:
     def download_counts(self, names: Iterable[str]) -> dict[str, int]:
         """Weekly download counts, used only as the typosquat popularity signal.
 
-        The bulk endpoint takes up to 128 names but rejects scoped packages, so
-        those are asked for individually and simply reported as 0 when the
-        endpoint declines -- an unknown popularity must not be mistaken for a
-        low one, and the typosquat guard treats 0 as "no evidence of
-        asymmetry".
+        The bulk endpoint takes up to 128 names but rejects scoped packages.
+        Names it does not answer for are **left out of the result entirely**,
+        not recorded as zero: an unknown popularity is not a low one, and
+        conflating them made every scoped package look like a squat of
+        something famous. The caller treats a missing key as unknown.
         """
         wanted = [normalize_name(n) for n in dict.fromkeys(names)]
         unscoped = [n for n in wanted if not n.startswith("@")]
-        out: dict[str, int] = {n: 0 for n in wanted}
+        out: dict[str, int] = {}
 
         for i in range(0, len(unscoped), 128):
             chunk = unscoped[i : i + 128]
