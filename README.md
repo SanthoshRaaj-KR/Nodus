@@ -136,6 +136,31 @@ stops the auto-fit from fighting you on resize.
 
 ![Phone width](docs/screens/mobile.png)
 
+### Making it fast
+
+Measured rather than guessed, and the answer was not where it looked:
+
+| Query shape | Median |
+|---|---|
+| Pinned-id 2-hop | 4.7 ms |
+| Pinned-id variable-length `*1..8` | 6.3 ms |
+| Label scan + property filter | 36.6 ms |
+| **Unpinned edge sweep** `(a)-[e]->(b)` | **500-770 ms** |
+
+Traversal was never the problem. Unpinned sweeps are ~100x slower than pinned
+traversals and dominated everything, so both fixes target those:
+
+- **Names resolve locally.** `held_versions` was a label scan, because there is
+  no index behind `p.name`. `data/ids.sqlite` already maps `name@version -> id`
+  and SQLite indexes it -- 0.02 ms instead of 36 ms. Candidates are then
+  confirmed against the graph in a single `UNION ALL` of pinned lookups, since
+  the id map outlives the graph and would otherwise name versions that are no
+  longer there.
+- **The Explorer caches each view against the node's `read_epoch`**, which
+  advances only when writes land. Building a view costs six unpinned sweeps;
+  serving it again costs one pinned lookup. **macro 2553 ms -> 58 ms, micro
+  1198 ms -> 54 ms**, and an ingest invalidates it automatically.
+
 The whole graph is sent to the browser once per view and the blast radius is a
 reverse BFS in JS, so typing in the search box costs no round trips. That only
 works because the graph is small; at fleet scale the highlighting moves server

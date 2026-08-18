@@ -87,6 +87,33 @@ class IdAllocator:
         ).fetchone()
         return row[0] if row else None
 
+    def keys_with_prefix(self, kind: str, prefix: str) -> list[tuple[str, int]]:
+        """Every (key, id) under ``kind`` whose key starts with ``prefix``.
+
+        This is how a package name becomes graph ids without touching the
+        database. The equivalent Cypher is a label scan with a property filter
+        -- 36ms on a small graph and linear in node count -- because there is
+        no index to hit. The id map already holds exactly this mapping, and
+        SQLite has an index on it.
+
+        Uses a half-open range rather than LIKE. ``_`` and ``%`` are both legal
+        in an npm package name, so a LIKE pattern would need escaping and would
+        silently over-match if that were ever got wrong. A range comparison
+        needs no escaping and walks the primary-key index directly.
+        """
+        if not prefix:
+            return []
+        # Successor of the prefix: everything starting with `prefix` sorts
+        # below it, nothing else does.
+        upper = prefix[:-1] + chr(ord(prefix[-1]) + 1)
+        return list(
+            self.conn.execute(
+                "SELECT key, id FROM ids "
+                "WHERE kind = ? AND key >= ? AND key < ? ORDER BY key",
+                (kind, prefix, upper),
+            )
+        )
+
     def key_for(self, node_id: int) -> tuple[str, str] | None:
         """Reverse lookup: id -> (kind, key). Used to label query results."""
         row = self.conn.execute(

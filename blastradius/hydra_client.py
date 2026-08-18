@@ -51,6 +51,9 @@ class QueryResult:
     rows: list[dict[str, Any]]
     bookmark: str | None = None
     elapsed_ms: float = 0.0
+    #: Monotonic read snapshot. Advances when writes land, so it doubles
+    #: as a cheap cache key for anything derived from the whole graph.
+    read_epoch: int | None = None
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
         return iter(self.rows)
@@ -192,7 +195,9 @@ class HydraClient:
         elapsed = (time.perf_counter() - started) * 1000
         if raw.get("bookmark"):
             self.last_bookmark = raw["bookmark"]
-        return QueryResult(columns, rows, raw.get("bookmark"), elapsed)
+        return QueryResult(
+            columns, rows, raw.get("bookmark"), elapsed, raw.get("read_epoch")
+        )
 
     @staticmethod
     def _decode(raw: dict, columns: list) -> list[dict]:
