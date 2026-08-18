@@ -91,10 +91,25 @@ explorer. Keeping them apart means the demo surface can be restarted or
 re-skinned without touching what other tools depend on, and it reads HydraDB
 directly rather than proxying — one fewer moving part to fail on stage.
 
-**Macro — the supply chain.** Services, then packages by resolved depth. The
-queried package and everything that reaches it burn red; the rest dims.
+**Macro — the supply chain.** Scoped to one exact version, and read left to
+right as an argument:
+
+    THREAT -> COMPROMISED -> RANGE ADMITS -> LOCKFILE RESOLVES -> PROJECTS
+
+The third column is a dead end. It holds every version whose declared range
+would accept the compromised one — the leads a range-only tool reports — and it
+connects to nothing on its right, because admitting a version is not installing
+it. Only the fourth column, the resolutions a lockfile actually recorded,
+reaches a project. On the corpus in this repo that is 25 nodes against 1.
+
+The highlight is not computed in the browser. Exposure is a fact already stored
+on an edge, so guessing it client-side by matching package names would put back
+exactly the range-only heuristic the model exists to replace.
 
 ![Macro view](docs/screens/macro.png)
+
+> The screenshot above still shows the previous depth-column view and needs
+> retaking against the current one.
 
 **Micro — the call graph.** The claim no lockfile scanner can make:
 `src/index.ts → POST /login → handleLogin() → verify() → import 'ua-parser-js'`.
@@ -156,15 +171,23 @@ traversals and dominated everything, so both fixes target those:
   confirmed against the graph in a single `UNION ALL` of pinned lookups, since
   the id map outlives the graph and would otherwise name versions that are no
   longer there.
-- **The Explorer caches each view against the node's `read_epoch`**, which
-  advances only when writes land. Building a view costs six unpinned sweeps;
-  serving it again costs one pinned lookup. **macro 2553 ms -> 58 ms, micro
-  1198 ms -> 54 ms**, and an ingest invalidates it automatically.
+- **The Explorer caches the micro view against the node's `read_epoch`**, which
+  advances only when writes land. Building it costs six unpinned sweeps;
+  serving it again costs one pinned lookup — **1198 ms -> 54 ms** — and an
+  ingest invalidates it automatically. The macro view is not cached this way:
+  it is answered per target rather than swept whole, and reports its own
+  measured cost in the footer.
 
-The whole graph is sent to the browser once per view and the blast radius is a
-reverse BFS in JS, so typing in the search box costs no round trips. That only
-works because the graph is small; at fleet scale the highlighting moves server
-side, onto the same `PRESENT_IN` and `CALLED_BY` edges the CLI already uses.
+The micro graph is sent to the browser once and its blast radius is a reverse
+BFS in JS, so typing in the search box costs no round trips. That works because
+the code graph is small and the question there really is "what reaches this".
+
+The macro view is the case where it does not work, which is why it moved server
+side: over the package tier a client-side name match cannot tell a version a
+range merely admits from one a lockfile resolved. It runs on the same
+`RESOLVED_IN` and `SATISFIES` edges the CLI uses, and commits on Enter rather
+than filtering per keystroke — one blast-radius analysis per character typed is
+not a search box.
 
 The design came from a Claude Design project and is implemented here in vanilla
 JS — the source `.dc.html` targets a React template runtime we do not ship.
@@ -224,7 +247,10 @@ rewrites container-side absolute paths — `/data/store` arrives as
 
 ## The graph model
 
-**Macro (lockfile)**
+**Macro (lockfile).** The ingest tier, unchanged. The ecosystem tier the macro
+*view* reads — `SATISFIES`, `RESOLVED_IN`, maintainer and repository identity,
+and the evidence atoms a finding is built from — is documented separately in
+[PACKAGE-GRAPH.md](PACKAGE-GRAPH.md).
 
 | Edge | From → To |
 |---|---|

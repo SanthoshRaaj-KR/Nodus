@@ -278,18 +278,16 @@
 
 /* Kept identical to the source design so the two stay visually in step. */
 const KIND = {
-  service:    { hue: 265, label: 'internal service' },
-  direct:     { hue: 200, label: 'direct dependency' },
-  transitive: { hue: 300, label: 'transitive dependency' },
-  deep:       { hue: 85,  label: 'deep transitive dependency' },
+  /* Micro view. The depth-column kinds -- service, direct, transitive, deep --
+     went with the sweep that produced them; nothing emits them now. */
   entry:      { hue: 265, label: 'application entry point' },
   route:      { hue: 200, label: 'http route' },
   handler:    { hue: 300, label: 'route handler' },
   fn:         { hue: 150, label: 'internal function' },
   import:     { hue: 340, label: 'external package import' },
-  /* Package blast-radius view. The hues carry the argument: the confirmed
-     chain is warm, the range-only column is amber (a lead, not a finding),
-     and identity relations are cool because they never amount to a verdict. */
+  /* Macro view. The hues carry the argument: the confirmed chain is warm, the
+     range-only column is amber (a lead, not a finding), and identity relations
+     are cool because they never amount to a verdict. */
   threat:     { hue: 25,  label: 'simulated incident' },
   advisory:   { hue: 40,  label: 'published advisory' },
   compromised:{ hue: 25,  label: 'compromised version' },

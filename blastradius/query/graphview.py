@@ -1,137 +1,28 @@
-"""Whole-graph views for the UI, in the layered shape the design expects.
+"""The code-graph view for the UI, in the layered shape the design expects.
 
-The Dual Graph visualiser draws two column-layered graphs:
-
-    macro   SERVICES -> DIRECT DEPS -> TRANSITIVE -> DEEP TRANSITIVE
     micro   ENTRY POINTS -> HTTP ROUTES -> HANDLERS -> FUNCTIONS -> IMPORTS
 
-Both are read out of HydraDB here and handed to the browser as plain nodes and
-edges. The blast-radius highlighting is then computed client-side by reverse
-BFS from whatever the user typed, so dragging the query around costs no round
-trips -- the graph is small enough to live in memory, and an incident responder
+Read out of HydraDB here and handed to the browser as plain nodes and edges.
+The blast-radius highlighting is then computed client-side by reverse BFS from
+whatever the user typed, so dragging the query around costs no round trips --
+the code graph is small enough to live in memory, and an incident responder
 typing a package name should not wait on the network for each keystroke.
 
+That trade is what makes this view work and is also why the macro view no
+longer lives here. A whole-graph sweep plus a client-side name match answers
+"is this name present somewhere", which over the package tier is the
+range-only heuristic the evidence model exists to replace: it cannot tell a
+version a range merely admits from one a lockfile actually resolved. The
+macro view is now scoped to a single version and answered server-side, in
+blastradius/pkg/graphview.py, against evidence stored on the edges.
+
 Every statement is a fixed-length MATCH. Variable-length reads would need a
-pinned source, and these are deliberately whole-graph sweeps.
+pinned source, and this is deliberately a whole-graph sweep.
 """
 
 from __future__ import annotations
 
 from ..hydra_client import HydraClient
-
-#: depth on PRESENT_IN -> column in the macro view. Anything deeper than 3 is
-#: still "deep transitive"; the design has four columns, not N.
-MAX_MACRO_LAYER = 3
-
-
-def _layer_for_depth(depth: int) -> int:
-    if depth <= 1:
-        return 1
-    if depth == 2:
-        return 2
-    return MAX_MACRO_LAYER
-
-
-def macro_graph(client: HydraClient) -> dict:
-    """Services and the package versions they resolve to, by depth."""
-    services = client.query(
-        "MATCH (s:Service) RETURN s.id AS id, s.name AS name, s.repo AS repo, "
-        "s.path AS path ORDER BY name"
-    ).rows
-
-    packages = client.query(
-        "MATCH (p:PackageVersion) RETURN p.id AS id, p.key AS key, p.name AS name, "
-        "p.version AS version, p.dev AS dev ORDER BY key"
-    ).rows
-
-    presence = client.query(
-        "MATCH (p:PackageVersion)-[e:PRESENT_IN]->(s:Service) "
-        "RETURN p.key AS package, s.name AS service, e.depth AS depth, "
-        "e.dev AS dev, e.direct AS direct"
-    ).rows
-
-    dep_edges = client.query(
-        "MATCH (a:PackageVersion)-[:DEPENDS_ON]->(b:PackageVersion) "
-        "RETURN a.key AS parent, b.key AS child"
-    ).rows
-
-    direct_edges = client.query(
-        "MATCH (s:Service)-[e:DEPENDS_ON]->(p:PackageVersion) "
-        "RETURN s.name AS service, p.key AS package, e.dev AS dev"
-    ).rows
-
-    # Shallowest appearance anywhere decides the column, so a package that is
-    # direct in one service does not get buried because it is deep in another.
-    shallowest: dict[str, int] = {}
-    dev_only: dict[str, bool] = {}
-    used_by: dict[str, set[str]] = {}
-    for row in presence:
-        key = row["package"]
-        depth = int(row["depth"] or 99)
-        shallowest[key] = min(shallowest.get(key, 99), depth)
-        dev_only[key] = dev_only.get(key, True) and bool(row["dev"])
-        used_by.setdefault(key, set()).add(row["service"])
-
-    nodes = [
-        {
-            "id": f"svc:{s['name']}",
-            "layer": 0,
-            "kind": "service",
-            "label": s["name"],
-            "sub": f"{s['repo']} · " + ("repo root" if s["path"] in (".", "") else s["path"]),
-            "file": s["path"],
-            "stack": [],
-        }
-        for s in services
-    ]
-
-    for pkg in packages:
-        key = pkg["key"]
-        depth = shallowest.get(key)
-        if depth is None:
-            continue  # in the graph but reachable from no service
-        layer = _layer_for_depth(depth)
-        consumers = sorted(used_by.get(key, ()))
-        kind = {1: "direct", 2: "transitive", MAX_MACRO_LAYER: "deep"}[layer]
-        # The node card is 214px wide, so the subtitle has to stay short or it
-        # ellipsises away the part that matters. Only say what varies.
-        bits = [pkg["version"], f"depth {depth}"]
-        if len(consumers) > 1:
-            bits.append(f"{len(consumers)} svcs")
-        if dev_only.get(key):
-            bits.append("dev")
-        nodes.append(
-            {
-                "id": key,
-                "layer": layer,
-                "kind": kind,
-                "label": pkg["name"],
-                "sub": " · ".join(bits),
-                "pkg": pkg["name"],
-                "version": pkg["version"],
-                "file": f"node_modules/{pkg['name']}",
-            }
-        )
-
-    present = {n["id"] for n in nodes}
-    edges = [
-        [f"svc:{e['service']}", e["package"]]
-        for e in direct_edges
-        if f"svc:{e['service']}" in present and e["package"] in present
-    ]
-    edges += [
-        [e["parent"], e["child"]]
-        for e in dep_edges
-        if e["parent"] in present and e["child"] in present
-    ]
-
-    return {
-        "mode": "macro",
-        "cols": ["SERVICES", "DIRECT DEPS", "TRANSITIVE", "DEEP TRANSITIVE"],
-        "nodes": nodes,
-        "edges": _dedupe(edges),
-    }
-
 
 def micro_graph(client: HydraClient) -> dict:
     """Entry points, routes, handlers, functions and external imports."""
@@ -218,8 +109,9 @@ def micro_graph(client: HydraClient) -> dict:
                 + (imp["names"] or "side-effect import"),
                 "file": imp["file"],
                 "service": imp["service"],
-                # Carries the resolved package so the same query that lights up
-                # the macro view lights up this one.
+                # Carries the resolved package so a `name@version` typed into
+                # this view matches the import that resolves to it, not just
+                # the specifier as written in the source.
                 "pkg": hit["name"] if hit else imp["specifier"],
                 "version": hit["version"] if hit else "",
             }
