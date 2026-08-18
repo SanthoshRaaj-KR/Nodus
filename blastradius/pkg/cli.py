@@ -16,6 +16,7 @@ from pathlib import Path
 from .. import schema
 from ..hydra_client import HydraClient, HydraError
 from ..ids import IdAllocator
+from .bench import run_benchmarks
 from .blast import BlastRadiusEngine, Confidence
 from .corpus import generate_corpus
 from .incident import create_incident
@@ -120,11 +121,11 @@ def cmd_simulate(args) -> int:
     print(f"install hook {'YES' if meta.get('has_install_script') else 'no'}")
 
     _section("DIRECT DEPENDENT PACKAGE VERSIONS", [
-        f"{r['key']}  (range {r['range']}, {r['dep_type']})"
+        f"{r['name']}@{r['version']}  (range {r['range']}, {r['dep_type']})"
         for r in result.direct_dependents
     ])
     _section("TRANSITIVE DEPENDENT PACKAGE VERSIONS", [
-        r["key"] for r in result.transitive_dependents
+        f"{r['name']}@{r['version']}" for r in result.transitive_dependents
     ], limit=20)
     _section("LOCKFILES RESOLVING THIS EXACT VERSION", [
         f"{r['package_name']}@{r['resolved_version']}  depth={r['depth']}"
@@ -228,6 +229,33 @@ def cmd_compare(args) -> int:
     return 0
 
 
+def cmd_bench(args) -> int:
+    name, version = _split_spec(args.spec)
+    client = _client(args)
+    _require_node(client)
+    ids = IdAllocator(args.ids)
+    try:
+        bench = run_benchmarks(
+            client, ids, name, version,
+            repeats=args.repeats, max_depth=args.max_depth,
+        )
+    except LookupError as exc:
+        raise SystemExit(str(exc))
+
+    print(RULE)
+    print(f"BENCHMARKS: {name}@{version}  ({args.repeats} runs each)")
+    print(RULE)
+    print()
+    print(f"graph: {bench.graph_nodes:,} nodes sampled across core labels")
+    print()
+    print(bench.table())
+    for note in bench.notes:
+        print()
+        print(note)
+    ids.close()
+    return 0
+
+
 def _section(title: str, rows: list[str], limit: int = 40) -> None:
     print(f"\n{title}")
     if not rows:
@@ -276,6 +304,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("spec")
     p.add_argument("--max-depth", type=int, default=5)
     p.set_defaults(func=cmd_compare)
+
+    p = sub.add_parser("bench", help="measure query latency and the experiments")
+    p.add_argument("spec")
+    p.add_argument("--repeats", type=int, default=7)
+    p.add_argument("--max-depth", type=int, default=5)
+    p.set_defaults(func=cmd_bench)
 
     args = parser.parse_args(argv)
     try:

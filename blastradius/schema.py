@@ -252,11 +252,9 @@ PKG_EDGE_TYPES = (
     COMPROMISES, COMPROMISED_BY,
 )
 
-#: Written at ingest so a "who reaches this" question is a forward walk from a
-#: pinned source. Plain MATCH cannot traverse backwards at all. The algo.*
-#: procedures do accept relDirection incoming, but that is benchmarked rather
-#: than assumed -- see PLAN.md experiment A. Until it is measured, the inverse
-#: is written and the queries use it.
+#: The inverse of each edge type, where one exists.
+#:
+#: Note this is the *catalogue*, not the write list -- see PKG_NEEDS_INVERSE.
 PKG_INVERSE_OF = {
     HAS_VERSION: VERSION_OF,
     REQUIRES: REQUIRED_BY,
@@ -274,6 +272,26 @@ PKG_INVERSE_OF = {
     AFFECTS: AFFECTED_BY,
     COMPROMISES: COMPROMISED_BY,
 }
+
+#: Edge types whose inverse is actually written at ingest.
+#:
+#: Measured against a live node (tests/verify_constraints.py) rather than
+#: assumed. Three separate facts came out of that run:
+#:
+#:   1. A *variable-length* backward pattern is rejected outright, so a
+#:      multi-hop "who reaches this" needs either a materialised inverse or a
+#:      path procedure. The sample is right about this.
+#:   2. A *single-hop* backward pattern is fine. Both
+#:      `MATCH (a)-[:E]->(b {id: $id})` and `MATCH (b {id: $id})<-[:E]-(a)`
+#:      return the expected row with no inverse edge present. The sample's
+#:      blanket "every edge is written twice" is therefore over-broad: it
+#:      generalises a variable-length restriction to every edge in the graph.
+#:   3. `algo.SSpaths` accepts `relDirection: 'incoming'` and returns paths.
+#:
+#: So only SATISFIED_BY -- the one relationship a query walks backwards for
+#: more than one hop -- needs its inverse materialised. Dropping the rest
+#: roughly halves the edge count and the write time, with no query lost.
+PKG_NEEDS_INVERSE = frozenset({SATISFIED_BY})
 
 # -- id blocks for the extension ------------------------------------------
 # Placed above the base node space (which ends below 1e9) and above the base

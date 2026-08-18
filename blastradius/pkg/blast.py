@@ -297,7 +297,7 @@ class BlastRadiusEngine:
         """Lockfile entries that resolved exactly this version. Ground truth."""
         rows = self._timed(
             result, "Q4 lockfile entries",
-            "MATCH (v:PackageVersion {id: $id})-[:RESOLVED_VIA]->(e:LockfileEntry) "
+            "MATCH (e:LockfileEntry)-[:RESOLVES_VERSION]->(v:PackageVersion {id: $id}) "
             "RETURN e.id AS id, e.package_name AS package_name, "
             "e.resolved_version AS resolved_version, e.dev AS dev, "
             "e.depth AS depth, e.integrity AS integrity ORDER BY id",
@@ -369,7 +369,7 @@ class BlastRadiusEngine:
         for row in maintainers:
             siblings = self._timed(
                 result, f"Q6b via {row['username']}",
-                "MATCH (m:Maintainer {id: $id})-[:MAINTAINS]->(p:Package) "
+                "MATCH (p:Package)-[:MAINTAINED_BY]->(m:Maintainer {id: $id}) "
                 "RETURN p.id AS id, p.name AS name ORDER BY name",
                 id=row["id"],
             )
@@ -400,7 +400,7 @@ class BlastRadiusEngine:
         for row in repos:
             siblings = self._timed(
                 result, "Q6d repo siblings",
-                "MATCH (r:Repository {id: $id})-[:SOURCE_OF]->(v:PackageVersion) "
+                "MATCH (v:PackageVersion)-[:SOURCED_FROM]->(r:Repository {id: $id}) "
                 "RETURN DISTINCT v.name AS name ORDER BY name",
                 id=row["id"],
             )
@@ -426,7 +426,7 @@ class BlastRadiusEngine:
         for row in publishers:
             siblings = self._timed(
                 result, "Q6f publisher siblings",
-                "MATCH (p:PublisherIdentity {id: $id})-[:PUBLISHED]->(v:PackageVersion) "
+                "MATCH (v:PackageVersion)-[:PUBLISHED_BY]->(p:PublisherIdentity {id: $id}) "
                 "RETURN DISTINCT v.name AS name, v.version AS version ORDER BY name",
                 id=row["id"],
             )
@@ -441,7 +441,7 @@ class BlastRadiusEngine:
     def typosquats(self, result: BlastRadius, package_id: int) -> list[dict]:
         rows = self._timed(
             result, "Q6g typosquats",
-            "MATCH (p:Package {id: $id})-[e:TYPOSQUAT_TARGET_OF]->(o:Package) "
+            "MATCH (o:Package)-[e:TYPOSQUAT_OF]->(p:Package {id: $id}) "
             "RETURN o.name AS name, e.distance AS distance, "
             "e.technique AS technique, e.popularity_ratio AS ratio "
             "ORDER BY distance, name",
@@ -454,7 +454,7 @@ class BlastRadiusEngine:
     def incidents_for(self, result: BlastRadius, version_id: int) -> list[dict]:
         rows = self._timed(
             result, "incidents",
-            "MATCH (v:PackageVersion {id: $id})-[:COMPROMISED_BY]->(i:Incident) "
+            "MATCH (i:Incident)-[:COMPROMISES]->(v:PackageVersion {id: $id}) "
             "RETURN i.incident_id AS incident_id, i.status AS status, "
             "i.summary AS summary, i.live_from AS live_from, "
             "i.live_until AS live_until",
@@ -465,7 +465,7 @@ class BlastRadiusEngine:
     def advisories_for(self, result: BlastRadius, version_id: int) -> list[dict]:
         rows = self._timed(
             result, "advisories",
-            "MATCH (v:PackageVersion {id: $id})-[e:AFFECTED_BY]->(a:Advisory) "
+            "MATCH (a:Advisory)-[e:AFFECTS]->(v:PackageVersion {id: $id}) "
             "RETURN a.advisory_id AS advisory_id, a.summary AS summary, "
             "a.cvss_vector AS cvss_vector, a.severity_score AS severity_score, "
             "e.fixed_version AS fixed_version",

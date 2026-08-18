@@ -241,12 +241,33 @@ class PackageGraphWriter:
         self._label_of[node_id] = label
         return node_id
 
+    def register(self, label: str, node_id: int) -> int:
+        """Record an existing node's label without staging a write.
+
+        An edge statement MATCHes both endpoints by label, so the writer has to
+        know the label of a node it did not create. Restaging the node to teach
+        it that would write a full property row built from defaults, and every
+        sentinel in that row would overwrite the real value already in the
+        graph -- which is how creating an incident silently blanked the
+        published date, licence and provenance of the very version it pointed
+        at.
+        """
+        self._label_of[node_id] = label
+        return node_id
+
     def edge(self, etype: str, src: int, dst: int, **props: Any) -> None:
-        """Stage an edge and, when one is defined, its inverse."""
+        """Stage an edge, and its inverse only where a query actually needs one.
+
+        Measured, not assumed: a single-hop backward pattern with the
+        destination pinned is accepted by the server, so only the one
+        relationship walked backwards for multiple hops needs materialising in
+        both directions. See schema.PKG_NEEDS_INVERSE.
+        """
         self._stage(etype, src, dst, props)
-        inverse = schema.PKG_INVERSE_OF.get(etype)
-        if inverse:
-            self._stage(inverse, dst, src, props, prop_source=etype)
+        if etype in schema.PKG_NEEDS_INVERSE:
+            inverse = schema.PKG_INVERSE_OF.get(etype)
+            if inverse:
+                self._stage(inverse, dst, src, props, prop_source=etype)
 
     def _stage(
         self,
@@ -301,17 +322,18 @@ class PackageGraphWriter:
         import time
 
         started = time.perf_counter()
-        jobs: list[tuple[str, str, list[dict]]] = []
 
+        node_jobs: list[tuple[str, str, list[dict]]] = []
         for label, rows in self._nodes.items():
-            jobs.append((label, self._node_statement(label), list(rows.values())))
+            node_jobs.append((label, self._node_statement(label), list(rows.values())))
 
+        edge_jobs: list[tuple[str, str, list[dict]]] = []
         for (etype, src_label, dst_label), rows in self._edges.items():
             fields = tuple(
                 k for k in next(iter(rows.values())).keys()
                 if k not in ("src", "dst", "rel")
             )
-            jobs.append((
+            edge_jobs.append((
                 f"{etype} ({src_label}->{dst_label})",
                 self._edge_statement(etype, src_label, dst_label, fields),
                 list(rows.values()),
@@ -322,22 +344,34 @@ class PackageGraphWriter:
             sent = self.client.batch(statement, rows, progress=False)
             return name, sent
 
-        results: list[tuple[str, int]] = []
-        if self.parallelism > 1 and len(jobs) > 1:
-            with ThreadPoolExecutor(max_workers=self.parallelism) as pool:
-                results = list(pool.map(run, jobs))
-        else:
-            results = [run(job) for job in jobs]
+        def run_phase(jobs: list[tuple[str, str, list[dict]]]) -> list[tuple[str, int]]:
+            if not jobs:
+                return []
+            if self.parallelism > 1 and len(jobs) > 1:
+                with ThreadPoolExecutor(max_workers=self.parallelism) as pool:
+                    return list(pool.map(run, jobs))
+            return [run(job) for job in jobs]
+
+        # Two phases, each internally parallel. An edge statement MATCHes both
+        # of its endpoints, so it fails outright if the node has not landed
+        # yet -- and with no transactions there is nothing to order the two
+        # otherwise. Running both phases in one pool is a race that hides
+        # whenever there happen to be more node jobs than worker threads,
+        # which is exactly how it survived a large ingest and then failed on a
+        # two-node one.
+        results = run_phase(node_jobs)
+        node_names = {name for name, _ in results}
+        results += run_phase(edge_jobs)
 
         for name, sent in results:
-            if name in self._nodes:
+            if name in node_names:
                 self.report.nodes[name] = self.report.nodes.get(name, 0) + sent
             else:
                 etype = name.split(" ", 1)[0]
                 self.report.edges[etype] = self.report.edges.get(etype, 0) + sent
             self._log(f"  {name:36} {sent:>8,}")
 
-        self.report.statements += len(jobs)
+        self.report.statements += len(node_jobs) + len(edge_jobs)
         self.report.elapsed_ms += (time.perf_counter() - started) * 1000
         self.ids.commit()
         self._nodes.clear()

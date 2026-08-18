@@ -98,11 +98,10 @@ def create_incident(
         )
 
     writer = PackageGraphWriter(client, ids, source="synthetic", verbose=False)
-    # Restage the target so the writer knows its label for the edge MATCH.
-    writer.node(
-        schema.PACKAGE_VERSION, incident.target_key,
-        name=package, version=version,
-    )
+    # Teach the writer the target's label without restaging it. Staging would
+    # write a full property row built from defaults and blank the published
+    # date, licence and provenance that ingest already put there.
+    writer.register(schema.PACKAGE_VERSION, target_id)
     node_id = writer.node(
         schema.INCIDENT, incident_id,
         incident_id=incident_id,

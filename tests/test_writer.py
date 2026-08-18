@@ -164,26 +164,59 @@ def test_list_values_are_joined_not_left_as_lists(writer):
 # -- inverse edges ---------------------------------------------------------
 
 
-def test_each_edge_is_written_in_both_directions(writer):
-    _build(writer)
-    writer.flush()
-    types = {
+def _edge_types(writer) -> set[str]:
+    return {
         re.search(r"MERGE \(s\)-\[r:(\w+)", s).group(1)
         for s in writer.client.statements()
         if "MERGE (s)-[r:" in s
     }
-    assert schema.HAS_VERSION in types
-    assert schema.VERSION_OF in types, "inverse is required, not optional"
 
 
-def test_inverse_carries_the_same_properties(writer):
+def test_inverse_written_only_where_a_query_needs_one(writer):
+    """Measured against a live node, not assumed.
+
+    A single-hop backward pattern with the destination pinned is accepted, so
+    only the relationship walked backwards for *multiple* hops needs
+    materialising both ways. Writing every edge twice would roughly double the
+    graph for no query.
+    """
     pkg = writer.node(schema.PACKAGE, "pkg:npm/lodash", name="lodash")
-    ver = writer.node(schema.PACKAGE_VERSION, "pkg:npm/a@1.0.0", name="a", version="1.0.0")
-    writer.edge(schema.REQUIRES, ver, pkg, range="^4.17.0", dep_type="prod")
+    v1 = writer.node(schema.PACKAGE_VERSION, "pkg:npm/lodash@4.17.21",
+                     name="lodash", version="4.17.21")
+    v2 = writer.node(schema.PACKAGE_VERSION, "pkg:npm/a@1.0.0", name="a", version="1.0.0")
+    writer.edge(schema.HAS_VERSION, pkg, v1)
+    writer.edge(schema.SATISFIED_BY, v2, v1, range="^4.17.0", dep_type="prod")
     writer.flush()
-    forward = next(r for s, r in writer.client.calls if f"r:{schema.REQUIRES} " in s)
-    inverse = next(r for s, r in writer.client.calls if f"r:{schema.REQUIRED_BY} " in s)
+
+    types = _edge_types(writer)
+    assert schema.HAS_VERSION in types
+    assert schema.VERSION_OF not in types, "single-hop only; no inverse needed"
+    assert schema.SATISFIED_BY in types
+    assert schema.SATISFIES in types, "walked backwards multi-hop, so required"
+
+
+def test_the_one_inverse_carries_the_same_properties(writer):
+    """A reader must see identical fields whichever direction it walks."""
+    v1 = writer.node(schema.PACKAGE_VERSION, "pkg:npm/lodash@4.17.21",
+                     name="lodash", version="4.17.21")
+    v2 = writer.node(schema.PACKAGE_VERSION, "pkg:npm/a@1.0.0", name="a", version="1.0.0")
+    writer.edge(schema.SATISFIED_BY, v2, v1, range="^4.17.0", dep_type="prod")
+    writer.flush()
+    forward = next(r for s, r in writer.client.calls if f"r:{schema.SATISFIED_BY} " in s)
+    inverse = next(r for s, r in writer.client.calls if f"r:{schema.SATISFIES} " in s)
     assert forward[0]["range"] == inverse[0]["range"] == "^4.17.0"
+
+
+def test_nodes_are_written_before_edges(writer):
+    """An edge MATCHes both endpoints, so it fails outright if the node has
+    not landed. With no transactions, phase ordering is the only thing that
+    guarantees it -- and a single parallel pool silently raced."""
+    _build(writer)
+    writer.flush()
+    statements = writer.client.statements()
+    last_node = max(i for i, s in enumerate(statements) if "MERGE (n {id: row.id})" in s)
+    first_edge = min(i for i, s in enumerate(statements) if "MERGE (s)-[r:" in s)
+    assert last_node < first_edge
 
 
 def test_edge_before_node_fails_loudly(writer):
@@ -236,3 +269,31 @@ def test_edges_bucketed_by_label_pair(writer):
     assert len(resolved) == 1
     assert f"(s:{schema.PACKAGE_VERSION} " in resolved[0]
     assert f"(d:{schema.SERVICE} " in resolved[0]
+
+
+def test_register_teaches_a_label_without_writing(writer):
+    """Creating an incident must not blank the metadata of its target.
+
+    An edge MATCHes both endpoints by label, so the writer needs the label of a
+    node it did not create. Restaging the node to supply it would write a full
+    property row built from defaults, and every sentinel would overwrite the
+    real value already in the graph -- which is exactly how the first incident
+    run wiped lodash@4.17.21's published date, licence and provenance.
+    """
+    v1 = writer.node(schema.PACKAGE_VERSION, "pkg:npm/lodash@4.17.21",
+                     name="lodash", version="4.17.21")
+    writer.flush()
+    writer.client.calls.clear()
+
+    existing = writer.register(schema.PACKAGE_VERSION, v1)
+    inc = writer.node(schema.INCIDENT, "SYNTHETIC-001", incident_id="SYNTHETIC-001")
+    writer.edge(schema.COMPROMISES, inc, existing)
+    writer.flush()
+
+    written_labels = [
+        s for s in writer.client.statements() if "MERGE (n {id: row.id})" in s
+    ]
+    assert all(f"SET n:{schema.PACKAGE_VERSION}" not in s for s in written_labels), (
+        "the registered node must not be rewritten"
+    )
+    assert any(f"r:{schema.COMPROMISES} " in s for s in writer.client.statements())
