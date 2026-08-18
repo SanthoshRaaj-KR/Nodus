@@ -168,10 +168,15 @@ downloaded, nothing is executed, and no package is modified. We are testing grap
 ## 7. Testing it
 
 ```powershell
-python -m pytest tests/ -q                              # 261 tests
+npm install --prefix scanner                            # once: the oracle re-ingests, which runs the scanner
+python -m pytest tests/ -q                              # 270 tests
 python tests/verify_constraints.py                      # HydraDB behaviour vs assumptions
 python tests/difftest_semver.py --semver-dir <dir with node_modules/semver>
 ```
+
+`test_oracle.py` re-ingests the corpus, and ingest runs the ts-morph scanner. Without `scanner/node_modules`
+the ingest aborts partway, so the brute-force oracle reports a project missing from the graph -- a real
+failure with a misleading cause. Install the scanner deps once and both live tests pass.
 
 The three that carry the most weight:
 
@@ -264,8 +269,15 @@ The negative half is what makes an INVESTIGATE verdict safe to act on. A finding
 invites the reader to assume everything else fired too.
 
 **Note on the other two tabs.** Macro and Micro read `PRESENT_IN`, `DEPENDS_ON`, `Function` and `Route`,
-which this half does not write. With only the package corpus ingested they render their services and no
-packages. Run the code-graph scan to fill them; nothing here changed them.
+which this half does not write; the Package tab reads `RESOLVED_IN`, `SATISFIED_BY` and `RESOLVES_VERSION`,
+which the code half does not write. The two ingests are independent and both are needed for a full Explorer:
+
+```powershell
+python -m blastradius.cli ingest        # services, files, functions, routes  -> Macro and Micro
+python -m blastradius.pkg.cli ingest    # lockfiles, ranges, identity          -> Package
+```
+
+Run only one and the other tabs come up empty of the nodes they draw. Nothing in this half changed theirs.
 
 ---
 
