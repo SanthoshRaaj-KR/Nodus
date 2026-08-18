@@ -1,0 +1,11 @@
+{
+  "name": "data-pipeline",
+  "version": "1.0.0",
+  "private": true,
+  "description": "data-pipeline service (generated corpus)",
+  "dependencies": {
+    "async": "^3.2.5",
+    "csv-parse": "^5.5.0",
+    "node-fetch": "^2.7.0"
+  }
+}

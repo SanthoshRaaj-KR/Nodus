@@ -10,3 +10,4 @@ corpus/*/node_modules/
 # planted demo fixture is tracked; anything else dropped in corpus/ stays out.
 corpus/*
 !corpus/payment-api/
+!corpus/fleet/
