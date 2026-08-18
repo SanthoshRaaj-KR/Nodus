@@ -390,14 +390,45 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def _free_port(preferred: int, span: int = 10) -> int:
+    """Return `preferred` if it is free, else the next free port after it.
+
+    A stale server from an earlier run holding the port is the normal case
+    here, and uvicorn's failure for it is a raw WinError 10048 that says
+    nothing about what to do. Rather than die mid-demo, move to the next port
+    and say so.
+    """
+    import socket
+
+    for offset in range(span):
+        port = preferred + offset
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        if offset:
+            print(YELLOW(f"  port {preferred} is already in use - using {port} instead"))
+            print(DIM(f"  (something is still listening on {preferred}; a previous run, most likely)"))
+        return port
+    print()
+    print(RED(f"  ports {preferred}-{preferred + span - 1} are all in use."))
+    print(DIM("  Close whatever is holding them, or pass --port."))
+    print()
+    raise SystemExit(2)
+
+
 def cmd_ui(args) -> int:
     """Run the Blast Radius Explorer frontend."""
     import uvicorn
 
+    port = _free_port(args.port)
     print()
-    print(f"  Blast Radius Explorer -> http://127.0.0.1:{args.port}")
+    print(f"  Blast Radius Explorer -> http://127.0.0.1:{port}")
+    print(DIM("  ctrl-c to stop"))
     print()
-    uvicorn.run("ui.server:app", host="127.0.0.1", port=args.port, log_level="warning")
+    uvicorn.run("ui.server:app", host="127.0.0.1", port=port, log_level="warning")
     return 0
 
 
