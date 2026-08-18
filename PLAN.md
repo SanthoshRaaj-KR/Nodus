@@ -70,8 +70,8 @@ inherit these as given and re-verify each once against a live node:
 | Brute-force oracle test | `tests/test_oracle.py` | Independent re-implementation of resolution — the right way to prove closure correctness. Extend it. |
 | Flattened-closure insight | `PRESENT_IN` in `schema.py` | A bounded walk silently under-reports deep npm trees. This reasoning is correct and becomes our core speed strategy. |
 
-**Delete (out of our scope — the other half of the team owns it):**
-`scanner/` (ts-morph), labels `File`/`Function`/`Route`/`ExternalImport`, edges `CALLS`/`CALLS_EXTERNAL`/`HANDLED_BY`/`CONTAINS`, and the `P1 REACHABLE`/`P2 IMPORTED` tiers that depend on them. Keep a documented seam so their graph can attach at `PackageVersion` later.
+**Leave untouched (owned by the other half of the team):**
+`scanner/` (ts-morph), labels `File`/`Function`/`Route`/`ExternalImport`, edges `CALLS`/`CALLS_EXTERNAL`/`HANDLED_BY`/`CONTAINS`, and the `P1 REACHABLE`/`P2 IMPORTED` tiers. We neither build on these nor modify them. The two graphs meet at `PackageVersion` and at `Service`, and our new edge names deliberately avoid `CONTAINS`/`RESOLVES_TO`/`DEPENDS_ON`/`PRESENT_IN` so no query can silently mix the two.
 
 **Build — absent from the sample, required by the problem statement:**
 
@@ -81,7 +81,7 @@ inherit these as given and re-verify each once against a live node:
 4. Maintainer / Repository / Organization / PublisherIdentity graph — entirely missing.
 5. Typosquat neighbourhood index — entirely missing.
 6. Time-window "resolved while it was live" — the `STILL_LIVE` sentinel exists but nothing uses a lockfile observation window.
-7. OSV CSV ingestion with **CVSS base score derived from the vector** and **alias de-duplication**.
+7. OSV CSV ingestion with **alias de-duplication**. (CVSS base score derived from the vector is a **TODO**, deferred — the sentinel stands until then so no invented number is shown.)
 8. `Incident` vs `Advisory` separation (`SUPPLY_CHAIN_COMPROMISED` vs `VULNERABLE`).
 9. Evidence-atom model with deterministic confidence.
 10. Interactive graph visualization.
@@ -280,8 +280,9 @@ duplicate. Incremental — new data does not rebuild the graph.
 
 **OSV CSV** (`osv_scan_results.csv`, 14 columns). Real quirks found in the supplied file, each handled explicitly:
 
-- `severity_score` is **empty** while `cvss_vector` is populated, so we **compute the CVSS v3.1 base score from the
-  vector ourselves** and store vector + derived score + band. Do not display an empty severity.
+- `severity_score` is **empty** while `cvss_vector` is populated. Deriving the v3.1 base score from the vector is a
+  **deferred TODO**; until it lands the score stays at its sentinel and the UI shows the vector, because displaying
+  a number nobody computed is worse than displaying none.
 - `aliases` is pipe-separated (`CVE-2026-32597 | GHSA-752w-5fwx-jx9f`), so we run union-find over the alias graph to
   collapse aliases into one `Advisory`. The supplied file has 13 rows for `pyjwt@2.9.0` that are substantially the
   same advisories under different ids; without this the exposure count is inflated several-fold.
