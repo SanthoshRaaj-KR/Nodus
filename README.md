@@ -113,6 +113,20 @@ Clicking any node opens metadata and the reachability path:
 
 ![Detail panel](docs/screens/detail-panel.png)
 
+**Focus mode** is what makes this usable on a real application. Drawing all 474
+functions produces a canvas metres tall that answers nobody's question, so by
+default the view shows only the blast radius plus **one hop of context** either
+side -- what else calls these, what else they reach -- so the boundary is
+visible and not just a bare chain. Each column reports `1 of 471` and offers
+`+470 more`, which opens that column alone.
+
+![Focus mode](docs/screens/focus.png)
+
+With no query there is no blast radius to compute, so each column falls back to
+its ten most-connected nodes: the hubs are what is worth seeing first. Toggling
+`focus` off draws everything, which is occasionally what you want and never
+what you want first.
+
 It is responsive down to phone width: the graph auto-fits (shrink only — a
 four-node graph blown up to fill a monitor implies more than is there), the
 detail drawer becomes a bottom sheet, chips and metrics scroll sideways, and
