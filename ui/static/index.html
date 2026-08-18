@@ -64,6 +64,23 @@
     background:oklch(0.24 0.03 265); border:1px solid oklch(0.34 0.03 265); color:oklch(0.8 0.01 265); flex:none;
   }
   .chip.on { background:oklch(0.32 0.1 25); border-color:oklch(0.6 0.16 25); color:oklch(0.9 0.09 25); }
+  .chip .n { display:block; font:400 9.5px 'JetBrains Mono',monospace; color:oklch(0.66 0.02 265); margin-top:2px; }
+  .chip.on .n { color:oklch(0.82 0.06 25); }
+  /* The mark control. Deliberately looks like a switch rather than a submit:
+     it toggles a fact in the graph, and the same button retracts it. */
+  .act {
+    cursor:pointer; flex:none; padding:9px 14px; border-radius:10px; white-space:nowrap;
+    font:600 11.5px 'Space Grotesk',sans-serif; letter-spacing:0.04em; text-transform:uppercase;
+    background:oklch(0.3 0.1 25); border:1px solid oklch(0.55 0.15 25); color:oklch(0.93 0.08 25);
+    transition:all 0.15s;
+  }
+  .act:hover { background:oklch(0.38 0.13 25); }
+  .act.on { background:oklch(0.28 0.05 150); border-color:oklch(0.5 0.1 150); color:oklch(0.9 0.07 150); }
+  .act.busy { opacity:0.5; pointer-events:none; }
+  .safety {
+    font:400 10px 'JetBrains Mono',monospace; color:oklch(0.62 0.02 265);
+    flex:none; max-width:190px; line-height:1.35;
+  }
 
   #stage { position:relative; overflow:hidden; min-width:0; }
   #scroll { position:absolute; inset:0; overflow:auto; padding:26px; }
@@ -117,7 +134,13 @@
   .metric .r { display:flex; align-items:flex-end; gap:8px; margin-top:6px; }
   .metric .v { font:700 34px 'Space Grotesk',sans-serif; letter-spacing:-0.03em; line-height:1; }
   .metric .o { font:400 11px 'JetBrains Mono',monospace; color:oklch(0.68 0.02 265); padding-bottom:4px; }
+  .metric.tight { min-width:126px; padding:11px 14px; }
+  .metric.tight .v { font-size:26px; }
+  .metric.tight .o { font-size:10px; }
   .legend { display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin-left:auto; flex:none; }
+  /* Six swatches instead of five, next to four metrics instead of three. */
+  .legend.compact { gap:11px; }
+  .legend.compact .t { font-size:10px; }
   .legend .item { display:flex; align-items:center; gap:7px; }
   .legend .sw { width:9px; height:9px; border-radius:50%; }
   .legend .t { font:400 11px 'JetBrains Mono',monospace; color:oklch(0.78 0.01 265); }
@@ -222,6 +245,11 @@
       <div class="clear" id="clear">clear</div>
     </div>
 
+    <div id="markWrap" style="display:none;align-items:center;gap:10px">
+      <div class="act" id="markBtn">mark compromised</div>
+      <div class="safety">synthetic · nothing downloaded or run</div>
+    </div>
+
     <div class="chips">
       <span class="chips-label">advisories</span>
       <div id="chips"></div>
@@ -258,7 +286,18 @@ const KIND = {
   route:      { hue: 200, label: 'http route' },
   handler:    { hue: 300, label: 'route handler' },
   fn:         { hue: 150, label: 'internal function' },
-  import:     { hue: 340, label: 'external package import' }
+  import:     { hue: 340, label: 'external package import' },
+  /* Package blast-radius view. The hues carry the argument: the confirmed
+     chain is warm, the range-only column is amber (a lead, not a finding),
+     and identity relations are cool because they never amount to a verdict. */
+  threat:     { hue: 25,  label: 'simulated incident' },
+  advisory:   { hue: 40,  label: 'published advisory' },
+  compromised:{ hue: 25,  label: 'compromised version' },
+  subject:    { hue: 200, label: 'package version under review' },
+  possible:   { hue: 75,  label: 'range admits it — unconfirmed' },
+  resolution: { hue: 200, label: 'lockfile resolution — confirmed' },
+  exposed:    { hue: 265, label: 'exposed project' },
+  related:    { hue: 320, label: 'related by identity only' }
 };
 const HOT = 'oklch(0.7 0.2 25)';
 const col = (h, l, c) => `oklch(${l} ${c} ${h})`;
@@ -270,8 +309,18 @@ const state = {
   mode: 'macro',
   query: '',
   selected: null,
+  /* `macro` holds the package blast radius. It is the only graph here the
+     browser does not filter itself: the server scopes it to one version and
+     marks the exposed nodes, so it is replaced on every new target rather
+     than loaded once and searched. `micro` is still a whole-graph sweep. */
   graphs: { macro: null, micro: null },
   advisories: [],
+  /* Macro view only. The graph is scoped to one version server-side, so the
+     target is state rather than a filter over an already-loaded graph. */
+  pkgSpec: '',
+  pkgTargets: [],
+  pkgError: '',
+  serviceCount: 0,
   zoom: 1,
   autoFit: true,  // stays true until the user touches the zoom control
   focus: true,    // draw the blast radius and its boundary, not the whole graph
@@ -373,6 +422,20 @@ function selectVisible(g, hot) {
 /* blast radius — reverse BFS from whatever matches the query          */
 /* ------------------------------------------------------------------ */
 function hotSet(g, query) {
+  // A server-marked graph already carries the answer. Exposure there is a
+  // fact stored on an edge -- which project resolved which exact version --
+  // so re-deriving it in the browser by matching package names would put the
+  // range-only guess back in, on top of the query that exists to replace it.
+  if (g.serverHot) {
+    const marked = g.nodes.filter((n) => n.hot);
+    // Nothing marked yet: draw the graph plainly rather than dimming all of
+    // it, because an all-dim graph reads as "no data" instead of "no threat".
+    if (!marked.length) return null;
+    return {
+      hot: new Set(marked.map((n) => n.id)),
+      seeds: new Set(g.nodes.filter((n) => n.kind === 'compromised').map((n) => n.id))
+    };
+  }
   const q = (query || '').trim().toLowerCase();
   if (!q) return null;
   const at = q.lastIndexOf('@');
@@ -426,7 +489,22 @@ function setZoom(z, manual) {
 function render() {
   const g = state.graphs[state.mode];
   const canvas = $('canvas');
-  if (!g) { canvas.innerHTML = ''; return; }
+  if (state.mode === 'macro') {
+    const marked = !!(g && g.compromised);
+    $('markBtn').textContent = marked ? 'retract incident' : 'mark compromised';
+    $('markBtn').classList.toggle('on', marked);
+  }
+  if (!g) {
+    if (state.mode === 'macro') {
+      notice(state.pkgError
+        ? `<b>${esc(state.pkgError)}</b>`
+        : 'Pick a target below, or type <code>name@version</code> and press Enter.');
+      paintPkgFooter({ stats: {} });
+    } else {
+      canvas.innerHTML = '';
+    }
+    return;
+  }
   if (!g.nodes.length) {
     $('sizer').style.width = 'auto'; $('sizer').style.height = 'auto';
     canvas.style.transform = 'none';
@@ -517,7 +595,9 @@ function render() {
     const border = sel ? 'oklch(0.9 0.02 265)' : isHot ? 'oklch(0.62 0.17 25)' : col(k.hue, 0.42, 0.07);
     const shadow = isHot ? '0 8px 28px oklch(0.55 0.19 25 / 0.35)'
       : sel ? '0 8px 28px oklch(0.1 0 0 / 0.5)' : '0 4px 16px oklch(0.12 0.02 265 / 0.45)';
-    const flag = isSeed ? 'CVE' : isHot ? 'ON PATH' : null;
+    // The package view names its own badges: 'CVE' would be wrong on a node
+    // flagged by a simulated supply-chain incident with no CVE attached.
+    const flag = n.flag || (isSeed ? 'CVE' : isHot ? 'ON PATH' : null);
 
     html += `<div class="node" data-id="${esc(n.id)}"
       style="left:${p.x}px;top:${p.y}px;width:${NW}px;min-height:${NH}px;background:${bg};
@@ -583,6 +663,10 @@ function paintPanel(g, nodeById, hot, seedIds) {
 
   const k = KIND[sn.kind];
   const isHot = hot && hot.has(sn.id);
+  // Read off the payload, not off state.mode: the panel describes the graph it
+  // was handed, and the two disagree for one frame while a tab switch is in
+  // flight and the new graph has not arrived yet.
+  const pkgView = g.mode === 'package';
   const parents = g.edges.filter(([, b]) => b === sn.id).map(([a]) => nodeById[a] && nodeById[a].label).filter(Boolean);
   const children = g.edges.filter(([a]) => a === sn.id).map(([, b]) => nodeById[b] && nodeById[b].label).filter(Boolean);
 
@@ -608,16 +692,25 @@ function paintPanel(g, nodeById, hot, seedIds) {
   }
 
   const isSeed = seedIds.has(sn.id);
-  const status = isHot
+  // In the package view the verdict is the server's, not the renderer's: it is
+  // a function of which evidence atoms fired, and deciding that twice -- once
+  // where the evidence is and once here -- is how the two drift apart.
+  const status = sn.verdict || (isHot
     ? (isSeed ? 'Vulnerable package — CVE reachable from production traffic'
               : 'On the blast radius: reachable path to the vulnerable package')
-    : 'No reachable path to the queried advisory';
+    : 'No reachable path to the queried advisory');
+  const alarmed = sn.verdict ? !!sn.alarm : isHot;
   const ring = isHot ? 'oklch(0.7 0.2 25 / 0.18)' : col(k.hue, 0.78, 0.15) + ' / 0.15';
 
   const meta = [
     ['id', sn.id],
     ['type', sn.kind],
-    sn.version ? ['version', sn.version] : ['scope', state.mode === 'macro' ? 'internal' : 'application'],
+    // The macro view's nodes carry a confidence from the evidence model;
+    // 'scope: internal' described the old depth columns and means nothing
+    // about a threat, a project, or an identity relation.
+    sn.version ? ['version', sn.version]
+      : pkgView ? ['confidence', sn.conf || '—']
+      : ['scope', 'application'],
     ['location', sn.file || (sn.pkg ? 'node_modules/' + sn.pkg : '—')],
     ['dependents', parents.length ? parents.join(', ') : 'none (root)'],
     ['depends on', children.length ? children.join(', ') : 'leaf']
@@ -634,9 +727,10 @@ function paintPanel(g, nodeById, hot, seedIds) {
     </div>
     <div class="body">
       <div style="padding:11px 13px;border-radius:11px;font:500 12px 'JetBrains Mono',monospace;line-height:1.5;
-                  background:${isHot ? 'oklch(0.3 0.09 25)' : 'oklch(0.28 0.06 150)'};
-                  border:1px solid ${isHot ? 'oklch(0.6 0.16 25)' : 'oklch(0.55 0.13 150)'};
-                  color:${isHot ? 'oklch(0.93 0.07 25)' : 'oklch(0.93 0.06 150)'}">${esc(status)}</div>
+                  background:${alarmed ? 'oklch(0.3 0.09 25)' : 'oklch(0.28 0.06 150)'};
+                  border:1px solid ${alarmed ? 'oklch(0.6 0.16 25)' : 'oklch(0.55 0.13 150)'};
+                  color:${alarmed ? 'oklch(0.93 0.07 25)' : 'oklch(0.93 0.06 150)'}">${esc(status)}</div>
+      ${evidenceBlock(sn)}
 
       <div style="display:flex;flex-direction:column;gap:9px">
         <div class="sec-title">METADATA</div>
@@ -644,7 +738,7 @@ function paintPanel(g, nodeById, hot, seedIds) {
       </div>
 
       <div style="display:flex;flex-direction:column;gap:9px">
-        <div class="sec-title">${isHot ? 'REACHABILITY PATH' : (state.mode === 'macro' ? 'DEPENDENCY DETAIL' : 'CALL STACK')}</div>
+        <div class="sec-title">${isHot ? 'REACHABILITY PATH' : (pkgView ? 'DEPENDENCY DETAIL' : 'CALL STACK')}</div>
         ${chain.length
           ? chain.map((s, i) => `${i ? '<div class="chain-arrow">&darr;</div>' : ''}
             <div class="stack-row" style="border-left:2px solid ${s.color}">
@@ -657,20 +751,46 @@ function paintPanel(g, nodeById, hot, seedIds) {
   $('closePanel').onclick = () => { state.selected = null; render(); };
 }
 
+/* Evidence, and what was looked for and not found.
+ *
+ * The negative half is the part that stops this being a scoreboard. A finding
+ * that only says what fired invites the reader to assume everything else fired
+ * too; naming the checks that came back empty is what makes an INVESTIGATE
+ * verdict safe to act on. */
+function evidenceBlock(sn) {
+  if (!sn.why && !sn.neg && !sn.detail) return '';
+  const pills = (sn.why || []).map((a) =>
+    `<span style="display:inline-block;padding:3px 8px;border-radius:6px;margin:0 5px 5px 0;
+       font:500 10px 'JetBrains Mono',monospace;background:oklch(0.3 0.05 265);
+       border:1px solid oklch(0.42 0.05 265);color:oklch(0.88 0.03 265)">${esc(a)}</span>`).join('');
+  const negs = (sn.neg || []).map((t) =>
+    `<div style="font:400 11px 'JetBrains Mono',monospace;color:oklch(0.7 0.02 265);
+       padding-left:12px;border-left:2px solid oklch(0.42 0.03 265);margin-bottom:5px">${esc(t)}</div>`).join('');
+  return `
+    ${sn.detail ? `<div style="font:400 11.5px 'JetBrains Mono',monospace;color:oklch(0.74 0.02 265);line-height:1.5">${esc(sn.detail)}</div>` : ''}
+    ${pills ? `<div style="display:flex;flex-direction:column;gap:7px">
+      <div class="sec-title">EVIDENCE</div><div>${pills}</div></div>` : ''}
+    ${negs ? `<div style="display:flex;flex-direction:column;gap:7px">
+      <div class="sec-title">LOOKED FOR, NOT FOUND</div>${negs}</div>` : ''}`;
+}
+
 /* ------------------------------------------------------------------ */
 /* footer metrics + legend                                             */
 /* ------------------------------------------------------------------ */
 function paintFooter(g, hot, hotEdges) {
+  // The macro tab is the package blast radius; 'package' is the engine's
+  // own name for the payload it builds, kept so blastradius/pkg stays the
+  // one place that decides what that shape is called.
+  if (g && g.mode === 'package') return paintPkgFooter(g);
+  $('legend').classList.remove('compact');
   const countHot = (kinds) => hot ? g.nodes.filter((n) => hot.has(n.id) && kinds.includes(n.kind)).length : 0;
   const total = (kinds) => g.nodes.filter((n) => kinds.includes(n.kind)).length;
 
-  const defs = state.mode === 'macro'
-    ? [['Exposed services', ['service'], 25],
-       ['Affected packages', ['direct', 'transitive', 'deep'], 300],
-       ['Traced paths', null, 200]]
-    : [['Affected entry routes', ['route'], 25],
-       ['Reached functions', ['fn', 'handler'], 150],
-       ['Vulnerable imports', ['import'], 340]];
+  // Micro only. The macro view returned above, and it counts what the graph
+  // knows rather than what is lit up -- see paintPkgFooter.
+  const defs = [['Affected entry routes', ['route'], 25],
+                ['Reached functions', ['fn', 'handler'], 150],
+                ['Vulnerable imports', ['import'], 340]];
 
   $('metrics').innerHTML = defs.map(([label, kinds, hue]) => {
     const v = kinds ? countHot(kinds) : hotEdges.length;
@@ -683,9 +803,8 @@ function paintFooter(g, hot, hotEdges) {
       </div></div>`;
   }).join('');
 
-  const legendDefs = state.mode === 'macro'
-    ? [['service', 'service'], ['direct', 'direct dep'], ['transitive', 'transitive'], ['deep', 'deep transitive']]
-    : [['entry', 'entry point'], ['route', 'route'], ['fn', 'function'], ['import', 'import']];
+  const legendDefs = [['entry', 'entry point'], ['route', 'route'],
+                      ['fn', 'function'], ['import', 'import']];
 
   $('legend').innerHTML = legendDefs.map(([k, label]) =>
     `<div class="item"><div class="sw" style="background:${col(KIND[k].hue, 0.78, 0.15)}"></div><span class="t">${esc(label)}</span></div>`
@@ -693,10 +812,41 @@ function paintFooter(g, hot, hotEdges) {
   `<div class="item"><div class="sw" style="background:${HOT};box-shadow:0 0 0 3px oklch(0.7 0.2 25 / 0.2)"></div><span class="t">compromised path</span></div>`;
 }
 
+/* The package view counts what the graph knows, not what is lit up.
+ *
+ * Counting highlighted nodes would report 0 for the range-only column, since
+ * nothing there is exposed -- and 0 is exactly the wrong number: the whole
+ * claim is that a range-only tool reports *many* of them. */
+function paintPkgFooter(g) {
+  const st = g.stats || {};
+  const defs = [
+    ['Range admits it', st.range_admits || 0, 'range-only leads', 75],
+    ['Lockfile resolves it', st.lockfile_entries || 0, 'confirmed', 200],
+    ['Exposed projects', st.exposed_projects || 0, 'of ' + (state.serviceCount || '?'), 265],
+    ['Answered in', Math.round(st.query_ms || 0), 'ms', 150]
+  ];
+  $('metrics').innerHTML = defs.map(([label, v, of, hue]) =>
+    `<div class="metric tight" style="border:1px solid ${col(hue, 0.42, 0.08)}">
+      <div class="l">${esc(label)}</div>
+      <div class="r">
+        <div class="v" style="color:${v > 0 ? col(hue, 0.8, 0.16) : 'oklch(0.6 0.01 265)'}">${v}</div>
+        <div class="o">${esc(of)}</div>
+      </div></div>`).join('');
+
+  const legendDefs = [['threat', 'incident'], ['compromised', 'compromised'],
+    ['possible', 'range admits'], ['resolution', 'lockfile resolves'],
+    ['exposed', 'exposed'], ['related', 'identity only']];
+  $('legend').classList.add('compact');
+  $('legend').innerHTML = legendDefs.map(([k, label]) =>
+    `<div class="item"><div class="sw" style="background:${col(KIND[k].hue, 0.78, 0.15)}"></div><span class="t">${esc(label)}</span></div>`
+  ).join('');
+}
+
 /* ------------------------------------------------------------------ */
 /* data + wiring                                                       */
 /* ------------------------------------------------------------------ */
 async function loadGraph(mode) {
+  if (mode === 'macro') return loadPackageGraph();
   if (state.graphs[mode]) return;
   const r = await fetch('/api/graph?mode=' + mode);
   if (!r.ok) {
@@ -707,6 +857,72 @@ async function loadGraph(mode) {
     return;
   }
   state.graphs[mode] = await r.json();
+}
+
+function notice(html) {
+  $('sizer').style.width = 'auto'; $('sizer').style.height = 'auto';
+  $('canvas').style.transform = 'none';
+  $('canvas').innerHTML = `<div class="notice">${html}</div>`;
+}
+
+async function loadPackageGraph(force) {
+  if (!state.pkgSpec) { state.graphs.macro = null; return; }
+  if (state.graphs.macro && state.graphs.macro.target === state.pkgSpec && !force) return;
+  const r = await fetch('/api/pkg/graph?spec=' + encodeURIComponent(state.pkgSpec));
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({ detail: r.statusText }));
+    state.graphs.macro = null;
+    state.pkgError = e.detail || r.statusText;
+    return;
+  }
+  state.pkgError = '';
+  const g = await r.json();
+  // A version the corpus has never seen is not an error and not an empty
+  // graph -- it is a different answer, and saying so beats drawing nothing.
+  if (!g.exists) state.pkgError = state.pkgSpec + ' is not in the graph. Ingest it, or pick a suggestion below.';
+  state.graphs.macro = g.exists ? g : null;
+}
+
+async function loadPkgTargets() {
+  const r = await fetch('/api/pkg/targets?limit=6');
+  if (!r.ok) return;
+  state.pkgTargets = await r.json();
+  if (!state.pkgSpec && state.pkgTargets.length) state.pkgSpec = state.pkgTargets[0].spec;
+}
+
+/* Mark, or retract. The same button does both, because a demo that can only
+   arm the alarm cannot show that the alarm is version-specific. */
+async function toggleMark() {
+  const g = state.graphs.macro;
+  if (!state.pkgSpec) return;
+  const btn = $('markBtn');
+  btn.classList.add('busy');
+  btn.textContent = g && g.compromised ? 'retracting…' : 'marking…';
+  const r = await fetch('/api/pkg/incident?spec=' + encodeURIComponent(state.pkgSpec), {
+    method: g && g.compromised ? 'DELETE' : 'POST'
+  });
+  btn.classList.remove('busy');
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({ detail: r.statusText }));
+    state.pkgError = e.detail || r.statusText;
+  } else {
+    const t = state.pkgTargets.find((x) => x.spec === state.pkgSpec);
+    if (t) t.marked = !(g && g.compromised);
+  }
+  await loadPackageGraph(true);
+  state.selected = null;
+  render();
+  paintChips();
+}
+
+async function setPkgTarget(spec) {
+  state.pkgSpec = spec;
+  state.selected = null;
+  state.autoFit = true;
+  $('q').value = spec;
+  await loadPackageGraph();
+  render();
+  paintChips();
 }
 
 async function loadAdvisories() {
@@ -728,6 +944,22 @@ function pickOpeningQuery() {
 }
 
 function paintChips() {
+  document.querySelector('.chips-label').textContent =
+    state.mode === 'macro' ? 'targets' : 'advisories';
+
+  if (state.mode === 'macro') {
+    // Each chip states the gap it will demonstrate before it is clicked: how
+    // many versions a range admits against how many projects installed it.
+    $('chips').innerHTML = state.pkgTargets.map((t, i) =>
+      `<div class="chip${t.marked ? ' on' : ''}" data-i="${i}" title="${esc(t.spec)}">${esc(t.spec)}
+        <span class="n">${t.range_admits} admit · ${t.projects} installed${t.marked ? ' · MARKED' : ''}</span></div>`
+    ).join('');
+    $('chips').querySelectorAll('.chip').forEach((el) => {
+      el.onclick = () => setPkgTarget(state.pkgTargets[+el.dataset.i].spec);
+    });
+    return;
+  }
+
   $('chips').innerHTML = state.advisories.map((a, i) =>
     `<div class="chip" data-i="${i}" title="${esc(a.advisory_id)} · ${esc(a.severity)}">${esc(a.query)}</div>`
   ).join('');
@@ -754,14 +986,33 @@ async function setMode(mode) {
   state.mode = mode;
   state.selected = null;
   state.expanded.clear();
-  state.autoFit = true;   // the two views are different widths
+  state.autoFit = true;   // the views are different widths
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.dataset.mode === mode));
+
+  const pkg = mode === 'macro';
+  // In the micro view the box filters an already-loaded graph on every
+  // keystroke. Here it names the target of a server-side query, so it commits
+  // on Enter instead -- filtering per keystroke would fire one blast-radius
+  // analysis per character typed.
+  $('markWrap').style.display = pkg ? 'flex' : 'none';
+  $('clear').style.display = pkg ? 'none' : 'block';
+  $('q').placeholder = pkg
+    ? 'target a version, e.g. lodash@4.17.21 — press Enter'
+    : 'trace a vulnerable package, e.g. vulnerable-pkg@1.0.5';
+  $('q').value = pkg ? state.pkgSpec : state.query;
+
+  if (pkg && !state.pkgTargets.length) await loadPkgTargets();
+  if (pkg && !state.pkgSpec && state.pkgTargets.length) state.pkgSpec = state.pkgTargets[0].spec;
+  if (pkg) $('q').value = state.pkgSpec;
+
   await loadGraph(mode);
+  paintChips();
   render();
 }
 
 document.querySelectorAll('.tab').forEach((t) => { t.onclick = () => setMode(t.dataset.mode); });
 $('q').oninput = (e) => {
+  if (state.mode === 'macro') return;   // committed on Enter, see setMode
   state.query = e.target.value;
   // A new query means a new blast radius; columns opened for the old one are
   // not what the user is looking at any more.
@@ -770,6 +1021,10 @@ $('q').oninput = (e) => {
   syncChips();
   render();
 };
+$('q').onkeydown = (e) => {
+  if (e.key === 'Enter' && state.mode === 'macro') setPkgTarget($('q').value.trim());
+};
+$('markBtn').onclick = toggleMark;
 $('clear').onclick = () => { state.query = ''; $('q').value = ''; syncChips(); render(); };
 $('focus').onclick = () => {
   state.focus = !state.focus;
@@ -795,13 +1050,25 @@ document.addEventListener('keydown', (e) => {
 });
 
 (async function boot() {
-  await Promise.all([loadGraph('macro'), loadAdvisories()]);
-  if (!state.query) {
-    state.query = pickOpeningQuery();
-    $('q').value = state.query;
-    syncChips();
-  }
-  render();
+  // The exposed-projects metric reads "n of N"; N is the number of projects in
+  // the graph, and without it the denominator would be a guess.
+  fetch('/api/health').then((r) => r.ok && r.json()).then((h) => {
+    if (h && h.counts) state.serviceCount = h.counts.Service || 0;
+  }).catch(() => {});
+
+  // Advisories first: they still drive the micro search box, and the opening
+  // query is picked from them even though the macro tab does not use it.
+  await loadAdvisories();
+  if (!state.query) state.query = pickOpeningQuery();
+
+  // Then hand the opening tab to setMode rather than loading the graph here.
+  // The macro view is scoped to one version, so it cannot be fetched until a
+  // target has been chosen -- asking for both at once, as this did while macro
+  // was a whole-graph sweep, raced the target list and opened on the empty
+  // state. setMode already sequences that, and wires the header controls the
+  // tab needs, so it is the one path in and boot stops being a second one.
+  await setMode('macro');
+
   // Warm the other view so switching tabs is instant on stage.
   loadGraph('micro');
 })();
