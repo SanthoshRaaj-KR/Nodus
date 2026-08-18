@@ -125,6 +125,63 @@
   .notice { margin:40px auto; max-width:560px; padding:22px 24px; border-radius:14px; background:oklch(0.22 0.03 265); border:1px solid oklch(0.36 0.04 265); font:400 13px 'JetBrains Mono',monospace; line-height:1.7; color:oklch(0.86 0.01 265); }
   .notice b { color:oklch(0.95 0.01 265); font-weight:600; }
   .notice code { color:oklch(0.82 0.14 200); }
+
+  #zoom {
+    position:absolute; right:18px; bottom:18px; z-index:15; display:flex; align-items:center; gap:2px;
+    padding:4px; border-radius:11px; background:oklch(0.21 0.025 265 / 0.92);
+    border:1px solid oklch(0.34 0.04 265); backdrop-filter:blur(10px);
+    box-shadow:0 8px 24px oklch(0.12 0.02 265 / 0.55);
+  }
+  #zoom button { cursor:pointer; border:0; background:transparent; color:oklch(0.85 0.01 265);
+    font:600 14px 'JetBrains Mono',monospace; width:30px; height:30px; border-radius:8px; }
+  #zoom button:hover { background:oklch(0.3 0.03 265); }
+  #zoom .fit { width:auto; padding:0 10px; font:500 11px 'JetBrains Mono',monospace; }
+  #zoom .pct { font:500 11px 'JetBrains Mono',monospace; color:oklch(0.68 0.02 265); min-width:38px; text-align:center; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }
+  @keyframes sheetIn { from { opacity:0; transform:translateY(24px); } to { opacity:1; transform:none; } }
+
+  /* Laptop: the legend goes first -- the node colours already repeat in the
+     column headers, so it is duplication before it is data. */
+  @media (max-width: 1180px) {
+    header { gap:16px; padding:14px 18px; }
+    .legend { display:none; }
+    footer { padding:12px 18px; }
+  }
+
+  /* Tablet: a 392px drawer on a 760px screen leaves no graph, so the detail
+     panel becomes a bottom sheet instead of eating the canvas. */
+  @media (max-width: 900px) {
+    .brand-sub { display:none; }
+    #scroll { padding:16px; }
+    .metric { min-width:132px; padding:10px 13px; }
+    .metric .v { font-size:26px; }
+    #panel {
+      top:auto; left:0; right:0; bottom:0; width:auto; max-height:62%;
+      border-left:0; border-top:1px solid oklch(0.33 0.04 265);
+      border-radius:16px 16px 0 0; box-shadow:0 -24px 60px oklch(0.12 0.02 265 / 0.7);
+      animation:sheetIn 0.24s ease-out;
+    }
+    #panel .head { padding:16px 18px 12px; }
+    #panel .body { padding:14px 18px 22px; }
+    #zoom { right:12px; bottom:12px; }
+  }
+
+  /* Phone: tabs and search each take a full row; chips scroll sideways. */
+  @media (max-width: 620px) {
+    header { gap:12px; padding:12px 14px; }
+    .brand { font-size:15px; }
+    .tabs { width:100%; }
+    .tab { flex:1; text-align:center; padding:9px 8px; font-size:12px; }
+    .search { flex:1 1 100%; max-width:none; height:40px; }
+    .chips { width:100%; }
+    .chips-label { display:none; }
+    footer { padding:10px 14px; gap:12px; }
+    .metric { min-width:118px; padding:9px 11px; }
+    .metric .v { font-size:22px; }
+    .metric .l { font-size:9px; letter-spacing:0.08em; }
+    #zoom .fit { display:none; }
+  }
 </style>
 </head>
 <body>
@@ -188,13 +245,16 @@ const HOT = 'oklch(0.7 0.2 25)';
 const col = (h, l, c) => `oklch(${l} ${c} ${h})`;
 
 const NW = 214, NH = 58, COLW = 300, ROWG = 22, TOP = 68;
+const MIN_ZOOM = 0.3, MAX_ZOOM = 1.6;
 
 const state = {
   mode: 'macro',
   query: '',
   selected: null,
   graphs: { macro: null, micro: null },
-  advisories: []
+  advisories: [],
+  zoom: 1,
+  autoFit: true   // stays true until the user touches the zoom control
 };
 
 const $ = (id) => document.getElementById(id);
@@ -220,7 +280,8 @@ function layout(g) {
     // view with an empty column still lines up with its header.
     list.forEach((n, i) => { pos[n.id] = { x: l * COLW, y: start + i * (NH + ROWG) }; });
   });
-  return { pos, H, W: (Math.max(...layers) + 1) * COLW + NW - COLW + NW, layers, byLayer };
+  const W = Math.max(...layers) * COLW + NW;
+  return { pos, H, W, layers, byLayer };
 }
 
 /* ------------------------------------------------------------------ */
@@ -252,6 +313,28 @@ function hotSet(g, query) {
   return { hot, seeds: new Set(matched.map((n) => n.id)) };
 }
 
+function applyZoom(W, H) {
+  const z = state.zoom;
+  $('canvas').style.transform = `scale(${z})`;
+  $('sizer').style.width = (W * z) + 'px';
+  $('sizer').style.height = (H * z) + 'px';
+  $('zoomPct').textContent = Math.round(z * 100) + '%';
+}
+
+function fitZoom(W) {
+  const avail = $('scroll').clientWidth - 32;
+  if (avail <= 0 || !W) return 1;
+  // Only ever shrink to fit. Blowing a four-node graph up to fill a wide
+  // monitor makes it look like there is more here than there is.
+  return Math.max(MIN_ZOOM, Math.min(1, avail / W));
+}
+
+function setZoom(z, manual) {
+  state.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
+  if (manual) state.autoFit = false;
+  render();
+}
+
 /* ------------------------------------------------------------------ */
 /* render                                                              */
 /* ------------------------------------------------------------------ */
@@ -260,7 +343,8 @@ function render() {
   const canvas = $('canvas');
   if (!g) { canvas.innerHTML = ''; return; }
   if (!g.nodes.length) {
-    canvas.style.width = 'auto'; canvas.style.height = 'auto';
+    $('sizer').style.width = 'auto'; $('sizer').style.height = 'auto';
+    canvas.style.transform = 'none';
     canvas.innerHTML = '<div class="notice">The graph is empty for this view.<br><br>' +
       'Run <code>python -m blastradius.cli ingest</code> to scan the corpus, then reload.</div>';
     paintFooter(g, null, []);
@@ -268,6 +352,8 @@ function render() {
   }
 
   const { pos, H, W, layers, byLayer } = layout(g);
+  if (state.autoFit) state.zoom = fitZoom(W);
+
   const found = hotSet(g, state.query);
   const hot = found ? found.hot : null;
   const seedIds = found ? found.seeds : new Set();
@@ -278,30 +364,48 @@ function render() {
 
   let html = '';
 
-  layers.forEach((l) => {
+  layers.forEach((l, i) => {
     const kind = byLayer[l][0].kind;
     const accent = col(KIND[kind].hue, 0.78, 0.14);
     html += `<div class="colhead" style="left:${l * COLW}px;top:0;width:${NW}px;border-bottom:1px solid ${col(KIND[kind].hue, 0.4, 0.06)}">
       <div class="t" style="color:${accent}">${esc(g.cols[l] || '')}</div>
       <div class="c">${byLayer[l].length} nodes</div></div>`;
+    // The graph reads left to right; a column layout with no arrows does not
+    // say so on its own.
+    if (i < layers.length - 1) {
+      html += `<div class="flowmark" style="left:${l * COLW + NW + 20}px;top:1px">&rsaquo;</div>`;
+    }
   });
 
-  let wires = '';
+  // An arrowhead per stroke colour: a marker cannot portably inherit the
+  // path's stroke, so they are emitted per colour and referenced by index.
+  const markerFor = new Map();
   const hotEdges = [];
+  let wires = '';
+
   g.edges.forEach(([a, b]) => {
     const s = pos[a], t = pos[b];
     if (!s || !t) return;
-    const x1 = s.x + NW, y1 = s.y + NH / 2, x2 = t.x, y2 = t.y + NH / 2;
     const isHot = hot && hot.has(a) && hot.has(b);
     const dim = hot && !isHot;
     if (isHot) hotEdges.push([a, b]);
     const stroke = isHot ? HOT : col(KIND[nodeById[a].kind].hue, 0.72, 0.13);
+    if (!markerFor.has(stroke)) markerFor.set(stroke, 'm' + markerFor.size);
+    const x1 = s.x + NW, y1 = s.y + NH / 2, y2 = t.y + NH / 2;
+    // Stop short of the card so the arrowhead lands in the gutter, not under it.
+    const x2 = t.x - 8;
     wires += `<path d="M ${x1} ${y1} C ${x1 + 70} ${y1}, ${x2 - 70} ${y2}, ${x2} ${y2}"
       fill="none" stroke="${stroke}" stroke-width="${isHot ? 2.4 : 1.3}" stroke-linecap="round"
-      stroke-dasharray="${isHot ? '8 8' : '0'}"
-      style="opacity:${isHot ? 0.95 : dim ? 0.07 : 0.3};animation:${isHot ? 'dashflow 0.75s linear infinite' : 'none'};transition:opacity 0.25s"></path>`;
+      stroke-dasharray="${isHot ? '8 8' : '0'}" marker-end="url(#${markerFor.get(stroke)})"
+      style="opacity:${isHot ? 0.95 : dim ? 0.07 : 0.34};animation:${isHot ? 'dashflow 0.75s linear infinite' : 'none'};transition:opacity 0.25s"></path>`;
   });
-  html += `<svg id="wires" width="${W}" height="${H}">${wires}</svg>`;
+
+  let defs = '';
+  markerFor.forEach((id, stroke) => {
+    defs += `<marker id="${id}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6"
+      orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="${stroke}"></path></marker>`;
+  });
+  html += `<svg id="wires" width="${W}" height="${H}"><defs>${defs}</defs>${wires}</svg>`;
 
   g.nodes.forEach((n) => {
     const k = KIND[n.kind], p = pos[n.id];
@@ -337,6 +441,7 @@ function render() {
     el.onclick = () => { state.selected = el.dataset.id; render(); };
   });
 
+  applyZoom(W, H);
   paintPanel(g, nodeById, hot, seedIds);
   paintFooter(g, hot, hotEdges);
 }
@@ -399,7 +504,7 @@ function paintPanel(g, nodeById, hot, seedIds) {
         <div class="title">${esc(sn.label)}</div>
         <div class="kind">${esc(k.label)}${sn.version ? ' · ' + esc(sn.version) : ''}</div>
       </div>
-      <div class="esc" id="closePanel">esc</div>
+      <div class="esc" id="closePanel">close</div>
     </div>
     <div class="body">
       <div style="padding:11px 13px;border-radius:11px;font:500 12px 'JetBrains Mono',monospace;line-height:1.5;
@@ -415,7 +520,8 @@ function paintPanel(g, nodeById, hot, seedIds) {
       <div style="display:flex;flex-direction:column;gap:9px">
         <div class="sec-title">${isHot ? 'REACHABILITY PATH' : (state.mode === 'macro' ? 'DEPENDENCY DETAIL' : 'CALL STACK')}</div>
         ${chain.length
-          ? chain.map((s) => `<div class="stack-row" style="border-left:2px solid ${s.color}">
+          ? chain.map((s, i) => `${i ? '<div class="chain-arrow">&darr;</div>' : ''}
+            <div class="stack-row" style="border-left:2px solid ${s.color}">
               <span class="i">${esc(s.idx)}</span>
               <div style="min-width:0"><div class="n">${esc(s.name)}</div><div class="l">${esc(s.loc)}</div></div>
             </div>`).join('')
@@ -469,7 +575,8 @@ async function loadGraph(mode) {
   const r = await fetch('/api/graph?mode=' + mode);
   if (!r.ok) {
     const e = await r.json().catch(() => ({ detail: r.statusText }));
-    $('canvas').style.width = 'auto'; $('canvas').style.height = 'auto';
+    $('sizer').style.width = 'auto'; $('sizer').style.height = 'auto';
+    $('canvas').style.transform = 'none';
     $('canvas').innerHTML = `<div class="notice"><b>Cannot reach the graph.</b><br><br>${esc(e.detail || r.statusText)}</div>`;
     return;
   }
@@ -520,6 +627,7 @@ function syncChips() {
 async function setMode(mode) {
   state.mode = mode;
   state.selected = null;
+  state.autoFit = true;   // the two views are different widths
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.dataset.mode === mode));
   await loadGraph(mode);
   render();
@@ -528,6 +636,18 @@ async function setMode(mode) {
 document.querySelectorAll('.tab').forEach((t) => { t.onclick = () => setMode(t.dataset.mode); });
 $('q').oninput = (e) => { state.query = e.target.value; syncChips(); render(); };
 $('clear').onclick = () => { state.query = ''; $('q').value = ''; syncChips(); render(); };
+$('zoomIn').onclick = () => setZoom(state.zoom + 0.15, true);
+$('zoomOut').onclick = () => setZoom(state.zoom - 0.15, true);
+$('zoomFit').onclick = () => { state.autoFit = true; render(); };
+
+let resizeTimer = null;
+addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  // Re-fit on rotate or window drag, but only while the user has not taken
+  // manual control of the zoom.
+  resizeTimer = setTimeout(() => { if (state.autoFit) render(); }, 150);
+});
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && state.selected) { state.selected = null; render(); }
 });

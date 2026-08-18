@@ -105,9 +105,22 @@ Note what is *dimmed* there: `GET /health`, `unusedHelper()`, `import 'express'`
 That is the "safe to ignore" signal, and it is the half of an incident response
 that actually saves time.
 
+Edges carry arrowheads and the column gutters carry chevrons, so the direction
+the graph reads is stated rather than implied. On the hot path the dashes flow
+along the arrow.
+
 Clicking any node opens metadata and the reachability path:
 
 ![Detail panel](docs/screens/detail-panel.png)
+
+It is responsive down to phone width: the graph auto-fits (shrink only — a
+four-node graph blown up to fill a monitor implies more than is there), the
+detail drawer becomes a bottom sheet, chips and metrics scroll sideways, and
+the legend drops since the column headers already carry the colours. A
+zoom/fit control sits bottom-right; touching it hands you manual control and
+stops the auto-fit from fighting you on resize.
+
+![Phone width](docs/screens/mobile.png)
 
 The whole graph is sent to the browser once per view and the blast radius is a
 reverse BFS in JS, so typing in the search box costs no round trips. That only
