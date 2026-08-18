@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -466,3 +467,56 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def ingest_micro(
+    project: Path | str,
+    client: HydraClient,
+    ids: IdAllocator,
+    service_name: str | None = None,
+    verbose: bool = True,
+) -> IngestReport:
+    """Micro graph only: one project directory, no lockfile, no bridge.
+
+    Separate entry point from :func:`ingest_corpus` because the two answer
+    different questions and have different prerequisites. The macro graph needs
+    a resolved lockfile; the call graph needs only source. Requiring a
+    package-lock.json to look at somebody's code would rule out exactly the
+    large applications this is most interesting on.
+
+    Without the bridge, an ExternalImport carries no resolved version -- the
+    UI falls back to the raw specifier, so searching by package name still
+    highlights, but "which version" is a question only the macro graph answers.
+    """
+    project = Path(project)
+    if not project.is_dir():
+        raise FileNotFoundError(f"{project} is not a directory")
+
+    # Prefer the name the project calls itself; the folder name is a fallback.
+    service = service_name
+    if not service:
+        manifest = project / "package.json"
+        if manifest.is_file():
+            try:
+                service = json.loads(manifest.read_text(encoding="utf-8")).get("name")
+            except (OSError, json.JSONDecodeError):
+                service = None
+    service = service or project.name
+
+    loader = Loader(client, ids, verbose=verbose)
+    loader._log(f"\n{service}  ({project})")
+
+    started = time.perf_counter()
+    scan = run_scanner(project, service)
+    elapsed = time.perf_counter() - started
+    loader._log(f"  scanner:  {json.dumps(scan['stats'])}")
+    loader._log(f"  scanned in {elapsed:.1f}s")
+
+    service_id = loader.node(
+        schema.SERVICE, service, name=service, repo=project.name, path="."
+    )
+    loader.load_micro(scan, service_id)
+    loader.report.services.append(service)
+
+    loader._log("\nwriting to HydraDB...")
+    return loader.flush()

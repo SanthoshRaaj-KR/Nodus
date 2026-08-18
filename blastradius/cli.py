@@ -382,11 +382,139 @@ def cmd_ingest(args) -> int:
     return 0
 
 
+def _suggest_paths(raw: str) -> None:
+    r"""Explain a path that did not resolve, and offer the likely intent.
+
+    Git Bash silently eats an unrecognised backslash escape, so `..\GenReal.ai`
+    reaches Python as `..GenReal.ai` -- a name with no separator in it at all,
+    and an error that reads as though the directory is missing rather than as a
+    quoting problem. Worth naming, because the message otherwise sends you
+    looking for the wrong bug.
+    """
+    cwd = Path.cwd()
+    print()
+    print(RED(f"  no such directory: {raw}"))
+    print(DIM(f"  resolved to : {Path(raw).resolve()}"))
+    print(DIM(f"  working dir : {cwd}"))
+
+    if "\\" in raw or ("/" not in raw and not Path(raw).exists()):
+        print()
+        print(YELLOW("  If you typed a backslash in Git Bash, the shell ate it."))
+        print(DIM("  Use forward slashes here; backslashes only work in PowerShell."))
+
+    # Offer real directories whose name resembles what was asked for, ignoring
+    # separators and punctuation -- which is exactly what got mangled.
+    def norm(text: str) -> str:
+        return "".join(c for c in text.lower() if c.isalnum())
+
+    wanted = norm(Path(raw).name or raw)
+    seen: list[str] = []
+    for parent in (cwd, cwd / "corpus", cwd.parent):
+        if not parent.is_dir():
+            continue
+        for child in sorted(parent.iterdir()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            candidate = norm(child.name)
+            if wanted and (wanted in candidate or candidate in wanted):
+                try:
+                    rel = child.relative_to(cwd).as_posix()
+                except ValueError:
+                    rel = child.as_posix()
+                if rel not in seen:
+                    seen.append(rel)
+
+    if seen:
+        print()
+        print("  Did you mean:")
+        for rel in seen[:5]:
+            print(GREEN(f"    python -m blastradius.cli scan {rel}"))
+    print()
+
+
+def cmd_scan(args) -> int:
+    """Micro graph only, for an arbitrary Node project with no lockfile."""
+    from .ids import IdAllocator
+    from .ingest.load import ingest_micro
+
+    client = HydraClient(base_url=args.url)
+    try:
+        with IdAllocator() as ids:
+            report = ingest_micro(
+                Path(args.project),
+                client,
+                ids,
+                service_name=args.service,
+                verbose=not args.quiet,
+            )
+    except FileNotFoundError:
+        _suggest_paths(args.project)
+        return 2
+    except (HydraError, RuntimeError) as exc:
+        print()
+        print(RED(str(exc)), file=sys.stderr)
+        print()
+        return 2
+
+    print()
+    print(report.render())
+    print()
+    functions = report.nodes.get(schema.FUNCTION, 0)
+    if functions > 4000:
+        print(YELLOW(f"  {functions:,} functions is past what the Explorer draws well."))
+        print(DIM("  It ships the whole graph to the browser; expect it to crawl."))
+        print(DIM("  The CLI queries stay fast -- those run in the database."))
+        print()
+    return 0
+
+
 def cmd_serve(args) -> int:
     import uvicorn
 
     print(f"\n  UI at http://127.0.0.1:{args.port}\n")
     uvicorn.run("blastradius.api.main:app", host="127.0.0.1", port=args.port, log_level="warning")
+    return 0
+
+
+def _free_port(preferred: int, span: int = 10) -> int:
+    """Return `preferred` if it is free, else the next free port after it.
+
+    A stale server from an earlier run holding the port is the normal case
+    here, and uvicorn's failure for it is a raw WinError 10048 that says
+    nothing about what to do. Rather than die mid-demo, move to the next port
+    and say so.
+    """
+    import socket
+
+    for offset in range(span):
+        port = preferred + offset
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        if offset:
+            print(YELLOW(f"  port {preferred} is already in use - using {port} instead"))
+            print(DIM(f"  (something is still listening on {preferred}; a previous run, most likely)"))
+        return port
+    print()
+    print(RED(f"  ports {preferred}-{preferred + span - 1} are all in use."))
+    print(DIM("  Close whatever is holding them, or pass --port."))
+    print()
+    raise SystemExit(2)
+
+
+def cmd_ui(args) -> int:
+    """Run the Blast Radius Explorer frontend."""
+    import uvicorn
+
+    port = _free_port(args.port)
+    print()
+    print(f"  Blast Radius Explorer -> http://127.0.0.1:{port}")
+    print(DIM("  ctrl-c to stop"))
+    print()
+    uvicorn.run("ui.server:app", host="127.0.0.1", port=port, log_level="warning")
     return 0
 
 
@@ -491,14 +619,24 @@ def main(argv: list[str] | None = None) -> int:
     lg.add_argument("--tail", type=int, default=60)
     lg.set_defaults(func=cmd_logs)
 
+    scan = sub.add_parser("scan", help="micro graph only, from any Node project")
+    scan.add_argument("project", help="path to the application directory")
+    scan.add_argument("--service", default=None, help="name to file it under")
+    scan.add_argument("--quiet", action="store_true")
+    scan.set_defaults(func=cmd_scan)
+
     ing = sub.add_parser("ingest", help="scan the corpus into the graph")
     ing.add_argument("--corpus", default="corpus")
     ing.add_argument("--quiet", action="store_true")
     ing.set_defaults(func=cmd_ingest)
 
-    srv = sub.add_parser("serve", help="run the web UI")
+    srv = sub.add_parser("serve", help="run the assessment API + simple UI")
     srv.add_argument("--port", type=int, default=8000)
     srv.set_defaults(func=cmd_serve)
+
+    explorer = sub.add_parser("ui", help="run the Blast Radius Explorer frontend")
+    explorer.add_argument("--port", type=int, default=8100)
+    explorer.set_defaults(func=cmd_ui)
 
     rst = sub.add_parser("reset", help="empty the graph, keep the container")
     rst.set_defaults(func=cmd_reset)

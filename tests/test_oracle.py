@@ -204,12 +204,23 @@ def test_graph_exposure_matches_bruteforce():
 
 @live
 def test_idempotent_reingest_does_not_duplicate():
-    """Counts must not move on a second ingest -- MERGE by id, stable ids."""
+    """Ingesting twice must not change the counts.
+
+    Compares run N to run N+1 rather than trusting whatever happens to be in
+    the graph already. The earlier version assumed the database was in a
+    post-ingest state, so it failed for the wrong reason whenever someone had
+    reset it or scanned something else first -- reporting a duplication bug
+    that was not there.
+    """
     from blastradius.ingest.load import ingest_corpus
 
     client = HydraClient()
-    before = client.counts_by_label(schema.NODE_LABELS)
     with IdAllocator() as ids:
         ingest_corpus(CORPUS, client, ids, verbose=False)
-    after = client.counts_by_label(schema.NODE_LABELS)
-    assert before == after, f"ingest was not idempotent: {before} -> {after}"
+    once = client.counts_by_label(schema.NODE_LABELS)
+
+    with IdAllocator() as ids:
+        ingest_corpus(CORPUS, client, ids, verbose=False)
+    twice = client.counts_by_label(schema.NODE_LABELS)
+
+    assert once == twice, f"ingest was not idempotent: {once} -> {twice}"

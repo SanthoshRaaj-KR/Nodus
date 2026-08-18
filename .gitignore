@@ -4,3 +4,9 @@ __pycache__/
 data/ids.sqlite*
 corpus/*/node_modules/
 .pytest_cache/
+.playwright-mcp/
+
+# Cloned repos under test are somebody else's history, not ours. Only the
+# planted demo fixture is tracked; anything else dropped in corpus/ stays out.
+corpus/*
+!corpus/payment-api/

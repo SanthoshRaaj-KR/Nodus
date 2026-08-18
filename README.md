@@ -71,7 +71,7 @@ cd scanner; npm install; cd ..        # ts-morph, once
 python -m blastradius.cli doctor      # checks every prerequisite, names the fix
 python -m blastradius.cli up          # start the HydraDB container
 python -m blastradius.cli ingest      # scan the corpus into the graph
-python -m blastradius.cli serve       # UI on http://127.0.0.1:8000
+python -m blastradius.cli ui          # Blast Radius Explorer, port 8100
 ```
 
 If `Activate.ps1` is blocked, either use the `.bat` above or run
@@ -82,6 +82,86 @@ this project needs it.
 Docker from Python and is the supported path.
 
 Then open <http://127.0.0.1:8000>, pick an advisory, and hit **Simulate 09:00**.
+
+## The Explorer
+
+`ui/` is a separate frontend server from `blastradius/api/`. That one is the
+machine-facing assessment API a CI job would call; this is the human-facing
+explorer. Keeping them apart means the demo surface can be restarted or
+re-skinned without touching what other tools depend on, and it reads HydraDB
+directly rather than proxying — one fewer moving part to fail on stage.
+
+**Macro — the supply chain.** Services, then packages by resolved depth. The
+queried package and everything that reaches it burn red; the rest dims.
+
+![Macro view](docs/screens/macro.png)
+
+**Micro — the call graph.** The claim no lockfile scanner can make:
+`src/index.ts → POST /login → handleLogin() → verify() → import 'vulnerable-pkg'`.
+
+![Micro view](docs/screens/micro.png)
+
+Note what is *dimmed* there: `GET /health`, `unusedHelper()`, `import 'express'`.
+That is the "safe to ignore" signal, and it is the half of an incident response
+that actually saves time.
+
+Edges carry arrowheads and the column gutters carry chevrons, so the direction
+the graph reads is stated rather than implied. On the hot path the dashes flow
+along the arrow.
+
+Clicking any node opens metadata and the reachability path:
+
+![Detail panel](docs/screens/detail-panel.png)
+
+It is responsive down to phone width: the graph auto-fits (shrink only — a
+four-node graph blown up to fill a monitor implies more than is there), the
+detail drawer becomes a bottom sheet, chips and metrics scroll sideways, and
+the legend drops since the column headers already carry the colours. A
+zoom/fit control sits bottom-right; touching it hands you manual control and
+stops the auto-fit from fighting you on resize.
+
+![Phone width](docs/screens/mobile.png)
+
+The whole graph is sent to the browser once per view and the blast radius is a
+reverse BFS in JS, so typing in the search box costs no round trips. That only
+works because the graph is small; at fleet scale the highlighting moves server
+side, onto the same `PRESENT_IN` and `CALLED_BY` edges the CLI already uses.
+
+The design came from a Claude Design project and is implemented here in vanilla
+JS — the source `.dc.html` targets a React template runtime we do not ship.
+
+### Scanning any Node app (micro graph only)
+
+The macro graph needs a resolved lockfile. The call graph needs only source, so
+it has its own entry point that skips the lockfile and the bridge entirely:
+
+```powershell
+python -m blastradius.cli reset                    # clear graph + id map together
+python -m blastradius.cli scan ..\some-node-app
+python -m blastradius.cli ui
+```
+
+![Real application](docs/screens/real-app.png)
+
+**Paths.** The argument is an ordinary relative or absolute directory path,
+resolved against your current working directory. In **Git Bash** use forward
+slashes: a backslash is an escape character there, so `..\GenReal.ai` silently
+becomes `..GenReal.ai` before Python ever sees it. Backslashes are fine in
+PowerShell and cmd. If a path does not resolve, the error prints what it
+resolved to, your working directory, and any nearby directory that looks like
+what you meant.
+
+**Service name** comes from `package.json`'s `name`, falling back to the folder
+name. Many templates ship with `"name": "project"`, so pass `--service` when you
+want something meaningful in the graph.
+
+Without the bridge an import carries no resolved version, so searching by
+package name still highlights but "which version" stays a macro-graph question.
+
+**Clearing state:** `reset` drops every node *and* deletes `data/ids.sqlite`.
+Those must go together. Deleting the Docker volume alone is harmless (ids just
+continue from a higher counter), but deleting `ids.sqlite` while the graph
+still holds data gives every node a fresh id and duplicates the lot.
 
 ### Or from the terminal
 
