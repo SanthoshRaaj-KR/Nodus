@@ -127,7 +127,13 @@ def _report(client: HydraClient, advisory: Advisory, show_paths: bool) -> int:
                 f"-> {route['handler']} " + DIM(f"({route['file']}:{route['line']})")
             )
         for artifact in finding.artifacts:
-            print(f"    {RED('artifact')} {artifact['path']} " + DIM(f"[{artifact['kind']}]"))
+            if artifact.get("confirmed"):
+                tag, colour = "IOC MATCH", RED
+            else:
+                tag, colour = "candidate", YELLOW
+            print(
+                f"    {colour(tag)} {artifact['path']} " + DIM(f"[{artifact['kind']}]")
+            )
     if not any_micro:
         print(DIM("  No source file imports this package. It is installed but never called."))
     print()
@@ -156,22 +162,24 @@ def _report(client: HydraClient, advisory: Advisory, show_paths: bool) -> int:
     return 1 if worst <= 1 else 0
 
 
+def _unwrap(value):
+    """Path properties arrive as single-key type maps: {'String': 'lodash'}."""
+    if isinstance(value, dict) and len(value) == 1:
+        return next(iter(value.values()))
+    return value
+
+
 def _render_path(path) -> str:
-    """Best-effort one-line rendering of a returned path structure."""
-    if isinstance(path, dict):
-        for key in ("vertices", "nodes", "path"):
-            if key in path:
-                return _render_path(path[key])
-        return json.dumps(path)[:200]
-    if isinstance(path, list):
-        parts = []
-        for item in path:
-            if isinstance(item, dict):
-                parts.append(str(item.get("key") or item.get("name") or item.get("id")))
-            else:
-                parts.append(str(item))
-        return " -> ".join(parts)
-    return str(path)
+    """One-line rendering of a returned path: node -> node -> node."""
+    if not isinstance(path, dict) or "nodes" not in path:
+        return str(path)[:200]
+    names = []
+    for node in path["nodes"]:
+        props = {k: _unwrap(v) for k, v in (node.get("properties") or {}).items()}
+        label = (node.get("labels") or ["?"])[0]
+        ident = props.get("key") or props.get("name") or node.get("id")
+        names.append(f"{ident}" if label != "Service" else BOLD(str(ident)))
+    return DIM(" -> ").join(str(n) for n in names)
 
 
 def cmd_check(args) -> int:
@@ -185,7 +193,10 @@ def cmd_check(args) -> int:
         package=package,
         affected_versions=[version] if version and not args.range else [],
         affected_range=args.range or ("" if version else "*"),
-        ioc_paths=[".claude/**/*", ".vscode/**/*"],
+        # Deliberately no IOC globs. A bare `check` knows nothing about what
+        # the payload looks like, so artifacts stay candidates and the finding
+        # cannot reach P0. Confirmation requires an advisory that names IOCs.
+        ioc_paths=[],
     )
     return _report(client, advisory, show_paths=not args.no_paths)
 

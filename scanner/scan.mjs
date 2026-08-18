@@ -243,6 +243,18 @@ export function scan(root, serviceName) {
     const ext = path.extname(rel).replace(".", "");
     files.push({ key: fileKey(service, rel), path: rel, lang: ext });
 
+    // Top-level code is real code. `const app = express()` and
+    // `app.post(...)` run at module scope, and without somewhere to attribute
+    // them a framework initialised at the top of a file looks unused -- which
+    // would report it as "installed, never called" and understate the risk.
+    functions.push({
+      key: funcKey(service, rel, "<module>", 0),
+      name: "<module>",
+      file: rel,
+      line: 0,
+      exported: false,
+    });
+
     for (const node of sf.getDescendants()) {
       if (!FUNCTION_KINDS.has(node.getKind())) continue;
       const line = node.getStartLineNumber();
@@ -275,8 +287,10 @@ export function scan(root, serviceName) {
       noteImport(specifier, rel, names);
     }
 
+    const moduleKey = funcKey(service, rel, "<module>", 0);
+
     for (const call of sf.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-      const caller = enclosingFunction(call, keyByNode);
+      const caller = enclosingFunction(call, keyByNode) ?? moduleKey;
 
       // require("pkg") -- record the import even at module top level.
       const required = requireTarget(call);
@@ -285,8 +299,6 @@ export function scan(root, serviceName) {
         if (caller) callsExternal.add(JSON.stringify([caller, key]));
         continue;
       }
-
-      if (!caller) continue; // a call at module scope reaches no function
 
       const expression = call.getExpression();
       const root = rootIdentifier(expression);

@@ -59,14 +59,27 @@ thing a flat lockfile scan structurally cannot do.
 
 ## Quick start
 
-```powershell
-.\hydra.ps1 up                      # start the HydraDB node (Docker Desktop must be running)
-cd scanner; npm install; cd ..      # ts-morph, once
-pip install -r requirements.txt
+Everything runs through one Python entry point — no `.ps1` required, so you
+never have to touch PowerShell's execution policy.
 
-python -m blastradius.ingest.load --corpus corpus
-python -m uvicorn blastradius.api.main:app --port 8000
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1          # cmd.exe: .\.venv\Scripts\activate.bat
+pip install -r requirements.txt
+cd scanner; npm install; cd ..        # ts-morph, once
+
+python -m blastradius.cli doctor      # checks every prerequisite, names the fix
+python -m blastradius.cli up          # start the HydraDB container
+python -m blastradius.cli ingest      # scan the corpus into the graph
+python -m blastradius.cli serve       # UI on http://127.0.0.1:8000
 ```
+
+If `Activate.ps1` is blocked, either use the `.bat` above or run
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once. Nothing else in
+this project needs it.
+
+`hydra.ps1` still exists and does the same job, but `blastradius.node` drives
+Docker from Python and is the supported path.
 
 Then open <http://127.0.0.1:8000>, pick an advisory, and hit **Simulate 09:00**.
 
@@ -148,16 +161,27 @@ response so nobody mistakes a truncated answer for a complete one.
 
 ## HydraDB constraints worth knowing before you edit a query
 
+These were all found the hard way, by being rejected at runtime. They are not
+in `cypher-compat.md`, so they are written down here.
+
 | Constraint | Consequence |
 |---|---|
 | Variable-length needs a pinned source and an upper bound | materialised inverse edges; flattened closure |
-| No `IN`, `CONTAINS`, `ENDS WITH`, `IS NULL` in `WHERE` | fan-in via `UNWIND $rows AS row MATCH …`; every property always written, using sentinels |
+| **`UNWIND … MATCH … MERGE` (write) requires exactly one label per endpoint** | edges are batched per `(type, src label, dst label)`, since `REQUIRED_BY` spans two label pairs |
+| **`UNWIND … MATCH … RETURN` (read) forbids labels**, demands the first projection be the source field, and accepts exactly two unsorted projections | reads never use `UNWIND` — they issue one plain `MATCH` per id with a scalar `$id`, where labels and full projections both work |
+| **A list parameter is accepted only as `UNWIND` input** | `algo.MSpaths` cannot take `sourceValues` as `$param`; the list is inlined as a literal (escaped in `_literal_list`) |
+| **Admission control caps `client_query_runtime_ms`** (30 s stock) | asking for more is an HTTP 429; the client defaults to 25 s |
+| No `IN`, `CONTAINS`, `ENDS WITH`, `IS NULL` in `WHERE` | every property is always written, using sentinels |
 | No string functions | semver matching happens in Python, which feeds exact ids to the graph |
 | Relationships are reified with their own global `id` | a persisted id allocator is mandatory — `blastradius/ids.py` |
 | `sum`/`avg` unsigned ints only | timestamps are epoch-second integers |
-| No transactions, one statement per request | all writes are `UNWIND`-batched auto-commits, and `MERGE` by id makes re-runs idempotent |
+| No transactions, one statement per request | writes are `UNWIND`-batched auto-commits; `MERGE` by id makes re-runs idempotent |
 
-Full list: `../hydradb/cypher-compat.md`.
+The write/read asymmetry on `UNWIND` is the one that will bite an editor:
+**writes are label-qualified, reads are not.** Do not make them match — the
+server rejects whichever one you change.
+
+Base list: `../hydradb/cypher-compat.md`.
 
 ---
 

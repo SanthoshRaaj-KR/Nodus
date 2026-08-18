@@ -48,9 +48,13 @@ def _staged_closure(lock_path: Path):
         loader = Loader(_NullClient(), ids, verbose=False)
         pv_ids = loader.load_macro(lock)
         by_id = {v: k for k, v in pv_ids.items()}
+        # Edges are bucketed by (type, source label, destination label),
+        # because a batched write needs a single label on each endpoint.
         closure = {
             by_id[row["src"]]: row["depth"]
-            for row in loader._edges.get(schema.PRESENT_IN, {}).values()
+            for (etype, _, _), rows in loader._edges.items()
+            if etype == schema.PRESENT_IN
+            for row in rows.values()
             if row["src"] in by_id
         }
         ids.close()

@@ -4,16 +4,18 @@ Every traversal here pins its source id and walks forward, because HydraDB
 accepts nothing else. Where a query needs to run "backwards" it walks a
 materialised inverse edge instead -- see :mod:`blastradius.schema`.
 
-Two rules about UNWIND that are exact opposites, and are both enforced:
+``UNWIND`` is for writes here, never for reads. A batched write
+(``UNWIND ... MATCH ... MERGE``) requires every endpoint to carry exactly one
+label. A batched *read* is a different, far narrower feature: it rejects labels,
+demands the first projection be the source field, and accepts exactly two
+unsorted projections -- which no query in this module can live inside. So the
+readers below issue one plain ``MATCH`` per id with a scalar ``$id`` parameter,
+where full projections and labels both work.
 
-* ``UNWIND ... MATCH ... MERGE`` (a write) requires every endpoint to carry
-  **exactly one label**.
-* ``UNWIND ... MATCH ... RETURN`` (a read) **rejects labels entirely** --
-  "UNWIND batch node patterns do not support labels".
-
-So the writers in :mod:`blastradius.ingest.load` are label-qualified and the
-readers below are not. Do not "tidy" one to match the other; the server will
-reject whichever you change.
+The id lists these loop over are short by construction (the versions an advisory
+matches, the functions that import them), and the genuinely many-source case is
+served by ``algo.MSpaths`` in :func:`dependency_paths`, which resolves inside
+the engine.
 """
 
 from __future__ import annotations
@@ -132,21 +134,35 @@ def held_versions(client: HydraClient, package: str) -> list[dict]:
 
 def exposed_services(client: HydraClient, package_ids: list[int]) -> list[dict]:
     """Which services contain any of these package versions, and how deep."""
-    if not package_ids:
-        return []
-    result = client.query(
-        "UNWIND $rows AS row "
-        "MATCH (p {id: row.id})-[e:PRESENT_IN]->(s) "
-        "RETURN s.name AS service, p.key AS package, e.depth AS depth, "
-        "e.dev AS dev, e.direct AS direct",
-        {"rows": [{"id": i} for i in package_ids]},
-    )
-    return result.rows
+    rows: list[dict] = []
+    for package_id in package_ids:
+        result = client.query(
+            "MATCH (p:PackageVersion {id: $id})-[e:PRESENT_IN]->(s:Service) "
+            "RETURN s.name AS service, p.key AS package, e.depth AS depth, "
+            "e.dev AS dev, e.direct AS direct",
+            {"id": package_id},
+        )
+        rows.extend(result.rows)
+    return rows
 
 
 # --------------------------------------------------------------------------
 # Q2 -- the dependency chain. Many sources at once, resolved server-side.
 # --------------------------------------------------------------------------
+
+
+def _literal_list(values: list[str]) -> str:
+    """Render a Cypher string list *inline*.
+
+    A list parameter cannot be used here: the server accepts composite
+    parameters only as UNWIND input, and rejects one reaching a procedure
+    config with "composite parameter is only supported as an UNWIND input".
+    So the values are inlined, with quotes escaped. They originate from the
+    graph itself (package keys, service names), but escaping is done properly
+    rather than assumed unnecessary.
+    """
+    escaped = [v.replace("\\", "\\\\").replace("'", "\'") for v in values]
+    return "[" + ", ".join(f"'{v}'" for v in escaped) + "]"
 
 
 def dependency_paths(
@@ -159,26 +175,22 @@ def dependency_paths(
     """Whole paths from compromised packages out to the affected services.
 
     A plain MATCH returns endpoint projections; these procedures are the only
-    way to get the chain itself back. Using the many-source form matters when
-    a worm publishes across dozens of packages at once -- it is one call
-    resolved inside the engine rather than a client-side fan-out.
+    way to get the chain itself back. The many-source form matters when a worm
+    publishes across dozens of packages at once -- it is one call resolved
+    inside the engine rather than a client-side fan-out.
     """
     if not package_keys or not services:
         return []
-    result = client.query(
+    statement = (
         "CALL algo.MSpaths({sourceLabel: 'PackageVersion', sourceProperty: 'key', "
-        "sourceValues: $sources, targetLabel: 'Service', targetProperty: 'name', "
-        "targetValues: $targets, relTypes: ['REQUIRED_BY'], relDirection: 'outgoing', "
-        "maxLen: $maxlen, pathCount: $count}) "
-        "YIELD path RETURN path",
-        {
-            "sources": package_keys,
-            "targets": services,
-            "maxlen": max_len,
-            "count": path_count,
-        },
+        f"sourceValues: {_literal_list(package_keys)}, "
+        "targetLabel: 'Service', targetProperty: 'name', "
+        f"targetValues: {_literal_list(services)}, "
+        "relTypes: ['REQUIRED_BY'], relDirection: 'outgoing', "
+        f"maxLen: {int(max_len)}, pathCount: {int(path_count)}}}) "
+        "YIELD path RETURN path"
     )
-    return result.column("path")
+    return client.query(statement).column("path")
 
 
 # --------------------------------------------------------------------------
@@ -192,16 +204,17 @@ def calling_functions(client: HydraClient, package_ids: list[int]) -> list[dict]
     Walks the bridge backwards using the two materialised inverses:
     PackageVersion -IMPORTED_AS-> ExternalImport -IMPORT_USED_BY-> Function.
     """
-    if not package_ids:
-        return []
-    result = client.query(
-        "UNWIND $rows AS row "
-        "MATCH (p {id: row.id})-[:IMPORTED_AS]->(e)-[:IMPORT_USED_BY]->(f) "
-        "RETURN f.id AS id, f.name AS name, f.file AS file, f.line AS line, "
-        "f.service AS service, e.specifier AS specifier",
-        {"rows": [{"id": i} for i in package_ids]},
-    )
-    return result.rows
+    rows: list[dict] = []
+    for package_id in package_ids:
+        result = client.query(
+            "MATCH (p:PackageVersion {id: $id})-[:IMPORTED_AS]->(e:ExternalImport)"
+            "-[:IMPORT_USED_BY]->(f:Function) "
+            "RETURN f.id AS id, f.name AS name, f.file AS file, f.line AS line, "
+            "f.service AS service, e.specifier AS specifier",
+            {"id": package_id},
+        )
+        rows.extend(result.rows)
+    return rows
 
 
 # --------------------------------------------------------------------------
@@ -230,24 +243,26 @@ def reachable_routes(
     # functions themselves count -- a route handler may call the package
     # directly.
     callers: dict[int, int] = {fid: 0 for fid in function_ids}
-    result = client.query(
-        "UNWIND $rows AS row "
-        f"MATCH (f {{id: row.id}})-[:CALLED_BY*1..{max_depth}]->(c) "
-        "RETURN c.id AS id",
-        {"rows": [{"id": i} for i in function_ids]},
-    )
-    for row in result.rows:
-        callers.setdefault(row["id"], 1)
+    for function_id in function_ids:
+        result = client.query(
+            f"MATCH (f:Function {{id: $id}})-[:CALLED_BY*1..{max_depth}]->(c:Function) "
+            "RETURN c.id AS id",
+            {"id": function_id},
+        )
+        for row in result.rows:
+            callers.setdefault(row["id"], 1)
 
     # Step 2: which of those are dispatched to by a route.
-    routes = client.query(
-        "UNWIND $rows AS row "
-        "MATCH (f {id: row.id})-[:HANDLES]->(r) "
-        "RETURN r.method AS method, r.pattern AS pattern, r.service AS service, "
-        "r.file AS file, r.line AS line, f.name AS handler",
-        {"rows": [{"id": i} for i in callers]},
-    )
-    return routes.rows
+    rows: list[dict] = []
+    for caller_id in callers:
+        result = client.query(
+            "MATCH (f:Function {id: $id})-[:HANDLES]->(r:Route) "
+            "RETURN r.method AS method, r.pattern AS pattern, r.service AS service, "
+            "r.file AS file, r.line AS line, f.name AS handler",
+            {"id": caller_id},
+        )
+        rows.extend(result.rows)
+    return rows
 
 
 # --------------------------------------------------------------------------
@@ -257,15 +272,15 @@ def reachable_routes(
 
 def artifacts_for(client: HydraClient, services: list[str]) -> list[dict]:
     """Worm persistence artifacts found in the given services."""
-    if not services:
-        return []
-    result = client.query(
-        "UNWIND $rows AS row "
-        "MATCH (s {id: row.id})-[:HAS_ARTIFACT]->(a) "
-        "RETURN s.name AS service, a.path AS path, a.kind AS kind, a.sha256 AS sha256",
-        {"rows": [{"id": i} for i in services]},
-    )
-    return result.rows
+    rows: list[dict] = []
+    for service_id in services:
+        result = client.query(
+            "MATCH (s:Service {id: $id})-[:HAS_ARTIFACT]->(a:PersistenceArtifact) "
+            "RETURN s.name AS service, a.path AS path, a.kind AS kind, a.sha256 AS sha256",
+            {"id": service_id},
+        )
+        rows.extend(result.rows)
+    return rows
 
 
 def service_ids(client: HydraClient, names: list[str]) -> dict[str, int]:
@@ -282,6 +297,17 @@ def service_ids(client: HydraClient, names: list[str]) -> dict[str, int]:
 # --------------------------------------------------------------------------
 # Assessment -- compose the tiers
 # --------------------------------------------------------------------------
+
+
+def _matches_ioc(path: str, patterns: list[str]) -> bool:
+    """Does this artifact path match any IOC glob from the advisory?
+
+    Checked here rather than at ingest because the advisory arrives *after* the
+    corpus has been scanned -- that is the whole shape of an incident.
+    """
+    import fnmatch
+
+    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
 
 
 def assess(client: HydraClient, advisory: Advisory) -> Assessment:
@@ -348,11 +374,23 @@ def assess(client: HydraClient, advisory: Advisory) -> Assessment:
 
     # Evidence outranks everything: an artifact on disk means removing the
     # package does not clear the compromise.
+    #
+    # But only a real IOC match counts. Plenty of healthy repos have a .vscode/
+    # or .claude/ directory, and escalating every one of them to P0 would make
+    # the top tier meaningless -- the first judge with a .vscode/settings.json
+    # would see a false confirmation. Files merely living in a watched
+    # directory are reported as candidates and leave the tier alone.
     ids = service_ids(client, list(by_service))
     for artifact in timed("artifacts", artifacts_for, client, list(ids.values())):
         finding = by_service.get(artifact["service"])
-        if finding:
-            finding.artifacts.append(artifact)
+        if not finding:
+            continue
+        confirmed = artifact.get("kind") in ("ioc-path", "ioc-content") or _matches_ioc(
+            artifact.get("path", ""), advisory.ioc_paths
+        )
+        artifact["confirmed"] = confirmed
+        finding.artifacts.append(artifact)
+        if confirmed:
             finding.tier = TIER_CONFIRMED
 
     assessment.findings = list(by_service.values())
