@@ -26,7 +26,7 @@ TypeScript compiler API, and the bridge between them:
 ```
 [Service: payment-api]
        |
-       +--> (macro / lockfile) ----> [PackageVersion: vulnerable-pkg@1.0.5]
+       +--> (macro / lockfile) ----> [PackageVersion: ua-parser-js@0.7.29]
        |                                          ^
        +--> (micro / AST)                         | RESOLVES_TO
             [File: src/token.ts]                  |
@@ -97,7 +97,7 @@ queried package and everything that reaches it burn red; the rest dims.
 ![Macro view](docs/screens/macro.png)
 
 **Micro — the call graph.** The claim no lockfile scanner can make:
-`src/index.ts → POST /login → handleLogin() → verify() → import 'vulnerable-pkg'`.
+`src/index.ts → POST /login → handleLogin() → verify() → import 'ua-parser-js'`.
 
 ![Micro view](docs/screens/micro.png)
 
@@ -182,7 +182,7 @@ still holds data gives every node a fresh id and duplicates the lot.
 ```powershell
 python -m blastradius.cli stats                            # what is in the graph
 python -m blastradius.cli services                         # ingested services
-python -m blastradius.cli check vulnerable-pkg@1.0.5       # one package
+python -m blastradius.cli check ua-parser-js@0.7.29       # one package
 python -m blastradius.cli check express --range ">=4.18.0 <4.19.0"
 python -m blastradius.cli advisory advisories\GHSA-vuln-pkg-2026.json
 ```

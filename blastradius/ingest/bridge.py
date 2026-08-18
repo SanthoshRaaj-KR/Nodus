@@ -1,7 +1,7 @@
 """Join the micro graph to the macro graph.
 
 An ``ExternalImport`` is a module specifier appearing in a service's source
-(``import { sign } from "vulnerable-pkg"``). A ``PackageVersion`` is a resolved
+(``import { sign } from "ua-parser-js"``). A ``PackageVersion`` is a resolved
 entry in that service's lockfile. The bridge decides which version a given
 import statement actually loads at runtime.
 

@@ -332,7 +332,18 @@ export function scan(root, serviceName) {
 
     const moduleKey = funcKey(service, rel, "<module>", 0);
 
-    for (const call of sf.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    // `new Foo()` is a use of Foo exactly as much as `foo()` is, and a lot of
+    // library surface is constructor-shaped (new UAParser, new Client, new
+    // Stripe). Walking CallExpression alone silently under-reports
+    // reachability for those, which is the direction it is worst to be wrong
+    // in. NewExpression exposes the same getExpression/getArguments shape, so
+    // the logic below applies unchanged.
+    const invocations = [
+      ...sf.getDescendantsOfKind(SyntaxKind.CallExpression),
+      ...sf.getDescendantsOfKind(SyntaxKind.NewExpression),
+    ];
+
+    for (const call of invocations) {
       const caller = enclosingFunction(call, keyByNode) ?? moduleKey;
 
       // require("pkg") -- record the import even at module top level.

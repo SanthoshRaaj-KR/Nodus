@@ -2,6 +2,6 @@
   "name": "payment-api",
   "version": "1.0.0",
   "private": true,
-  "dependencies": { "express": "^4.18.0", "vulnerable-pkg": "^1.0.0" },
+  "dependencies": { "express": "^4.18.0", "ua-parser-js": "^0.7.0" },
   "devDependencies": { "typescript": "^5.0.0" }
 }
