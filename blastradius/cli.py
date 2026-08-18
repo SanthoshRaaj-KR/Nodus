@@ -394,9 +394,9 @@ def cmd_ui(args) -> int:
     """Run the Blast Radius Explorer frontend."""
     import uvicorn
 
-    print(f"
-  Blast Radius Explorer -> http://127.0.0.1:{args.port}
-")
+    print()
+    print(f"  Blast Radius Explorer -> http://127.0.0.1:{args.port}")
+    print()
     uvicorn.run("ui.server:app", host="127.0.0.1", port=args.port, log_level="warning")
     return 0
 
