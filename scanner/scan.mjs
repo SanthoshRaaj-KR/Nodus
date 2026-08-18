@@ -26,6 +26,7 @@
 import { Project, SyntaxKind, Node } from "ts-morph";
 import path from "node:path";
 import fs from "node:fs";
+import { pathToFileURL } from "node:url";
 
 const FUNCTION_KINDS = new Set([
   SyntaxKind.FunctionDeclaration,
@@ -351,3 +352,90 @@ export function scan(root, serviceName) {
     },
   };
 }
+
+/**
+ * Find HTTP route registrations and the function each one dispatches to.
+ *
+ * These are the entry points that turn "the package is installed" into "the
+ * package is reachable from the internet", so they carry most of the severity
+ * signal. Detection is deliberately Express/Fastify-shaped and pattern-based;
+ * a route registered through a decorator or a dynamic table will be missed,
+ * which is why the count is reported in stats rather than presented as
+ * exhaustive.
+ */
+function collectRoutes(sf, rel, service, keyByNode, routes, stats) {
+  for (const call of sf.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    const expression = call.getExpression();
+    if (!Node.isPropertyAccessExpression(expression)) continue;
+
+    const method = expression.getName().toLowerCase();
+    if (!ROUTE_METHODS.has(method)) continue;
+
+    const receiver = rootIdentifier(expression.getExpression());
+    if (!receiver || !ROUTER_NAMES.test(receiver.getText())) continue;
+
+    const args = call.getArguments();
+    if (args.length < 2) continue;
+    const [first] = args;
+    if (!Node.isStringLiteral(first)) continue;
+
+    const pattern = first.getLiteralValue();
+    const line = call.getStartLineNumber();
+
+    // Every argument after the path can be a handler -- middleware chains are
+    // normal, and middleware is just as reachable as the final handler.
+    for (const arg of args.slice(1)) {
+      let handlerKey = null;
+      if (FUNCTION_KINDS.has(arg.getKind())) {
+        handlerKey = keyByNode.get(arg) ?? null;
+      } else if (Node.isIdentifier(arg)) {
+        const resolved = resolveIdentifier(arg);
+        if (resolved && resolved.kind === "local") {
+          handlerKey = keyByNode.get(resolved.node) ?? null;
+        }
+      }
+      if (!handlerKey) continue;
+      routes.push({
+        key: routeKey(service, method.toUpperCase(), pattern, rel, line),
+        method: method.toUpperCase(),
+        pattern,
+        file: rel,
+        line,
+        handler: handlerKey,
+      });
+    }
+  }
+}
+
+function main() {
+  const argv = process.argv.slice(2);
+  if (!argv.length) {
+    console.error("usage: node scan.mjs <project-dir> [--service NAME] [--out FILE]");
+    process.exit(2);
+  }
+  const root = path.resolve(argv[0]);
+  const serviceIdx = argv.indexOf("--service");
+  const outIdx = argv.indexOf("--out");
+  const service = serviceIdx >= 0 ? argv[serviceIdx + 1] : path.basename(root);
+  const out = outIdx >= 0 ? argv[outIdx + 1] : null;
+
+  if (!fs.existsSync(root)) {
+    console.error(`no such directory: ${root}`);
+    process.exit(1);
+  }
+
+  const result = scan(root, service);
+  const json = JSON.stringify(result, null, 2);
+  if (out) {
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, json, "utf8");
+    console.error(`${service}: ${JSON.stringify(result.stats)}`);
+    console.error(`wrote ${out}`);
+  } else {
+    process.stdout.write(json);
+  }
+}
+
+// Only run when invoked as a script, not when imported by a test.
+const entry = process.argv[1] ? pathToFileURL(process.argv[1]).href : null;
+if (entry && import.meta.url === entry) main();
