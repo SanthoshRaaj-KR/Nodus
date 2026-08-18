@@ -78,7 +78,7 @@ def macro_graph(client: HydraClient) -> dict:
             "layer": 0,
             "kind": "service",
             "label": s["name"],
-            "sub": f"{s['repo']} · {s['path']}",
+            "sub": f"{s['repo']} · " + ("repo root" if s["path"] in (".", "") else s["path"]),
             "file": s["path"],
             "stack": [],
         }
@@ -93,14 +93,20 @@ def macro_graph(client: HydraClient) -> dict:
         layer = _layer_for_depth(depth)
         consumers = sorted(used_by.get(key, ()))
         kind = {1: "direct", 2: "transitive", MAX_MACRO_LAYER: "deep"}[layer]
-        via = f"depth {depth} · {len(consumers)} service(s)"
+        # The node card is 214px wide, so the subtitle has to stay short or it
+        # ellipsises away the part that matters. Only say what varies.
+        bits = [pkg["version"], f"depth {depth}"]
+        if len(consumers) > 1:
+            bits.append(f"{len(consumers)} svcs")
+        if dev_only.get(key):
+            bits.append("dev")
         nodes.append(
             {
                 "id": key,
                 "layer": layer,
                 "kind": kind,
                 "label": pkg["name"],
-                "sub": f"{pkg['version']} · {via}" + (" · dev" if dev_only.get(key) else ""),
+                "sub": " · ".join(bits),
                 "pkg": pkg["name"],
                 "version": pkg["version"],
                 "file": f"node_modules/{pkg['name']}",

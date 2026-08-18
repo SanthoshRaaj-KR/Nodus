@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Blast Radius Explorer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='6' fill='%23ff5c47'/%3E%3Ccircle cx='16' cy='16' r='12' fill='none' stroke='%23ff5c47' stroke-opacity='.45' stroke-width='2'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -469,6 +470,17 @@ async function loadAdvisories() {
   paintChips();
 }
 
+const SEVERITY_RANK = { critical: 0, high: 1, moderate: 2, medium: 2, low: 3, unknown: 4 };
+
+function pickOpeningQuery() {
+  const withVersion = state.advisories.filter((a) => a.query.includes('@'));
+  const pool = withVersion.length ? withVersion : state.advisories;
+  if (!pool.length) return '';
+  const sorted = [...pool].sort((a, b) =>
+    (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9));
+  return sorted[0].query;
+}
+
 function paintChips() {
   $('chips').innerHTML = state.advisories.map((a, i) =>
     `<div class="chip" data-i="${i}" title="${esc(a.advisory_id)} · ${esc(a.severity)}">${esc(a.query)}</div>`
@@ -509,6 +521,11 @@ document.addEventListener('keydown', (e) => {
 
 (async function boot() {
   await Promise.all([loadGraph('macro'), loadAdvisories()]);
+  if (!state.query) {
+    state.query = pickOpeningQuery();
+    $('q').value = state.query;
+    syncChips();
+  }
   render();
   // Warm the other view so switching tabs is instant on stage.
   loadGraph('micro');
