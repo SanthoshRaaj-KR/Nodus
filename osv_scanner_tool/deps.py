@@ -32,6 +32,11 @@ except ImportError:
     Requirement = None
     canonicalize_name = None
 
+#: Subprocess output is decoded as UTF-8 explicitly. Windows otherwise uses
+#: the locale codec (cp1252), which cannot decode bytes that osv-scanner and
+#: pip both emit -- and the failure lands in subprocess's reader thread, so
+#: it surfaces as a stray traceback and an empty result rather than an error
+#: anyone can act on. Undecodable bytes are replaced, never raised.
 _IGNORED_DIR_PARTS = {".git", ".venv", "venv", "site-packages", "node_modules"}
 
 
@@ -115,7 +120,8 @@ def _resolve_one_requirements_file(req_file):
             tf.write(text)
             tmp_path = tf.name
         result = subprocess.run(
-            cmd_base + ["-r", tmp_path], capture_output=True, text=True
+            cmd_base + ["-r", tmp_path], capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         )
         if result.returncode == 0:
             Path(tmp_path).unlink(missing_ok=True)
@@ -128,6 +134,8 @@ def _resolve_one_requirements_file(req_file):
                 cmd_base + ["--use-deprecated=legacy-resolver", "-r", tmp_path],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
         Path(tmp_path).unlink(missing_ok=True)
         if result.returncode == 0:
@@ -375,6 +383,8 @@ def _scan_pypi_pins(graph, vulnerable):
             ["osv-scanner", "scan", "--lockfile", str(pin_path), "--format", "json"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     _accumulate_vulns(result, vulnerable)
 
@@ -402,6 +412,8 @@ def _scan_npm_pins(graph, vulnerable):
             ["osv-scanner", "scan", "--lockfile", str(lock_path), "--format", "json"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     _accumulate_vulns(result, vulnerable)
 

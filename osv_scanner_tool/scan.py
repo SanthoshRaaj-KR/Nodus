@@ -71,7 +71,15 @@ def scan_repo(repo_path, respect_gitignore=False):
         command.append("--no-ignore")
     command += [repo_path, "--format", "json"]
 
-    result = subprocess.run(command, capture_output=True, text=True)
+    # Windows decodes subprocess output with the locale codec (cp1252 here)
+    # unless told otherwise, and osv-scanner emits UTF-8. A single byte it
+    # cannot map kills the reader thread mid-scan, so the encoding is named
+    # explicitly and undecodable bytes are replaced rather than raised --
+    # losing one character beats losing the whole scan.
+    result = subprocess.run(
+        command, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
     if result.returncode not in (0, 1):
         if "No package sources found" in result.stderr:
             return {

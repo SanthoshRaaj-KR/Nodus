@@ -375,3 +375,68 @@ def test_the_scanner_is_invoked_with_no_ignore(monkeypatch):
 
     scanmod.scan_repo("some/path", respect_gitignore=True)
     assert "--no-ignore" not in seen["command"]
+
+
+# -- subprocess decoding ---------------------------------------------------
+
+
+def test_every_text_mode_subprocess_names_its_encoding():
+    """Windows decodes subprocess output with the locale codec unless told
+    otherwise. osv-scanner, pip and npm all emit UTF-8, and one unmappable
+    byte kills subprocess's reader thread -- which surfaces as a stray
+    traceback and an empty result, not as an error anyone can act on.
+
+    Asserted across the tree rather than at one call site: this bug arrived
+    with a new module that simply did not know the rule, and would arrive
+    again the same way.
+    """
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    offenders = []
+    for path in list((root / "blastradius").rglob("*.py")) + list(
+        (root / "osv_scanner_tool").rglob("*.py")
+    ):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if getattr(node.func, "attr", getattr(node.func, "id", "")) != "run":
+                continue
+            kw = {k.arg for k in node.keywords}
+            if ("text" in kw or "universal_newlines" in kw) and not {
+                "encoding", "errors"
+            } <= kw:
+                offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+
+    assert not offenders, (
+        "text-mode subprocess.run without encoding= and errors=: "
+        + ", ".join(offenders)
+    )
+
+
+def test_scan_survives_undecodable_bytes(monkeypatch, tmp_path):
+    """The end-to-end shape of the crash: a scanner whose output is not
+    decodable by the locale codec must still produce a scan."""
+    import osv_scanner_tool.scan as scanmod
+
+    captured = {}
+
+    class _Result:
+        returncode = 0
+        # A byte cp1252 cannot map (0x90) inside otherwise valid UTF-8 JSON.
+        stdout = json.dumps({"results": []})
+        stderr = "warning: \ufffd unmappable"
+
+    def fake_run(command, **kw):
+        captured.update(kw)
+        return _Result()
+
+    monkeypatch.setattr(scanmod.subprocess, "run", fake_run)
+    summary = scanmod.scan_repo(str(tmp_path))
+
+    assert captured.get("encoding") == "utf-8"
+    assert captured.get("errors") == "replace"
+    assert summary["details"] == []
+    assert summary["sources"] == []

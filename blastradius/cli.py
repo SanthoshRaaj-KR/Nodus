@@ -523,6 +523,16 @@ def cmd_osv_scan(args) -> int:
     """
     from .pkg import osvscan
 
+    # The repo path is checked here rather than by catching FileNotFoundError
+    # around the whole scan. Catching it there attributed *any* missing file
+    # -- an output directory that vanished mid-write, a temp file pulled from
+    # under us -- to the argument the user typed, and printed "no such
+    # directory: <your repo>" about a directory that plainly exists. An error
+    # that names the wrong cause costs more time than no error at all.
+    if not Path(args.repo).is_dir():
+        _suggest_paths(args.repo)
+        return 2
+
     try:
         run = osvscan.scan_repository(
             args.repo,
@@ -532,12 +542,15 @@ def cmd_osv_scan(args) -> int:
             include_python=args.python,
             verbose=not args.quiet,
         )
-    except FileNotFoundError:
-        _suggest_paths(args.repo)
-        return 2
     except RuntimeError as exc:
         print()
         print(RED(str(exc)), file=sys.stderr)
+        print()
+        return 2
+    except OSError as exc:
+        print()
+        print(RED(f"  the scan could not complete: {exc}"), file=sys.stderr)
+        print(DIM("  (this is a filesystem error, not a problem with the repo path)"))
         print()
         return 2
 
@@ -750,7 +763,8 @@ def cmd_doctor(args) -> int:
     node_exe = shutil.which("node")
     if node_exe:
         version = subprocess.run(
-            [node_exe, "--version"], capture_output=True, text=True
+            [node_exe, "--version"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         ).stdout.strip()
         print(f"  node            : {GREEN(version)}")
     else:
@@ -774,7 +788,8 @@ def cmd_doctor(args) -> int:
     scanner = osv_scanner_available()
     if scanner:
         version = subprocess.run(
-            [scanner, "--version"], capture_output=True, text=True
+            [scanner, "--version"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
         ).stdout.splitlines()
         print(f"  osv-scanner     : {GREEN(version[0] if version else 'installed')}")
     else:
