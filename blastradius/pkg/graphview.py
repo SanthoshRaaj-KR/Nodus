@@ -58,6 +58,28 @@ MAX_DRAWN_POSSIBLE = 30
 MAX_DRAWN_RELATED = 24
 
 
+def _severity_of(advisory: dict) -> str:
+    """The advisory's severity word, or "" when nothing rated it.
+
+    HydraDB answers an unwritten property with ``{"type": "null"}`` rather
+    than a missing key, so a graph written before `severity` existed on the
+    label hands back a dict here. Anything that is not a usable word is
+    treated as unrated -- which it is.
+    """
+    raw = advisory.get("severity")
+    if not isinstance(raw, str):
+        return ""
+    raw = raw.strip().lower()
+    return "" if raw in ("", "unknown", schema.UNKNOWN_STR.lower()) else raw
+
+
+def _advisory_subtitle(advisory: dict) -> str:
+    severity = _severity_of(advisory)
+    vector = advisory.get("cvss_vector")
+    vector = vector if isinstance(vector, str) and vector.strip() else "no vector"
+    return f"{severity.upper()} - {vector}" if severity else vector
+
+
 def _fmt_ts(value: Any) -> str:
     """Epoch seconds -> a date, or a word where the sentinel means something."""
     try:
@@ -155,10 +177,12 @@ def package_graph(
         nodes.append({
             "id": nid, "layer": 0, "kind": "advisory",
             "label": advisory.get("advisory_id") or "ADVISORY",
-            # The score is deliberately absent: the OSV rows carry a vector and
-            # an empty score, and showing a number nobody computed would be
-            # worse than showing none.
-            "sub": advisory.get("cvss_vector") or "no vector",
+            # The numeric score is deliberately absent -- the OSV rows carry
+            # a vector and an empty score, and a number nobody computed is
+            # worse than none. The qualitative label is real, though: it comes
+            # straight from the feed, so it leads.
+            "sub": _advisory_subtitle(advisory),
+            "severity": _severity_of(advisory),
             "hot": False,
             "conf": Confidence.MEDIUM,
             "why": [Evidence.KNOWN_VULNERABILITY],

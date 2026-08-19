@@ -2,6 +2,7 @@
 
     python -m blastradius.pkg.cli corpus  --count 24
     python -m blastradius.pkg.cli ingest  --osv ../osv_scan_results.csv
+    python -m blastradius.pkg.cli ingest  --osv-scan ../my-app   # scan, then ingest
     python -m blastradius.pkg.cli simulate lodash@4.17.21
     python -m blastradius.pkg.cli compare lodash@4.17.21
     python -m blastradius.pkg.cli bench
@@ -68,6 +69,21 @@ def cmd_corpus(args) -> int:
 def cmd_ingest(args) -> int:
     client = _client(args)
     _require_node(client)
+
+    osv_csv = args.osv
+    if args.osv_scan:
+        # Scan first, then ingest what it found. Handing this command a repo
+        # instead of a CSV is the difference between "the advisories somebody
+        # wrote down" and "the advisories this code actually has".
+        from .osvscan import scan_repository
+
+        run = scan_repository(args.osv_scan, verbose=True)
+        print("\n" + RULE)
+        print(run.render())
+        print(RULE)
+        osv_csv = run.csv_path if run.findings else None
+        run.write_log(Path(run.csv_path).parent / "scan-log.md")
+
     ids = IdAllocator(args.ids)
     config = IngestConfig(
         versions_per_package=args.versions_per_package,
@@ -76,7 +92,7 @@ def cmd_ingest(args) -> int:
         detect_typosquats=not args.no_typosquat,
     )
     report = ingest(
-        client, ids, corpus=args.corpus, osv_csv=args.osv,
+        client, ids, corpus=args.corpus, osv_csv=osv_csv,
         registry=RegistryClient(offline=args.offline), config=config,
     )
     print("\n" + RULE)
@@ -300,6 +316,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("ingest", help="load the corpus into HydraDB")
     p.add_argument("--osv", default=None, help="OSV scan CSV")
+    p.add_argument("--osv-scan", default=None, metavar="REPO",
+                   help="scan REPO for vulnerabilities first, then ingest what it found")
     p.add_argument("--versions-per-package", type=int, default=3)
     p.add_argument("--max-satisfied-by", type=int, default=8)
     p.add_argument("--abbreviated", action="store_true",

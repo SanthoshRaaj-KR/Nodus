@@ -549,6 +549,11 @@ def ingest(
                 summary=advisory.summary[:200],
                 cvss_vector=advisory.cvss_vector,
                 severity_score=advisory.severity_score,
+                # The qualitative label, kept beside the (still underived)
+                # numeric score. A scanned advisory usually carries one and
+                # nothing else rates it, so dropping it would leave every
+                # finding in the graph unranked.
+                severity=advisory.severity_label or "unknown",
                 published=advisory.published, modified=advisory.modified,
                 source=config.source_osv, ingested_at=now,
             )

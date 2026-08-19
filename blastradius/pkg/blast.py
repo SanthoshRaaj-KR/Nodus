@@ -481,6 +481,7 @@ class BlastRadiusEngine:
             "MATCH (a:Advisory)-[e:AFFECTS]->(v:PackageVersion {id: $id}) "
             "RETURN a.advisory_id AS advisory_id, a.summary AS summary, "
             "a.cvss_vector AS cvss_vector, a.severity_score AS severity_score, "
+            "a.severity AS severity, "
             "e.fixed_version AS fixed_version",
             id=version_id,
         )

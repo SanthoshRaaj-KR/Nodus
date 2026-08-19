@@ -73,8 +73,13 @@ NODE_PROPS: dict[str, tuple[str, ...]] = {
     schema.ORGANIZATION: ("key", "name", "kind", "source", "ingested_at"),
     schema.PUBLISHER: ("key", "username", "email", "source", "ingested_at"),
     schema.ADVISORY: (
+        # `severity` is the qualitative label the feed published; the numeric
+        # `severity_score` is still underived from the vector. Both are kept
+        # because they are different claims, and a reader offered only the
+        # sentinel score would think the advisory was unrated.
         "key", "advisory_id", "aliases", "summary", "cvss_vector",
-        "severity_score", "published", "modified", "source", "ingested_at",
+        "severity", "severity_score", "published", "modified",
+        "source", "ingested_at",
     ),
     schema.INCIDENT: (
         "key", "incident_id", "status", "summary", "live_from", "live_until",

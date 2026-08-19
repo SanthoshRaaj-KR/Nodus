@@ -41,7 +41,32 @@ __all__ = [
     "load_osv_csv",
     "parse_timestamp",
     "AliasResolver",
+    "SEVERITY_RANK",
+    "severity_rank",
 ]
+
+
+# --------------------------------------------------------------------------
+# Severity labels
+# --------------------------------------------------------------------------
+
+#: The vocabulary OSV actually uses, ranked so two rows describing the same
+#: advisory can be merged without a tie-break argument. "medium" and
+#: "moderate" are the same rung under two names -- GHSA says one, several CVE
+#: mirrors say the other.
+SEVERITY_RANK: dict[str, int] = {
+    "critical": 4,
+    "high": 3,
+    "moderate": 2,
+    "medium": 2,
+    "low": 1,
+    "": 0,
+}
+
+
+def severity_rank(label: str | None) -> int:
+    """Rank a severity word. Anything unrecognised ranks below "low"."""
+    return SEVERITY_RANK.get((label or "").strip().lower(), 0)
 
 
 # --------------------------------------------------------------------------
@@ -154,6 +179,11 @@ class Finding:
     summary: str
     cvss_vector: str
     severity_score: float | None
+    #: The qualitative label OSV carries in ``database_specific.severity``
+    #: ("HIGH", "MODERATE", ...). It arrives in the ``severity_score`` column,
+    #: which is numeric for some feeds and a label for others; the reader keeps
+    #: whichever form it got rather than discarding the one it cannot cast.
+    severity_label: str
     fixed_version: str
     published: int
     modified: int
@@ -184,6 +214,8 @@ class Advisory:
     #: shown today would be invented. Until then this stays at the sentinel and
     #: the UI shows the vector rather than a number nobody computed.
     severity_score: float = float(schema.UNKNOWN_SCORE)
+    #: Worst label seen across the merged rows. Empty when no feed gave one.
+    severity_label: str = ""
     published: int = schema.UNKNOWN_TS
     modified: int = schema.UNKNOWN_TS
     references: set[str] = field(default_factory=set)
@@ -207,6 +239,11 @@ class Advisory:
             self.cvss_vector = finding.cvss_vector
         if finding.severity_score is not None:
             self.severity_score = finding.severity_score
+        # Worst wins. Two rows for one advisory can disagree when they came
+        # from different feeds, and under-reporting severity is the direction
+        # that costs someone an incident.
+        if severity_rank(finding.severity_label) > severity_rank(self.severity_label):
+            self.severity_label = finding.severity_label
         if finding.published and self.published in (schema.UNKNOWN_TS,):
             self.published = finding.published
         # Newest modification wins; there is no max() aggregate downstream, so
@@ -313,11 +350,22 @@ def load_osv_csv(path: str | Path, normalize_npm_names: bool = True) -> OsvScan:
                     scan.skipped.append((line_no, f"{package}: {exc}"))
                     continue
 
+            # One column, two shapes. osv-scanner copies
+            # ``database_specific.severity`` here, which is a number for some
+            # feeds and a word ("HIGH") for GHSA imports. Casting blind threw
+            # the label away and left every scanned advisory unrated.
             raw_score = (row.get("severity_score") or "").strip()
             try:
                 score = float(raw_score) if raw_score else None
             except ValueError:
                 score = None
+            label = "" if score is not None else raw_score.strip().lower()
+            if label and label not in SEVERITY_RANK:
+                # An unrecognised word is not a severity; keeping it would put
+                # an unranked string in front of a reader as though it meant
+                # something.
+                scan.skipped.append((line_no, f"{package}: unknown severity {raw_score!r}"))
+                label = ""
 
             aliases = _split_aliases(row.get("aliases"))
             finding = Finding(
@@ -330,6 +378,7 @@ def load_osv_csv(path: str | Path, normalize_npm_names: bool = True) -> OsvScan:
                 summary=(row.get("summary") or "").strip(),
                 cvss_vector=(row.get("cvss_vector") or "").strip(),
                 severity_score=score,
+                severity_label=label,
                 fixed_version=(row.get("fixed_version") or "").strip(),
                 published=parse_timestamp(row.get("published")),
                 modified=parse_timestamp(row.get("modified")),

@@ -71,20 +71,34 @@ cd scanner; npm install; cd ..        # ts-morph, once
 python -m blastradius.cli doctor      # checks every prerequisite, names the fix
 python -m blastradius.cli up          # start the HydraDB container
 
-# Two ingests, because the two views read different tiers.
-python -m blastradius.cli ingest                # code graph + lockfile tier -> Micro
-python -m blastradius.pkg.cli ingest --offline  # package tier               -> Macro
+# Scan a repository for real vulnerabilities and build both tiers from it.
+python -m blastradius.cli pipeline corpus --reset
 
 python -m blastradius.cli status      # both tiers should be non-zero
 python -m blastradius.cli ui          # Blast Radius Explorer, port 8100
 ```
 
-**Both ingests are required.** They populate different halves of the graph and
-neither backfills the other: `blastradius.cli ingest` builds the code graph and
-the lockfile tier the Micro view walks, and `blastradius.pkg.cli ingest` builds
-the package tier — declared ranges, lockfile resolutions, maintainer and
-repository identity — that the Macro view queries. Run only the first and the
-Explorer opens on an empty Macro tab with no targets to pick.
+`pipeline` is the whole build: it scans the repository with `osv-scanner`,
+writes the advisories it found, ingests the code graph and the package tier
+from that same path, and prints where the time went. See
+[Where the vulnerabilities come from](#where-the-vulnerabilities-come-from).
+
+The three steps it wraps are still there, and are what to reach for when you
+want to rebuild one tier without the others:
+
+```powershell
+python -m blastradius.cli osv-scan corpus       # advisories only, no graph writes
+python -m blastradius.cli ingest                # code graph + lockfile tier -> Micro
+python -m blastradius.pkg.cli ingest --offline  # package tier               -> Macro
+```
+
+**Both ingests are required**, which is why `pipeline` runs them together. They
+populate different halves of the graph and neither backfills the other:
+`blastradius.cli ingest` builds the code graph and the lockfile tier the Micro
+view walks, and `blastradius.pkg.cli ingest` builds the package tier — declared
+ranges, lockfile resolutions, maintainer and repository identity — that the
+Macro view queries. Run only the first and the Explorer opens on an empty Macro
+tab with no targets to pick.
 
 `--offline` reads `data/registry-cache/`, which is committed, so the ingest is
 reproducible with the network off. Drop the flag to refresh from npm.
@@ -405,10 +419,73 @@ Base list: `../hydradb/cypher-compat.md`.
 
 ---
 
+## Where the vulnerabilities come from
+
+They are scanned, not written down. `osv_scanner_tool/` drives Google's
+`osv-scanner` over a repository, and `blastradius/pkg/osvscan.py` turns what it
+finds into the two inputs the graph already consumes:
+
+| Output | Consumer | What it makes dynamic |
+|---|---|---|
+| `data/osv/<repo>/osv_scan_results.csv` | `blastradius/pkg/osv.py` → package tier | `Advisory` nodes and `AFFECTS` edges — the Macro view's threat column |
+| `advisories/generated/*.json` | `blastradius/query/advisory.py` → micro tier | `cli advisory`, `cli check` and the one-click chips in both UIs |
+
+Writing both is the point: they feed different tiers, and a scan that populated
+only one would leave half the tool still hardcoded. The hand-written samples in
+`advisories/` stay where they are — generated files live in the `generated/`
+subdirectory and are cleared and rewritten on every scan, so the two never
+fight.
+
+```powershell
+# Scan only: writes the CSV, the advisory JSON, and a timed log report.
+python -m blastradius.cli osv-scan corpus
+
+# Scan and rebuild both tiers from that one repository, end to end.
+python -m blastradius.cli pipeline corpus --reset
+```
+
+`pipeline` is the one to reach for. The three commands it replaces —
+`osv-scan`, `cli ingest`, `pkg.cli ingest` — all have to agree on *which*
+repository they are talking about, and running them against different paths
+gives you a graph whose vulnerabilities describe somebody else's code. It also
+times every stage and writes `pipeline-log.md` beside the CSV, which is the
+only place the end-to-end cost is measured rather than estimated.
+
+Scanning the fleet corpus takes about **17 s** all in, and the scan itself is
+a tenth of it:
+
+| Stage | Seconds | Share |
+|---|---:|---:|
+| preflight | 0.12 | 0.7% |
+| reset (drop store, clear id map, restart) | 2.94 | 17.2% |
+| osv scan (12 lockfiles → 14 findings → 8 advisories) | 1.78 | 10.5% |
+| code graph ingest (ts-morph) | 8.24 | 48.4% |
+| package tier ingest | 3.56 | 20.9% |
+| verify | 0.39 | 2.3% |
+
+The scanner is a Go binary, so a machine without the toolchain cannot
+pip-install its way out of a missing one. `doctor` reports it as a warning
+rather than a failure, because the scan falls back to resolving the lockfiles
+locally and asking `api.osv.dev` about the exact resolved versions — same
+advisories, one network hop, and `--engine` forces either path when you want to
+compare them. To install the real thing:
+
+```powershell
+go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest
+```
+
+**Ground truth is the resolved version, never the manifest.** An unpinned range
+in `package.json` resolves to whatever is newest — which is usually the *safe*
+version — so scanning manifests reports vulnerabilities in versions nobody
+installs and misses the ones they do. The scan reads `package-lock.json`, which
+already is a resolved graph, and the generated advisories name exact versions
+rather than a synthesised range for the same reason.
+
 ## The advisory contract
 
 Advisory discovery is the other half of the team. They produce this, we consume
-it — samples live in `advisories/`:
+it — and it is the same shape `osvscan.py` emits, so a scanned advisory and a
+hand-written one are interchangeable. Samples live in `advisories/`:
 
 ```json
 {
@@ -438,6 +515,10 @@ resolved against the versions we actually hold (`blastradius/query/advisory.py`)
 ```
 hydra.ps1                    node lifecycle + query CLI
 scanner/scan.mjs             ts-morph AST scanner -> micro graph JSON
+osv_scanner_tool/            osv-scanner + OSV API wrappers, dependency resolver
+  scan.py                    repo -> osv-scanner -> finding rows
+  deps.py                    resolved dependency graph (pip report / lockfile)
+  enrich.py                  OSV + registry metadata for a resolved graph
 blastradius/
   schema.py                  labels, edge types, id blocks, sentinels
   ids.py                     persisted key -> id allocator (data/ids.sqlite)
@@ -447,6 +528,10 @@ blastradius/
     bridge.py                ExternalImport -> PackageVersion
     persistence.py           .claude/ .vscode/ IOC scan
     load.py                  orchestration, closure, batched writes
+  pkg/
+    osvscan.py               scan a repo -> the CSV + advisory JSON, timed
+    osv.py                   the CSV contract, alias merge (union-find)
+    ingest.py                lockfiles + registry + advisories -> package tier
   query/
     advisory.py              semver ranges -> exact PackageVersion keys
     blast.py                 Q1..Q5 and the severity composition
@@ -454,6 +539,8 @@ blastradius/
   api/static/index.html      single-page UI, self-contained
 corpus/                      target repos
 advisories/                  the teammate contract, as files
+  generated/                 written by osv-scan, cleared on every run
+data/osv/<repo>/             scan CSV + timing log per scanned repository
 tests/test_oracle.py         graph answer == brute-force answer
 ```
 

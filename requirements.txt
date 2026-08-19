@@ -3,3 +3,6 @@ fastapi>=0.115
 uvicorn[standard]>=0.32
 # Optional: only needed if you switch the loader to the Bolt transport.
 # neo4j>=5.26
+# Version and requirement parsing for the dependency resolver in
+# osv_scanner_tool/, which the OSV API fallback path walks.
+packaging>=23.0

@@ -109,11 +109,25 @@ def graph(mode: str = "micro"):
     return payload
 
 
+def _advisory_files() -> list[Path]:
+    """Every advisory on disk: hand-written samples plus scanned ones.
+
+    ``advisories/generated/`` is written by `blastradius.cli osv-scan` from a
+    real repository scan, and it is searched recursively so a regenerated set
+    replaces itself wholesale without disturbing the samples beside it.
+    Scanned advisories sort first: they describe the repository in the graph,
+    while the samples describe a scenario.
+    """
+    generated = sorted((ADVISORIES / "generated").glob("*.json"))
+    handwritten = sorted(ADVISORIES.glob("*.json"))
+    return generated + handwritten
+
+
 @app.get("/api/advisories")
 def advisories():
     """Advisory files on disk become the one-click chips in the header."""
     out = []
-    for path in sorted(ADVISORIES.glob("*.json")):
+    for path in _advisory_files():
         raw = json.loads(path.read_text(encoding="utf-8"))
         advisory = Advisory.from_dict(raw)
 
@@ -139,6 +153,10 @@ def advisories():
                 "query": query,
                 "range": advisory.affected_range,
                 "file": path.name,
+                # Where the chip came from, so a demo can say "this is your
+                # repo" rather than "this is our sample".
+                "source": raw.get("source", "sample"),
+                "scanned_repo": raw.get("scanned_repo", ""),
             }
         )
     return out

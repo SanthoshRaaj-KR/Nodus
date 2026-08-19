@@ -23,6 +23,10 @@ from .hydra_client import HydraClient, HydraError
 from .query import blast
 from .query.advisory import Advisory
 
+#: Default home for advisories generated from a live scan. Named here rather
+#: than in the parser so `osv-scan` and `pipeline` cannot disagree about it.
+DEFAULT_ADVISORY_DIR = Path(__file__).resolve().parent.parent / "advisories" / "generated"
+
 # ANSI, switched off when stdout is redirected so piped output stays clean.
 _TTY = sys.stdout.isatty()
 
@@ -502,6 +506,345 @@ def cmd_scan(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# Live vulnerability data
+# --------------------------------------------------------------------------
+
+
+def cmd_osv_scan(args) -> int:
+    """Scan a repository for real vulnerabilities and write both graph inputs.
+
+    This is what makes the vulnerable half of the graph dynamic. Before it,
+    the only things marking a version were three hand-written advisory files
+    and a `simulate` command that names a package by hand -- neither of which
+    says anything about the code being scanned.
+    """
+    from .pkg import osvscan
+
+    try:
+        run = osvscan.scan_repository(
+            args.repo,
+            out_dir=args.out,
+            advisory_dir=None if args.no_advisories else args.advisories,
+            engine=args.engine,
+            include_python=args.python,
+            verbose=not args.quiet,
+        )
+    except FileNotFoundError:
+        _suggest_paths(args.repo)
+        return 2
+    except RuntimeError as exc:
+        print()
+        print(RED(str(exc)), file=sys.stderr)
+        print()
+        return 2
+
+    print()
+    print(rule("OSV SCAN"))
+    print(run.render())
+
+    log_path = Path(args.log) if args.log else Path(run.csv_path).parent / "scan-log.md"
+    run.write_log(log_path)
+    print()
+    print(f"  log report      {log_path}")
+    print(f"  machine report  {log_path.with_suffix('.json')}")
+
+    if run.findings:
+        print()
+        print("  Feed it to the package tier:")
+        # --corpus is a global option on that parser, so it goes before the
+        # subcommand. Printing it the other way round hands over a command
+        # that fails with an argparse error rather than an ingest.
+        print(GREEN(
+            f"    python -m blastradius.pkg.cli --corpus {args.repo} ingest "
+            f"--osv {run.csv_path}"
+        ))
+    else:
+        print()
+        print(GREEN("  No known vulnerabilities in the versions this repo resolves."))
+    print()
+    return 0
+
+
+def cmd_pipeline(args) -> int:
+    """Scan one repository and rebuild the whole graph from it, timed.
+
+    The three commands this replaces -- osv-scan, ingest, pkg ingest -- have
+    to agree on which repository they are talking about, and running them
+    against different paths yields a graph whose vulnerabilities describe
+    somebody else's code. Doing it in one pass makes that impossible to get
+    wrong, and it is the only place the end-to-end cost is measured.
+    """
+    import time
+
+    from .ids import IdAllocator
+    from .ingest.load import ingest_corpus
+    from .pkg import osvscan
+    from .pkg.cli import DEFAULT_IDS
+    from .pkg.ingest import IngestConfig
+    from .pkg.ingest import ingest as pkg_ingest
+    from .pkg.registry import RegistryClient
+
+    repo = Path(args.repo)
+    if not repo.is_dir():
+        _suggest_paths(args.repo)
+        return 2
+    repo = repo.resolve()
+
+    started = time.time()
+    wall = time.perf_counter()
+    steps: list = []
+
+    def stage(name: str, fn):
+        print()
+        print(rule(name))
+        start = time.perf_counter()
+        try:
+            value, detail = fn()
+        except BaseException:
+            steps.append(osvscan.Step(name, time.perf_counter() - start, "FAILED"))
+            raise
+        elapsed = time.perf_counter() - start
+        steps.append(osvscan.Step(name, elapsed, detail))
+        print(DIM(f"  -> {elapsed:.2f}s  {detail}"))
+        return value
+
+    client = HydraClient(base_url=args.url)
+
+    # -- 1. preflight ------------------------------------------------------
+
+    def preflight():
+        from . import node
+
+        if not node.daemon_ready():
+            raise RuntimeError(
+                "Docker is not reachable. Start Docker Desktop, then retry."
+            )
+        if not node.readyz():
+            raise RuntimeError("HydraDB is not up. Run: python -m blastradius.cli up")
+        engine = osvscan.osv_scanner_available() or "api.osv.dev (binary not installed)"
+        print(f"  node            : {GREEN('ready')}")
+        print(f"  scanner         : {engine}")
+        return None, "node ready"
+
+    try:
+        stage("preflight", preflight)
+    except RuntimeError as exc:
+        print()
+        print(RED(f"  {exc}"), file=sys.stderr)
+        print()
+        return 2
+
+    # -- 2. reset ----------------------------------------------------------
+
+    if args.reset:
+
+        def do_reset():
+            from . import node
+
+            node.wipe(verbose=False)
+            node.up(wait=90, verbose=False)
+            ids_db = Path(__file__).resolve().parent.parent / "data" / "ids.sqlite"
+            for leftover in ids_db.parent.glob("ids.sqlite*"):
+                leftover.unlink()
+            return None, "store dropped, id map cleared, node back up"
+
+        stage("reset", do_reset)
+
+    # -- 3. scan -----------------------------------------------------------
+
+    def do_scan():
+        run = osvscan.scan_repository(
+            repo,
+            out_dir=args.out,
+            advisory_dir=None if args.no_advisories else args.advisories,
+            engine=args.engine,
+            include_python=args.python,
+            verbose=not args.quiet,
+        )
+        return run, (
+            f"{run.findings} finding(s), {run.advisories} advisory(ies) "
+            f"via {run.engine}"
+        )
+
+    scan_run = stage("osv scan", do_scan)
+    # The scan's own stages are kept rather than collapsed: when the pipeline
+    # is slow it is almost always inside this one, and a single line reading
+    # "scan: 40s" does not say which half.
+    steps.extend(
+        osvscan.Step(f"  scan: {s.name}", s.seconds, s.detail) for s in scan_run.steps
+    )
+
+    # -- 4. code graph + lockfile tier -------------------------------------
+
+    if not args.skip_micro:
+
+        def do_micro():
+            with IdAllocator() as ids:
+                report = ingest_corpus(repo, client, ids, verbose=not args.quiet)
+            return report, (
+                f"{sum(report.nodes.values()):,} nodes, "
+                f"{sum(report.edges.values()):,} edges"
+            )
+
+        stage("code graph ingest", do_micro)
+
+    # -- 5. package tier, with the scan attached ---------------------------
+
+    def do_macro():
+        ids = IdAllocator(str(DEFAULT_IDS))
+        try:
+            report = pkg_ingest(
+                client,
+                ids,
+                corpus=repo,
+                osv_csv=scan_run.csv_path if scan_run.findings else None,
+                registry=RegistryClient(offline=args.offline),
+                config=IngestConfig(
+                    fetch_full_metadata=not args.abbreviated,
+                    detect_typosquats=not args.no_typosquat,
+                ),
+                verbose=not args.quiet,
+            )
+        finally:
+            ids.close()
+        return report, (
+            f"{report.versions:,} versions, {report.advisories:,} advisories, "
+            f"{report.closure_edges:,} closure edges"
+        )
+
+    pkg_report = stage("package tier ingest", do_macro)
+
+    # -- 6. verify it landed -----------------------------------------------
+
+    def verify():
+        counts = client.counts_by_label(schema.ALL_NODE_LABELS)
+        try:
+            affects = len(
+                client.query(
+                    "MATCH (a:Advisory)-[:AFFECTS]->(v:PackageVersion) "
+                    "RETURN a.advisory_id AS advisory_id, v.key AS key"
+                ).rows
+            )
+        except HydraError:
+            affects = 0
+        return (counts, affects), (
+            f"{counts.get(schema.ADVISORY, 0):,} Advisory nodes, "
+            f"{affects:,} AFFECTS edges"
+        )
+
+    counts, affects = stage("verify", verify)
+    elapsed = time.perf_counter() - wall
+
+    # -- 7. the report -----------------------------------------------------
+
+    print()
+    print(rule("PIPELINE"))
+    print()
+    print(osvscan.render_steps(steps, elapsed))
+    print()
+
+    if counts.get(schema.ADVISORY, 0) == 0:
+        print(YELLOW("  No Advisory nodes landed. Either the repo has no known"))
+        print(YELLOW("  vulnerabilities, or the scanned versions are not the ones"))
+        print(YELLOW("  the lockfiles resolved -- check the scan log."))
+    else:
+        print(
+            f"  {GREEN(str(counts[schema.ADVISORY]) + ' advisories')} now sit on "
+            f"{affects} package version(s), from a live scan of"
+        )
+        print(f"  {repo}")
+        print()
+        print("  Try:")
+        for spec, _rows in scan_run.top[:3]:
+            print(GREEN(f"    python -m blastradius.pkg.cli simulate {spec}"))
+        print(GREEN("    python -m blastradius.cli ui"))
+
+    log_path = (
+        Path(args.log)
+        if args.log
+        else Path(scan_run.csv_path).parent / "pipeline-log.md"
+    )
+    _write_pipeline_log(
+        log_path, repo, scan_run, pkg_report, counts, affects, steps, elapsed, started
+    )
+    print()
+    print(f"  log report      {log_path}")
+    print(f"  machine report  {log_path.with_suffix('.json')}")
+    print()
+    return 0
+
+
+def _write_pipeline_log(
+    path, repo, scan_run, pkg_report, counts, affects, steps, elapsed, started
+) -> None:
+    """Both shapes of the same run: a table to read, JSON to diff."""
+    import time as _time
+
+    from .pkg import osvscan
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stamp = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(started))
+    body = [
+        "# Blast Radius pipeline log",
+        "",
+        f"generated {stamp}",
+        "",
+        f"- repository: `{repo}`",
+        f"- scanner engine: `{scan_run.engine}`",
+        f"- findings: {scan_run.findings:,} rows -> {scan_run.advisories:,} "
+        f"advisories after alias merge",
+        f"- Advisory nodes in graph: {counts.get(schema.ADVISORY, 0):,}",
+        f"- AFFECTS edges: {affects:,}",
+        "",
+        "## Timing",
+        "",
+        "```",
+        osvscan.render_steps(steps, elapsed),
+        "```",
+        "",
+        "## Scan detail",
+        "",
+        "```",
+        scan_run.render(),
+        "```",
+        "",
+        "## Graph contents",
+        "",
+        "| label | nodes |",
+        "|---|---:|",
+    ]
+    body += [f"| {label} | {n:,} |" for label, n in counts.items() if n]
+    body += ["", "## Package tier", "", "```", pkg_report.render(), "```", ""]
+    path.write_text("\n".join(body), encoding="utf-8")
+
+    path.with_suffix(".json").write_text(
+        json.dumps(
+            {
+                "repo": str(repo),
+                "started_at": started,
+                "elapsed_s": round(elapsed, 3),
+                "scan": scan_run.to_dict(),
+                "graph_counts": {k: v for k, v in counts.items() if v},
+                "advisory_nodes": counts.get(schema.ADVISORY, 0),
+                "affects_edges": affects,
+                "steps": [
+                    {
+                        "name": s.name.strip(),
+                        "seconds": round(s.seconds, 4),
+                        "detail": s.detail,
+                    }
+                    for s in steps
+                ],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def cmd_serve(args) -> int:
     import uvicorn
 
@@ -580,6 +923,24 @@ def cmd_doctor(args) -> int:
     else:
         print(f"  ts-morph        : {RED('missing')}  {DIM('cd scanner && npm install')}")
         ok = False
+
+    # The scanner is a Go binary, so a machine without the toolchain cannot
+    # pip-install its way out. Missing is a downgrade, not a failure: the scan
+    # falls back to api.osv.dev and says so, which is why this does not clear
+    # `ok`.
+    from .pkg.osvscan import osv_scanner_available
+
+    scanner = osv_scanner_available()
+    if scanner:
+        version = subprocess.run(
+            [scanner, "--version"], capture_output=True, text=True
+        ).stdout.splitlines()
+        print(f"  osv-scanner     : {GREEN(version[0] if version else 'installed')}")
+    else:
+        print(f"  osv-scanner     : {YELLOW('not found')}  "
+              f"{DIM('scans fall back to api.osv.dev')}")
+        print(DIM("                    go install github.com/google/osv-scanner/"
+                  "v2/cmd/osv-scanner@latest"))
 
     for module in ("fastapi", "uvicorn"):
         try:
@@ -663,6 +1024,44 @@ def main(argv: list[str] | None = None) -> int:
     ing.add_argument("--corpus", default="corpus")
     ing.add_argument("--quiet", action="store_true")
     ing.set_defaults(func=cmd_ingest)
+
+    def _scan_flags(p):
+        """Flags shared by osv-scan and pipeline, so the two cannot drift."""
+        p.add_argument("--out", default=None,
+                       help="where the CSV lands (default data/osv/<repo>/)")
+        p.add_argument("--advisories", default=str(DEFAULT_ADVISORY_DIR),
+                       help="where the generated advisory JSON lands")
+        p.add_argument("--no-advisories", action="store_true",
+                       help="write the CSV only, leave the UI chips alone")
+        p.add_argument("--engine", choices=("auto", "binary", "api"), default="auto",
+                       help="auto uses osv-scanner if installed, else api.osv.dev")
+        p.add_argument("--python", action="store_true",
+                       help="also resolve requirements.txt with pip (slow)")
+        p.add_argument("--log", default=None, help="path for the log report")
+        p.add_argument("--quiet", action="store_true")
+
+    osv = sub.add_parser("osv-scan",
+                         help="scan a repo for real vulnerabilities (no graph writes)")
+    osv.add_argument("repo", help="path to the repository to scan")
+    _scan_flags(osv)
+    osv.set_defaults(func=cmd_osv_scan)
+
+    pipe = sub.add_parser(
+        "pipeline",
+        help="scan one repo and rebuild both graph tiers from it, timed",
+    )
+    pipe.add_argument("repo", help="path to the repository to scan and ingest")
+    _scan_flags(pipe)
+    pipe.add_argument("--reset", action="store_true",
+                      help="empty the graph and id map first")
+    pipe.add_argument("--skip-micro", action="store_true",
+                      help="package tier only, skip the ts-morph call graph")
+    pipe.add_argument("--offline", action="store_true",
+                      help="package tier reads only data/registry-cache/")
+    pipe.add_argument("--abbreviated", action="store_true",
+                      help="skip maintainer/repository metadata (much faster)")
+    pipe.add_argument("--no-typosquat", action="store_true")
+    pipe.set_defaults(func=cmd_pipeline)
 
     srv = sub.add_parser("serve", help="run the assessment API + simple UI")
     srv.add_argument("--port", type=int, default=8000)

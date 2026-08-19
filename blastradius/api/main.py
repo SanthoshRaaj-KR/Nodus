@@ -59,9 +59,16 @@ def health() -> dict:
 def list_advisories() -> list[dict]:
     """The sample advisories on disk -- the teammate contract, as files."""
     out = []
-    for path in sorted(ADVISORIES.glob("*.json")):
+    # Scanned advisories first -- `blastradius.cli osv-scan` writes them into
+    # generated/ from a real repository, and they are the ones that describe
+    # the graph currently loaded. The samples below them describe a scenario.
+    paths = sorted((ADVISORIES / "generated").glob("*.json")) + sorted(
+        ADVISORIES.glob("*.json")
+    )
+    for path in paths:
         raw = json.loads(path.read_text(encoding="utf-8"))
         raw["_file"] = path.name
+        raw.setdefault("source", "sample")
         out.append(raw)
     return out
 
