@@ -45,7 +45,15 @@ $AdminAddr = 'http://127.0.0.1:9090'
 $Graph     = 'default'
 $Cell      = 'cell-0'
 
-$Labels = @('Service', 'PackageVersion', 'File', 'Function', 'ExternalImport', 'Route', 'PersistenceArtifact')
+# Every label blastradius writes -- schema.ALL_NODE_LABELS, in the same order.
+# The package tier used to be missing here, which made `reset` silently
+# partial: it cleared the code graph and left Advisory/Package/PackageVersion
+# behind, so the next ingest merged fresh nodes into stale ones.
+$Labels = @(
+  'Service', 'PackageVersion', 'File', 'Function', 'ExternalImport', 'Route',
+  'PersistenceArtifact', 'Package', 'Lockfile', 'LockfileEntry', 'Maintainer',
+  'Repository', 'Organization', 'PublisherIdentity', 'Advisory', 'Incident'
+)
 
 function Test-Daemon {
   docker version --format '{{.Server.Version}}' 2>$null | Out-Null
@@ -110,7 +118,11 @@ function Start-Node {
 function Invoke-Hydra {
   param([string]$Statement, [string]$JsonParams, [switch]$Raw)
 
-  $body = @{ cell_id = $Cell; query = $Statement; timeout_ms = 60000 }
+  # 25s, not 60s: the node's admission control rejects any client-declared
+  # runtime over 30000ms outright ("client_query_runtime_ms rejected by
+  # admission control"), so a 60000 here fails *every* query, including the
+  # counts printed by `status`. Matches DEFAULT_TIMEOUT_MS in hydra_client.py.
+  $body = @{ cell_id = $Cell; query = $Statement; timeout_ms = 25000 }
   if ($JsonParams) { $body.parameters = ($JsonParams | ConvertFrom-Json) }
   if ($Consistency -ne 'causal') { $body.consistency = $Consistency }
 

@@ -19,6 +19,7 @@ from blastradius.pkg.identity import (
     package_key,
     parse_purl,
     repository_key,
+    service_key,
     split_scope,
     version_key,
 )
@@ -189,3 +190,60 @@ def test_maintainer_falls_back_to_email():
 
 def test_organization_key_folds_scope_marker():
     assert organization_key("@angular") == organization_key("angular")
+
+
+# --------------------------------------------------------------------------
+# The two-tier key agreement. This is the guard on the defect that made the
+# whole product look broken: `ingest/` and `pkg/` both write `PackageVersion`
+# and `Service` nodes, ids are allocated per (label, natural_key), so the
+# moment the two tiers disagree about a key the graph grows a second,
+# unconnected node for the same thing. Advisories then land on one copy and
+# the dependency tree plus the code-graph bridge on the other, and
+#
+#     MATCH (:Advisory)-[:AFFECTS]->(v:PackageVersion)<-[:RESOLVES_TO]-(:ExternalImport)
+#
+# returns nothing, with no error anywhere to say why.
+# --------------------------------------------------------------------------
+
+
+def test_both_tiers_key_package_versions_alike():
+    """The lockfile loader must key exactly as `pkg/identity` does."""
+    from blastradius.ingest.lockfile import PackageVersion as LockPV
+
+    for name, version in [
+        ("lodash", "4.17.21"),
+        ("@babel/core", "7.27.4"),
+        ("vite", "6.3.6"),
+        ("LoDash", "4.17.21"),
+    ]:
+        assert LockPV(name=name, version=version).key == version_key(name, version)
+
+
+def test_lockfile_key_is_a_purl():
+    from blastradius.ingest.lockfile import PackageVersion as LockPV
+
+    assert LockPV(name="vite", version="6.3.6").key == "pkg:npm/vite@6.3.6"
+    assert (
+        LockPV(name="@babel/core", version="7.27.4").key
+        == "pkg:npm/%40babel/core@7.27.4"
+    )
+
+
+def test_both_tiers_key_services_alike():
+    """`Service` split the same way: 'project' vs 'svc:project'."""
+    import inspect
+
+    from blastradius.ingest import load as ingest_load
+    from blastradius.pkg import ingest as pkg_ingest
+
+    for module in (ingest_load, pkg_ingest):
+        source = inspect.getsource(module)
+        assert "service_key(" in source, (
+            f"{module.__name__} must key Service nodes through "
+            f"identity.service_key, not a local f-string"
+        )
+        assert 'f"svc:{service}"' not in source, (
+            f"{module.__name__} still builds a Service key inline"
+        )
+
+    assert service_key("web") == service_key(" WEB ")

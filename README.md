@@ -238,8 +238,8 @@ Traversal was never the problem. Unpinned sweeps are ~100x slower than pinned
 traversals and dominated everything, so both fixes target those:
 
 - **Names resolve locally.** `held_versions` was a label scan, because there is
-  no index behind `p.name`. `data/ids.sqlite` already maps `name@version -> id`
-  and SQLite indexes it -- 0.02 ms instead of 36 ms. Candidates are then
+  no index behind `p.name`. `data/ids.sqlite` already maps the canonical purl
+  (`pkg:npm/lodash@4.17.21`) `-> id` and SQLite indexes it -- 0.02 ms instead of 36 ms. Candidates are then
   confirmed against the graph in a single `UNION ALL` of pinned lookups, since
   the id map outlives the graph and would otherwise name versions that are no
   longer there.
@@ -367,6 +367,50 @@ and the evidence atoms a finding is built from — is documented separately in
 `ExternalImport` is keyed per **(service, specifier)**, not globally, because two
 services can resolve `lodash` to different versions — and that difference is
 exactly what the tool exists to surface.
+
+### One key per thing, across both tiers
+
+Both ingest paths write `PackageVersion` and `Service` nodes, and ids are
+allocated per `(label, natural_key)`. So the *key function* is a correctness
+boundary, not a formatting choice: `blastradius/ingest/` and `blastradius/pkg/`
+both go through `pkg/identity.py` (`version_key`, `package_key`, `service_key`),
+and neither may build a key inline.
+
+They once disagreed — `vite@6.3.6` from the lockfile loader against
+`pkg:npm/vite@6.3.6` from the package tier — and the result was two
+unconnected nodes for every package version in the repo. Advisories attached to
+one copy; the dependency tree and the `RESOLVES_TO` bridge attached to the
+other. Nothing errored, no count looked wrong, and
+
+```
+MATCH (:Advisory)-[:AFFECTS]->(v:PackageVersion)<-[:RESOLVES_TO]-(:ExternalImport)
+```
+
+returned zero rows, so the product reported a clean bill of health for a repo
+with 96 published advisories in it. `tests/test_identity.py` and
+`tests/test_exposure.py` hold the guards.
+
+### Exposure is one model, read by both views
+
+`blastradius/query/exposure.py` walks the package tree, the bridge and the code
+graph as a **single** edge set, backwards from every version an advisory names,
+and grades each node it reaches:
+
+```
+heat = severity_base - hops * DECAY
+```
+
+Both `/api/pkg/project` and `/api/graph?mode=micro` read that one model, so the
+two tabs cannot disagree about the same CVE. It is walked as one set rather than
+two because a module rarely imports the vulnerable package itself — this repo
+imports `react-router-dom`, which is clean, while the thirteen advisories sit on
+`react-router` one hop below it. Two separate walks stop at the bridge and call
+that file safe.
+
+The UI draws `heat` directly: green where nothing reaches a node, then yellow,
+orange and red as it climbs. Severity decides where a node starts on the ramp
+and distance walks it down, so a critical two hops out still outranks a low one
+at the source.
 
 ---
 
@@ -582,6 +626,8 @@ blastradius/
   query/
     advisory.py              semver ranges -> exact PackageVersion keys
     blast.py                 Q1..Q5 and the severity composition
+    exposure.py              severity x distance heat, shared by both views
+    graphview.py             the code view, ranked by real call depth
   api/main.py                FastAPI
   api/static/index.html      single-page UI, self-contained
 corpus/                      target repos
@@ -589,6 +635,7 @@ advisories/                  the teammate contract, as files
   generated/                 written by osv-scan, cleared on every run
 data/osv/<repo>/             scan CSV + timing log per scanned repository
 tests/test_oracle.py         graph answer == brute-force answer
+tests/test_exposure.py       the heat model, and that advisories reach code
 ```
 
 ---

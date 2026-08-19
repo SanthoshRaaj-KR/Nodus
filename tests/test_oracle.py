@@ -27,6 +27,7 @@ from blastradius.hydra_client import HydraClient, HydraError  # noqa: E402
 from blastradius.ids import IdAllocator  # noqa: E402
 from blastradius.ingest.lockfile import parse_package_lock, resolve_dep  # noqa: E402
 from blastradius.ingest.load import Loader  # noqa: E402
+from blastradius.pkg.identity import parse_purl, version_key  # noqa: E402
 from blastradius.query.advisory import Advisory, satisfies  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "package-lock.json"
@@ -91,8 +92,12 @@ def _bruteforce_closure(lock_path: Path) -> set[str]:
             version = entry.get("version")
             if not version:
                 continue
-            key = f"{entry.get('name') or target.rsplit('node_modules/', 1)[-1]}@{version}"
-            seen.add(key)
+            # The resolution above is deliberately an independent
+            # re-implementation; the *key* is not -- it goes through the same
+            # canonical function the parser uses, so this compares reachability
+            # rather than string formatting.
+            name = entry.get("name") or target.rsplit("node_modules/", 1)[-1]
+            seen.add(version_key(name, version))
             if target not in visited_paths:
                 visited_paths.add(target)
                 stack.append(target)
@@ -152,7 +157,7 @@ def test_advisory_matches_only_affected():
     # 0.7.28 is clean, 0.7.29 and 0.8.0 are the compromised releases, 0.8.1 is
     # the fix. Only the middle two may come back.
     held = ["0.7.28", "0.7.29", "0.8.0", "0.8.1"]
-    assert advisory.keys_among(held) == ["ua-parser-js@0.7.29", "ua-parser-js@0.8.0"]
+    assert advisory.keys_among(held) == ["pkg:npm/ua-parser-js@0.7.29", "pkg:npm/ua-parser-js@0.8.0"]
 
 
 def test_semver_boundaries():
@@ -191,18 +196,24 @@ def test_graph_exposure_matches_bruteforce():
         service = parse_package_lock(lock_path, repo=lock_path.parent.name)
         expected = _bruteforce_closure(lock_path)
 
+        checked = 0
         for key in sorted(expected):
-            name, _, version = key.rpartition("@")
+            parsed = parse_purl(key)
+            name, version = parsed.name, parsed.version
             held = blast.held_versions(client, name)
             ids = [h["id"] for h in held if h["version"] == version]
-            if not ids:
-                continue
+            assert ids, (
+                f"{key} is in {lock_path} by brute force but no PackageVersion "
+                f"node holds it -- the id map and the graph disagree"
+            )
+            checked += 1
             services = {r["service"] for r in blast.exposed_services(client, ids)}
             service_names = set(service.services.values())
             assert service_names & services, (
                 f"{key} is in {lock_path} by brute force but the graph does not "
                 f"report any of {service_names} as exposed"
             )
+        assert checked, f"{lock_path}: nothing was actually checked"
 
 
 @live

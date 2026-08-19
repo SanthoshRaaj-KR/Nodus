@@ -29,6 +29,7 @@ __all__ = [
     "split_scope",
     "package_key",
     "version_key",
+    "service_key",
     "parse_purl",
     "normalize_repo_url",
     "repository_key",
@@ -116,6 +117,22 @@ def version_key(name: str, version: str) -> str:
     if not isinstance(version, str) or not version.strip():
         raise InvalidPackageName(f"empty version for package {name!r}")
     return f"{package_key(name)}@{version.strip()}"
+
+
+def service_key(name: str) -> str:
+    """Canonical key for a deployable unit, e.g. ``svc:web``.
+
+    Both ingest tiers write ``Service`` nodes -- the lockfile loader in
+    ``blastradius/ingest/load.py`` and the package tier in
+    ``blastradius/pkg/ingest.py`` -- and they must agree, for exactly the
+    reason spelled out on :func:`version_key`. A service name is a human
+    label, not an npm name, so it is only stripped and lowercased; the ``svc:``
+    prefix keeps it out of any other key space sharing the allocator.
+    """
+    text = (name or "").strip()
+    if not text:
+        raise InvalidPackageName("empty service name")
+    return f"svc:{text.lower()}"
 
 
 @dataclass(frozen=True)

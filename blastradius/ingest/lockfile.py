@@ -18,6 +18,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..pkg.identity import InvalidPackageName, version_key
+
 
 @dataclass(frozen=True)
 class PackageVersion:
@@ -31,7 +33,18 @@ class PackageVersion:
 
     @property
     def key(self) -> str:
-        return f"{self.name}@{self.version}"
+        """Canonical purl, e.g. ``pkg:npm/vite@6.3.6``.
+
+        This is the *same* function the package tier keys on
+        (:func:`blastradius.pkg.identity.version_key`), and it must stay that
+        way. Ids are allocated per ``(label, natural_key)``, so the moment the
+        two tiers disagree about the key for one package version, the graph
+        grows a second unconnected ``PackageVersion`` node for it: advisories
+        land on one copy, the dependency tree and the code-graph bridge on the
+        other, and no query can cross between them. See
+        ``tests/test_identity.py::test_both_tiers_key_alike``.
+        """
+        return version_key(self.name, self.version)
 
 
 @dataclass
@@ -43,19 +56,21 @@ class ParsedLock:
     lock_version: int
     #: workspace-relative path -> service name. A single-package repo has one.
     services: dict[str, str] = field(default_factory=dict)
-    #: "name@version" -> PackageVersion
+    #: purl -> PackageVersion
     packages: dict[str, PackageVersion] = field(default_factory=dict)
-    #: (service name, "name@version", dev) -- the repo's direct dependencies
+    #: (service name, purl, dev) -- the repo's direct dependencies
     direct: set[tuple[str, str, bool]] = field(default_factory=set)
-    #: (parent "name@version", child "name@version") -- transitive edges
+    #: (parent purl, child purl) -- transitive edges
     edges: set[tuple[str, str]] = field(default_factory=set)
-    #: package name -> "name@version" for the hoisted top-level copy. A
+    #: package name -> purl for the hoisted top-level copy. A
     #: service's own source resolves from the repo root, so this is the version
     #: an `import "lodash"` in application code actually loads -- which is not
     #: necessarily the version some nested dependency sees.
     root_level: dict[str, str] = field(default_factory=dict)
     #: dependency names that no entry satisfied, for the ingest report
     unresolved: set[str] = field(default_factory=set)
+    #: entries whose name could not be normalised into a key, for the report
+    unkeyable: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         return (
@@ -63,6 +78,7 @@ class ParsedLock:
             f"{len(self.packages)} package versions, "
             f"{len(self.direct)} direct + {len(self.edges)} transitive edges"
             + (f", {len(self.unresolved)} unresolved" if self.unresolved else "")
+            + (f", {len(self.unkeyable)} unkeyable" if self.unkeyable else "")
         )
 
 
@@ -137,9 +153,18 @@ def parse_package_lock(path: Path | str, repo: str | None = None) -> ParsedLock:
                 integrity=entry.get("integrity", ""),
                 resolved=entry.get("resolved", ""),
             )
-            parsed.packages[pv.key] = pv
+            try:
+                pv_key = pv.key
+            except InvalidPackageName as exc:
+                # The key is the identity, so an entry we cannot key cannot be
+                # a node. Record it rather than dropping it silently -- the
+                # package tier skips the same rows, and a name that both tiers
+                # reject is worth seeing in the ingest report.
+                parsed.unkeyable.append(f"{entry_path}: {exc}")
+                continue
+            parsed.packages[pv_key] = pv
             if entry_path == f"node_modules/{pv.name}":
-                parsed.root_level[pv.name] = pv.key
+                parsed.root_level[pv.name] = pv_key
 
     # Pass 2: walk every entry's declared dependencies and resolve each one to
     # the exact tree entry that satisfies it.
@@ -166,7 +191,16 @@ def parse_package_lock(path: Path | str, repo: str | None = None) -> ParsedLock:
             version = target.get("version")
             if not version:
                 continue
-            child_key = f"{target.get('name') or name_from_path(target_path)}@{version}"
+            # Both keys go through `version_key`, never an inline f-string.
+            # `parsed.packages` is keyed by purl, so a hand-built
+            # "name@version" here matches nothing and every edge is silently
+            # dropped -- the lockfile parses, the counts look plausible, and
+            # the dependency tree simply does not exist.
+            child_name = target.get("name") or name_from_path(target_path)
+            try:
+                child_key = version_key(child_name, version)
+            except InvalidPackageName:
+                continue
             if child_key not in parsed.packages:
                 continue
 
@@ -178,7 +212,13 @@ def parse_package_lock(path: Path | str, repo: str | None = None) -> ParsedLock:
                     )
             else:
                 parent = entry.get("name") or name_from_path(entry_path)
-                parent_key = f"{parent}@{entry.get('version')}"
+                parent_version = entry.get("version")
+                if not parent_version:
+                    continue
+                try:
+                    parent_key = version_key(parent, parent_version)
+                except InvalidPackageName:
+                    continue
                 if parent_key in parsed.packages and parent_key != child_key:
                     parsed.edges.add((parent_key, child_key))
 

@@ -38,9 +38,16 @@ from typing import Any
 from .. import schema
 from ..hydra_client import HydraClient, HydraError
 from ..ids import IdAllocator
+from ..query.exposure import full_exposure
 from .blast import BlastRadiusEngine, Confidence, Evidence
 
-__all__ = ["package_graph", "suggested_targets", "COLUMNS"]
+__all__ = [
+    "package_graph",
+    "project_graph",
+    "suggested_targets",
+    "COLUMNS",
+    "PROJECT_COLUMNS",
+]
 
 COLUMNS = [
     "THREAT",
@@ -278,23 +285,41 @@ def package_graph(
     meta = result.metadata
     nodes.append({
         "id": target_id, "layer": 1,
-        "kind": "compromised" if compromised else "subject",
+        # The browser derives its seed set from `kind == "compromised"`, so an
+        # advisory-only finding produced no seed and lost the CVE badge and the
+        # pulse. Anything flagged is a seed.
+        "kind": "compromised" if flagged else "subject",
         "label": result.target,
         "sub": "published " + _fmt_ts(meta.get("published_at"))
                + (" - install hook" if meta.get("has_install_script") else ""),
         "pkg": meta.get("name", name),
         "version": meta.get("version", version),
-        "hot": compromised,
-        "conf": Confidence.CERTAIN if compromised else Confidence.LOW,
-        "flag": "COMPROMISED" if compromised else None,
-        "why": [Evidence.DIRECTLY_COMPROMISED] if compromised else [],
-        "neg": [] if compromised else ["no incident names this exact version"],
+        # `flagged`, not `compromised`. This node is the *subject* -- the
+        # version the advisories in column 0 point at -- so marking it only for
+        # a simulated incident meant a real scanned CVE drew its own target in
+        # the cool "subject" hue while every node downstream of it was hot.
+        # Worse, a non-empty hot set dims everything outside it, so the one
+        # genuinely vulnerable package rendered at 34% opacity: the faintest
+        # thing on a screen full of red. The advisory node one column left was
+        # already fixed for exactly this reason; the fix stopped one node short.
+        "hot": flagged,
+        "conf": Confidence.CERTAIN if compromised else (
+            Confidence.HIGH if flagged else Confidence.LOW
+        ),
+        "flag": "COMPROMISED" if compromised else ("VULNERABLE" if flagged else None),
+        "why": (
+            [Evidence.DIRECTLY_COMPROMISED] if compromised
+            else ([Evidence.KNOWN_VULNERABILITY] if flagged else [])
+        ),
+        "neg": [] if flagged else ["nothing in the graph marks this version"],
         "verdict": (
             "Compromised - a simulated incident names this exact version"
             if compromised else
+            "Vulnerable - a published advisory names this exact version"
+            if flagged else
             "Under review - nothing in the graph marks this version"
         ),
-        "alarm": compromised,
+        "alarm": flagged,
         "file": "node_modules/" + str(meta.get("name", name)),
         "detail": "licence " + str(meta.get("license") or "unknown"),
     })
@@ -523,6 +548,240 @@ def package_graph(
             }
             for f in result.findings
         ],
+    }
+
+
+# ==========================================================================
+# The project-wide view
+# ==========================================================================
+# `package_graph` above answers "tell me about this one version". That is the
+# right question once you already know which version to ask about, and the
+# wrong one when you have just scanned a repo and want to know what is wrong
+# with it. This view answers the second question: the project, everything its
+# lockfile resolves that is exposed to a published advisory, and the dependency
+# chain carrying the exposure back to the project.
+#
+# Layers are dependency depth, so the drawing reads left to right as "the
+# project, its direct dependencies, and how far down the tree the problem
+# lives". Heat runs the other way -- hottest on the right, at the advisory --
+# cooling as it climbs back toward the project. That is the blast radius drawn
+# in the direction it actually travels.
+
+PROJECT_COLUMNS = [
+    "PROJECT",
+    "DIRECT DEPENDENCIES",
+    "DEPTH 2",
+    "DEPTH 3",
+    "DEPTH 4",
+    "DEPTH 5+",
+]
+
+#: Depth beyond this is folded into the last column. A real npm tree is deeper
+#: than any column strip, and a node's exact depth is still on the node.
+MAX_LAYER = 5
+
+#: Clean direct dependencies are drawn so the healthy majority is visible --
+#: an all-green graph is a result, not an empty one. Deeper clean packages are
+#: not: 774 nodes is a wall, and a clean transitive dependency four levels down
+#: is not something anyone is looking at.
+MAX_CLEAN_DIRECT = 40
+
+
+def project_graph(client: HydraClient, ids: IdAllocator) -> dict:
+    """Every exposed package in the project, and how the exposure reaches it."""
+    started = dt.datetime.now()
+
+    model = full_exposure(client)
+
+    services = client.query(
+        "MATCH (s:Service) RETURN s.id AS id, s.name AS name, s.repo AS repo"
+    ).rows
+    resolved = client.query(
+        "MATCH (v:PackageVersion)-[e:PRESENT_IN]->(s:Service) "
+        "RETURN v.id AS id, v.name AS name, v.version AS version, "
+        "e.depth AS depth, e.dev AS dev, e.direct AS direct, s.id AS service"
+    ).rows
+    tree = client.query(
+        "MATCH (a:PackageVersion)-[:DEPENDS_ON]->(b:PackageVersion) "
+        "RETURN a.id AS src, b.id AS dst"
+    ).rows
+    roots = client.query(
+        "MATCH (s:Service)-[:DEPENDS_ON]->(v:PackageVersion) "
+        "RETURN s.id AS src, v.id AS dst"
+    ).rows
+    advisories = client.query(
+        "MATCH (a:Advisory)-[:AFFECTS]->(v:PackageVersion) "
+        "RETURN v.id AS version_id, a.advisory_id AS advisory_id, "
+        "a.severity AS severity, a.summary AS summary"
+    ).rows
+
+    by_version: dict[int, list[dict]] = {}
+    for row in advisories:
+        by_version.setdefault(row["version_id"], []).append(row)
+
+    meta = {row["id"]: row for row in resolved}
+
+    # -- decide what is worth drawing --------------------------------------
+    # Everything the exposure model touched, plus enough clean context that a
+    # healthy project does not render as a blank page.
+    visible: set[int] = {node_id for node_id in model.heat if node_id in meta}
+    clean_direct = [
+        row["id"] for row in resolved
+        if row.get("direct") and row["id"] not in visible
+    ]
+    clean_direct.sort(key=lambda i: (meta[i].get("name") or ""))
+    visible.update(clean_direct[:MAX_CLEAN_DIRECT])
+
+    def layer_for(node_id: int) -> int:
+        depth = meta.get(node_id, {}).get("depth")
+        if not isinstance(depth, int) or depth < 1:
+            depth = 1
+        return min(depth, MAX_LAYER)
+
+    nodes: list[dict] = []
+    edges: list[list[str]] = []
+
+    for service in services:
+        sid = "svc:" + str(service["id"])
+        hit = model.heat.get(service["id"])
+        nodes.append({
+            "id": sid, "layer": 0, "kind": "exposed" if hit else "service",
+            "label": service.get("name") or "project",
+            "sub": service.get("repo") or "",
+            "heat": round(hit.heat, 4) if hit else 0.0,
+            "hops": hit.hops if hit else -1,
+            "severity": hit.severity if hit else "",
+            "vuln": bool(hit),
+            "vulnSource": hit.source if hit else "",
+            "advisory": hit.advisory if hit else "",
+            "hot": bool(hit),
+            "conf": Confidence.CERTAIN if hit else Confidence.LOW,
+            "flag": "EXPOSED" if hit else None,
+            "alarm": bool(hit),
+            "verdict": (
+                f"Exposed - {hit.source} is in this project's dependency tree"
+                if hit else "No advisory reaches this project"
+            ),
+            "file": service.get("repo") or "",
+            "detail": "",
+        })
+
+    for node_id in sorted(visible, key=lambda i: (layer_for(i), meta[i].get("name") or "")):
+        row = meta[node_id]
+        hit = model.heat.get(node_id)
+        own = by_version.get(node_id) or []
+        worst_own = max(
+            (_severity_of(a) for a in own),
+            key=lambda w: _SEVERITY_ORDER.get(w, 0),
+            default="",
+        )
+        label = f"{row.get('name')}@{row.get('version')}"
+        seeded = bool(own)
+        nodes.append({
+            "id": "pv:" + str(node_id),
+            "layer": layer_for(node_id),
+            # `compromised` is the seed kind the browser badges; a package with
+            # its own advisory is the origin of a radius, not a passenger in it.
+            "kind": "compromised" if seeded else ("exposed" if hit else "resolution"),
+            "label": label,
+            "sub": (
+                f"{len(own)} advisory(ies) - {worst_own or 'unrated'}"
+                if seeded else
+                f"depth {row.get('depth')}"
+                + (" - dev only" if row.get("dev") else "")
+                + (f" - via {hit.source}" if hit else "")
+            ),
+            "pkg": row.get("name"),
+            "version": row.get("version"),
+            "heat": round(hit.heat, 4) if hit else 0.0,
+            "hops": hit.hops if hit else -1,
+            "severity": hit.severity if hit else "",
+            "vuln": bool(hit),
+            "vulnSource": hit.source if hit else "",
+            "advisory": hit.advisory if hit else "",
+            "hot": bool(hit),
+            "conf": (
+                Confidence.CERTAIN if seeded
+                else Confidence.HIGH if hit
+                else Confidence.LOW
+            ),
+            "flag": (
+                (worst_own or "advisory").upper() if seeded
+                else "IN RADIUS" if hit else None
+            ),
+            "why": (
+                [Evidence.KNOWN_VULNERABILITY] if seeded
+                else [Evidence.TRANSITIVELY_EXPOSED] if hit else []
+            ),
+            "neg": [] if hit else ["no advisory reaches this version"],
+            "alarm": seeded,
+            "verdict": (
+                f"{len(own)} published advisory(ies) name this exact version"
+                if seeded else
+                f"In the blast radius of {hit.source}, {hit.hops} hop(s) away"
+                if hit else
+                "Resolved by the lockfile; no advisory reaches it"
+            ),
+            "file": "node_modules/" + str(row.get("name")),
+            "detail": "; ".join(
+                f"{a['advisory_id']}: {(a.get('summary') or '')[:90]}" for a in own[:4]
+            ),
+        })
+
+    drawn = {"pv:" + str(i) for i in visible}
+    for row in roots:
+        dst = "pv:" + str(row["dst"])
+        if dst in drawn:
+            edges.append(["svc:" + str(row["src"]), dst])
+    for row in tree:
+        src, dst = "pv:" + str(row["src"]), "pv:" + str(row["dst"])
+        if src in drawn and dst in drawn:
+            edges.append([src, dst])
+
+    worst = model.worst()
+    exposed_nodes = [n for n in nodes if n["vuln"]]
+    return {
+        "mode": "package",
+        "view": "project",
+        "cols": PROJECT_COLUMNS,
+        "nodes": nodes,
+        "edges": _dedupe(edges),
+        "serverHot": True,
+        "exists": bool(nodes),
+        "target": ", ".join(s.get("name") or "project" for s in services),
+        "compromised": False,
+        "verdict": {
+            "level": (worst.severity if worst else "clean"),
+            "severity": (worst.severity if worst else ""),
+            "headline": (
+                f"{len(model.seeds)} vulnerable package version(s)"
+                if model.seeds else "No known vulnerabilities"
+            ),
+            "reach": f"{len(exposed_nodes)} node(s) in the blast radius",
+            "advisory_ids": sorted(
+                {row["advisory_id"] for row in advisories if row["version_id"] in meta}
+            ),
+            "fixed_versions": [],
+            "exposed": [s.get("name") or "project" for s in services],
+            "compromised": False,
+        },
+        "exposure": {
+            "exposed": len(exposed_nodes),
+            "total": len(nodes),
+            "worst": worst.as_dict() if worst else None,
+            "advisories": len(model.seeds),
+        },
+        "stats": {
+            "vulnerable_versions": len(model.seeds),
+            "in_radius": len(exposed_nodes),
+            "resolved_versions": len(meta),
+            "drawn": len(nodes),
+            "query_ms": round(
+                (dt.datetime.now() - started).total_seconds() * 1000, 1
+            ),
+            "queries": [],
+        },
+        "findings": [],
     }
 
 

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import schema
+from ..pkg.identity import version_key
 
 _VERSION = re.compile(
     r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$"
@@ -175,7 +176,12 @@ class Advisory:
         return False
 
     def keys_among(self, held_versions: list[str]) -> list[str]:
-        """``name@version`` keys, from the versions we hold, that are affected.
+        """``PackageVersion`` keys, from the versions we hold, that are affected.
+
+        These are purls (``pkg:npm/lodash@4.17.20``) because that is what the
+        graph keys ``PackageVersion`` on -- see
+        :func:`blastradius.pkg.identity.version_key`. Returning a bare
+        ``name@version`` here would look right and match nothing.
 
         ``held_versions`` is every version of this package present anywhere in
         the corpus. Restricting to what we hold keeps the id list small and
@@ -183,5 +189,5 @@ class Advisory:
         two.
         """
         return [
-            f"{self.package}@{v}" for v in held_versions if self.matches(v)
+            version_key(self.package, v) for v in held_versions if self.matches(v)
         ]

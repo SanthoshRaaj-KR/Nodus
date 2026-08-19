@@ -346,8 +346,63 @@ const KIND = {
   exposed:    { hue: 265, label: 'exposed project' },
   related:    { hue: 320, label: 'related by identity only' }
 };
-const HOT = 'oklch(0.7 0.2 25)';
 const col = (h, l, c) => `oklch(${l} ${c} ${h})`;
+const cola = (h, l, c, a) => `oklch(${l} ${c} ${h} / ${a})`;
+
+/* A kind the server emits but this table does not know would otherwise throw
+   inside the render loop and blank the whole canvas. An unknown kind is a
+   missing legend entry, not a reason to show nothing. */
+const KIND_FALLBACK = { hue: 265, label: 'unclassified' };
+const kindOf = (n) => KIND[n && n.kind] || KIND_FALLBACK;
+
+/* ------------------------------------------------------------------ */
+/* the heat ramp — green when clean, red at the CVE, graded outward    */
+/* ------------------------------------------------------------------ */
+/* `heat` arrives from the server already combining both inputs the grading
+   needs: severity sets where a node starts on the ramp, and distance from the
+   advisory walks it down (blastradius/query/exposure.py). So a critical CVE
+   two hops away still outranks a low one at the source, which is the judgement
+   being asked for -- and which neither input alone can express.
+
+   The scale is deliberately not a traffic light with four buckets. Buckets
+   make two nodes one hop apart look identical, and the whole point of the
+   drawing is that distance is visible. Hue runs continuously from red at the
+   source to yellow at the edge of the radius, and clean nodes leave the ramp
+   entirely for green: "nothing reaches this" is a different statement from
+   "barely reaches this", and they should not be neighbouring shades. */
+const HUE_CLEAN = 150;   /* green  — no advisory reaches this node */
+const HUE_HOT   = 25;    /* red    — the advisory names this node  */
+const HUE_COOL  = 85;    /* yellow — the far edge of the radius    */
+
+function ramp(heat) {
+  const t = Math.max(0, Math.min(1, Number(heat) || 0));
+  if (t <= 0) {
+    return {
+      t: 0, hue: HUE_CLEAN,
+      accent: col(HUE_CLEAN, 0.74, 0.11),
+      ring:   cola(HUE_CLEAN, 0.74, 0.11, 0.14),
+      bg: `linear-gradient(140deg, ${col(HUE_CLEAN, 0.27, 0.035)} 0%, oklch(0.21 0.02 200) 100%)`,
+      border: col(HUE_CLEAN, 0.40, 0.05),
+      shadow: '0 4px 16px oklch(0.12 0.02 265 / 0.45)',
+      text:   col(HUE_CLEAN, 0.86, 0.08)
+    };
+  }
+  const hue = HUE_COOL + (HUE_HOT - HUE_COOL) * t;
+  return {
+    t, hue,
+    accent: col(hue, 0.70 + 0.04 * t, 0.10 + 0.12 * t),
+    ring:   cola(hue, 0.70, 0.10 + 0.12 * t, (0.12 + 0.10 * t).toFixed(2)),
+    bg: `linear-gradient(140deg, ${col(hue, 0.24 + 0.07 * t, 0.03 + 0.07 * t)} 0%, ${col(hue, 0.20 + 0.03 * t, 0.02 + 0.04 * t)} 100%)`,
+    border: col(hue, 0.40 + 0.22 * t, 0.05 + 0.13 * t),
+    shadow: t > 0.6
+      ? `0 8px 28px ${cola(hue, 0.55, 0.19, 0.35)}`
+      : '0 4px 16px oklch(0.12 0.02 265 / 0.45)',
+    text: col(hue, 0.90, 0.06 + 0.06 * t)
+  };
+}
+
+/* The nodes a viewer should look at first: on the ramp at all, hottest down. */
+const heatOf = (n) => (n && Number(n.heat)) || 0;
 
 const NW = 214, NH = 58, COLW = 300, ROWG = 22, TOP = 68;
 const MIN_ZOOM = 0.3, MAX_ZOOM = 1.6;
@@ -385,14 +440,24 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
 /* ------------------------------------------------------------------ */
 /* layout — same column maths as the design                            */
 /* ------------------------------------------------------------------ */
-function layout(visible, allLayers) {
+function layout(visible, allLayers, edges) {
   // Every layer keeps its column header even when nothing in it is drawn: an
   // empty HTTP ROUTES column is a finding, not a rendering gap.
   const byLayer = {};
   allLayers.forEach((l) => { byLayer[l] = []; });
   visible.forEach((n) => { (byLayer[n.layer] = byLayer[n.layer] || []).push(n); });
   const layers = allLayers;
-  if (!layers.length) return { pos: {}, H: 200, W: 400, layers: [], byLayer };
+  if (!layers.length) return { pos: {}, H: 200, W: 400, layers: [], byLayer, slotOf: {} };
+
+  // Columns pack against each other rather than sitting at `layer * COLW`.
+  // A layer nobody occupies -- a React app has no HTTP routes, so layers 1
+  // and 2 are empty -- would otherwise leave a 600px hole in the middle of
+  // the drawing with no header over it to explain itself.
+  const slotOf = {};
+  layers.forEach((l, i) => { slotOf[l] = i; });
+
+  orderWithinLayers(layers, byLayer, edges);
+
   const pos = {};
   const maxCount = Math.max(1, ...layers.map((l) => byLayer[l].length));
   // +90 leaves room for the "+N more" pill beneath the longest column.
@@ -402,12 +467,65 @@ function layout(visible, allLayers) {
     // similar count, but a real application has ~4 routes against ~170
     // functions -- and centring then pushes the short columns entirely off
     // screen, hiding exactly the entry points the view exists to show.
-    // Columns are indexed by declared layer, so an empty column still lines
-    // up with its header.
-    byLayer[l].forEach((n, i) => { pos[n.id] = { x: l * COLW, y: TOP + i * (NH + ROWG) }; });
+    byLayer[l].forEach((n, i) => {
+      pos[n.id] = { x: slotOf[l] * COLW, y: TOP + i * (NH + ROWG) };
+    });
   });
-  const W = Math.max(...layers) * COLW + NW;
-  return { pos, H, W, layers, byLayer };
+  const W = (layers.length - 1) * COLW + NW;
+  return { pos, H, W, layers, byLayer, slotOf };
+}
+
+/**
+ * Order the rows inside each column so the wires between them stop crossing.
+ *
+ * Without this the vertical position of a node is whatever order HydraDB
+ * happened to return it in, so a child is never near its parent and the edge
+ * bundle is a uniform mesh -- the single biggest reason the code graph did not
+ * read as a hierarchy even once the columns were right.
+ *
+ * The median heuristic (Eades & Wells): a node wants to sit level with the
+ * median of the nodes it connects to in the column beside it. Sweeping
+ * forwards then backwards a few times converges quickly and cheaply; it does
+ * not minimise crossings optimally, which is NP-hard and not worth it here.
+ * Nodes with no neighbour in the reference column keep their previous
+ * position, so an unconnected node does not get flung to the top.
+ */
+function orderWithinLayers(layers, byLayer, edges) {
+  if (!edges || layers.length < 2) return;
+  const out = {}, inn = {};
+  edges.forEach(([a, b]) => {
+    (out[a] = out[a] || []).push(b);
+    (inn[b] = inn[b] || []).push(a);
+  });
+
+  const median = (node, adj, indexOf) => {
+    const rows = (adj[node.id] || [])
+      .map((id) => indexOf[id])
+      .filter((v) => v !== undefined)
+      .sort((x, y) => x - y);
+    return rows.length ? rows[(rows.length - 1) >> 1] : null;
+  };
+
+  const sweep = (order, adj) => {
+    const indexOf = {};
+    order.forEach((l) => byLayer[l].forEach((n, i) => { indexOf[n.id] = i; }));
+    order.slice(1).forEach((l, k) => {
+      const ref = order[k];
+      const refIndex = {};
+      byLayer[ref].forEach((n, i) => { refIndex[n.id] = i; });
+      const keyed = byLayer[l].map((n, i) => {
+        const m = median(n, adj, refIndex);
+        return { n, i, m: m === null ? i : m };
+      });
+      keyed.sort((a, b) => (a.m - b.m) || (a.i - b.i));
+      byLayer[l] = keyed.map((x) => x.n);
+    });
+  };
+
+  for (let pass = 0; pass < 3; pass++) {
+    sweep(layers, inn);                    // place children under their parents
+    sweep([...layers].reverse(), out);     // then parents over their children
+  }
 }
 
 /**
@@ -445,10 +563,22 @@ function selectVisible(g, hot) {
       degree[b] = (degree[b] || 0) + 1;
     });
     keep = new Set();
+    // Anything on the heat ramp is kept unconditionally. Peeking by degree
+    // alone is a popularity contest, and it happily hid the one vulnerable
+    // package in a column of 391 well-connected healthy ones -- which is the
+    // finding the whole view exists to show. Degree then fills the rest of
+    // the column with context.
+    g.nodes.forEach((n) => { if (heatOf(n) > 0) keep.add(n.id); });
+    g.edges.forEach(([a, b]) => {
+      if (keep.has(a) || keep.has(b)) { keep.add(a); keep.add(b); }
+    });
     Object.keys(byLayer).forEach((l) => {
+      const room = PEEK - byLayer[l].filter((n) => keep.has(n.id)).length;
+      if (room <= 0) return;
       [...byLayer[l]]
+        .filter((n) => !keep.has(n.id))
         .sort((x, y) => (degree[y.id] || 0) - (degree[x.id] || 0))
-        .slice(0, PEEK)
+        .slice(0, room)
         .forEach((n) => keep.add(n.id));
     });
   }
@@ -468,23 +598,38 @@ function selectVisible(g, hot) {
 /* ------------------------------------------------------------------ */
 /* blast radius — reverse BFS from whatever matches the query          */
 /* ------------------------------------------------------------------ */
+/* Focus is not the same thing as danger, and conflating the two is what made
+   this view unable to show a vulnerability.
+
+   `heat` says how exposed a node is. It comes from the server, it is true
+   before anyone types anything, and it drives colour.
+
+   The focus set says which nodes the viewer is currently asking about. It
+   drives dimming only. Returning null means "dim nothing" -- every node is
+   drawn at full strength in its own heat colour, which is what makes an
+   all-green graph legible as a clean result rather than an empty one. */
 function hotSet(g, query) {
-  // A server-marked graph already carries the answer. Exposure there is a
-  // fact stored on an edge -- which project resolved which exact version --
-  // so re-deriving it in the browser by matching package names would put the
-  // range-only guess back in, on top of the query that exists to replace it.
-  if (g.serverHot) {
-    const marked = g.nodes.filter((n) => n.hot);
-    // Nothing marked yet: draw the graph plainly rather than dimming all of
-    // it, because an all-dim graph reads as "no data" instead of "no threat".
-    if (!marked.length) return null;
-    return {
-      hot: new Set(marked.map((n) => n.id)),
-      seeds: new Set(g.nodes.filter((n) => n.kind === 'compromised').map((n) => n.id))
-    };
-  }
   const q = (query || '').trim().toLowerCase();
-  if (!q) return null;
+
+  if (!q) {
+    // The single-version package view *is* one blast radius: the server
+    // scoped the whole graph to one target, so what it marked is the path and
+    // the rest is boundary context worth pushing back.
+    //
+    // The project view is not that. It holds the entire dependency tree, most
+    // of which is healthy, and dimming the clean majority would hide exactly
+    // the green baseline that makes "you have 21 vulnerable packages out of
+    // 774" readable at a glance.
+    if (g.serverHot && g.view !== 'project') {
+      const marked = g.nodes.filter((n) => n.hot);
+      if (!marked.length) return null;
+      return {
+        hot: new Set(marked.map((n) => n.id)),
+        seeds: new Set(g.nodes.filter((n) => n.kind === 'compromised').map((n) => n.id))
+      };
+    }
+    return null;
+  }
   const at = q.lastIndexOf('@');
   // A scoped name (@scope/pkg) has an @ at index 0 that is not a separator.
   const name = at > 0 ? q.slice(0, at) : q;
@@ -544,7 +689,15 @@ function paintVerdict(g) {
   const level = v.compromised ? 'incident' : (v.severity || (v.level === 'clean' ? 'clean' : 'advisory'));
   const badge = v.compromised ? 'SIMULATED' : (v.severity || (v.level === 'clean' ? 'clear' : 'advisory'));
   const right = [];
-  if (v.advisory_ids && v.advisory_ids.length) right.push(esc(v.advisory_ids.join(' · ')));
+  if (v.advisory_ids && v.advisory_ids.length) {
+    // Capped. The project view legitimately carries 96 advisory ids, and
+    // printing them all pushed the graph itself below the fold -- the ids are
+    // reference material, the graph is the answer.
+    const MAX_IDS = 12;
+    const ids = v.advisory_ids.slice(0, MAX_IDS);
+    const rest = v.advisory_ids.length - ids.length;
+    right.push(esc(ids.join(' · ')) + (rest > 0 ? ` <span class="fix">+${rest} more</span>` : ''));
+  }
   if (v.fixed_versions && v.fixed_versions.length) {
     right.push('<span class="fix">fixed in ' + esc(v.fixed_versions.join(', ')) + '</span>');
   }
@@ -588,14 +741,20 @@ function render() {
     return;
   }
 
-  const found = hotSet(g, state.query);
+  // The macro tab's box names a *target*, not a filter -- `state.query`
+  // belongs to the micro tab and is pre-filled at boot from the advisory
+  // chips. Passing it here made the package view dim every node that did not
+  // happen to match a query the user never typed on this tab.
+  const found = hotSet(g, state.mode === 'macro' ? '' : state.query);
   const hot = found ? found.hot : null;
   const seedIds = found ? found.seeds : new Set();
   const nodeById = {}; g.nodes.forEach((n) => { nodeById[n.id] = n; });
 
   const allLayers = [...new Set(g.nodes.map((n) => n.layer))].sort((a, b) => a - b);
   const { visible, hidden, counts } = selectVisible(g, hot);
-  const { pos, H, W, layers, byLayer } = layout(visible, allLayers);
+  const visibleIds = new Set(visible.map((n) => n.id));
+  const drawnEdges = g.edges.filter(([a, b]) => visibleIds.has(a) && visibleIds.has(b));
+  const { pos, H, W, layers, byLayer, slotOf } = layout(visible, allLayers, drawnEdges);
   if (state.autoFit) state.zoom = fitZoom(W);
 
   canvas.style.width = W + 'px';
@@ -610,9 +769,9 @@ function render() {
   g.nodes.forEach((n) => { if (!(n.layer in kindByLayer)) kindByLayer[n.layer] = n.kind; });
 
   layers.forEach((l, i) => {
-    const kind = kindByLayer[l];
-    const accent = col(KIND[kind].hue, 0.78, 0.14);
-    html += `<div class="colhead" style="left:${l * COLW}px;top:0;width:${NW}px;border-bottom:1px solid ${col(KIND[kind].hue, 0.4, 0.06)}">
+    const kh = kindOf({ kind: kindByLayer[l] }).hue;
+    const accent = col(kh, 0.78, 0.14);
+    html += `<div class="colhead" style="left:${slotOf[l] * COLW}px;top:0;width:${NW}px;border-bottom:1px solid ${col(kh, 0.4, 0.06)}">
       <div class="t" style="color:${accent}">${esc(g.cols[l] || '')}</div>
       <div class="c">${byLayer[l].length === counts[l]
         ? counts[l] + ' nodes'
@@ -620,7 +779,7 @@ function render() {
     // The graph reads left to right; a column layout with no arrows does not
     // say so on its own.
     if (i < layers.length - 1) {
-      html += `<div class="flowmark" style="left:${l * COLW + NW + 20}px;top:1px">&rsaquo;</div>`;
+      html += `<div class="flowmark" style="left:${slotOf[l] * COLW + NW + 20}px;top:1px">&rsaquo;</div>`;
     }
   });
 
@@ -633,18 +792,49 @@ function render() {
   g.edges.forEach(([a, b]) => {
     const s = pos[a], t = pos[b];
     if (!s || !t) return;
-    const isHot = hot && hot.has(a) && hot.has(b);
-    const dim = hot && !isHot;
-    if (isHot) hotEdges.push([a, b]);
-    const stroke = isHot ? HOT : col(KIND[nodeById[a].kind].hue, 0.72, 0.13);
+    const inFocus = hot && hot.has(a) && hot.has(b);
+    const dim = hot && !inFocus;
+    if (inFocus) hotEdges.push([a, b]);
+    // An edge is as hot as its cooler end. Taking the hotter end would paint
+    // the whole tree red the moment one leaf is vulnerable; the cooler end is
+    // what the exposure actually had to travel through to get here, so the
+    // wire fades in step with the nodes it joins.
+    const edgeHeat = Math.min(heatOf(nodeById[a]), heatOf(nodeById[b]));
+    const r = ramp(edgeHeat);
+    const live = edgeHeat >= 0.55;
+    const stroke = edgeHeat > 0
+      ? col(r.hue, 0.72, 0.08 + 0.10 * r.t)
+      : col(kindOf(nodeById[a]).hue, 0.72, 0.10);
     if (!markerFor.has(stroke)) markerFor.set(stroke, 'm' + markerFor.size);
-    const x1 = s.x + NW, y1 = s.y + NH / 2, y2 = t.y + NH / 2;
-    // Stop short of the card so the arrowhead lands in the gutter, not under it.
-    const x2 = t.x - 8;
-    wires += `<path d="M ${x1} ${y1} C ${x1 + 70} ${y1}, ${x2 - 70} ${y2}, ${x2} ${y2}"
-      fill="none" stroke="${stroke}" stroke-width="${isHot ? 2.4 : 1.3}" stroke-linecap="round"
-      stroke-dasharray="${isHot ? '8 8' : '0'}" marker-end="url(#${markerFor.get(stroke)})"
-      style="opacity:${isHot ? 0.95 : dim ? 0.07 : 0.34};animation:${isHot ? 'dashflow 0.75s linear infinite' : 'none'};transition:opacity 0.25s"></path>`;
+    const y1 = s.y + NH / 2, y2 = t.y + NH / 2;
+    const opacity = dim ? 0.07 : (0.3 + 0.6 * r.t);
+    const width = 1.3 + 1.3 * r.t;
+    let d;
+    if (t.x > s.x) {
+      // Forward: leave the right edge, enter the left edge. Stop short of the
+      // card so the arrowhead lands in the gutter, not under it.
+      const x1 = s.x + NW, x2 = t.x - 8;
+      d = `M ${x1} ${y1} C ${x1 + 70} ${y1}, ${x2 - 70} ${y2}, ${x2} ${y2}`;
+    } else {
+      // Same column or backwards. npm dependency depth is shortest-path from
+      // the root, so a package at depth 2 legitimately depends on another at
+      // depth 2 -- 42% of the edges in the project view are like this.
+      //
+      // Drawn forwards, such an edge runs from x+NW back to x-8: a 222px
+      // loop travelling *under* every card in the column, which is most of
+      // what made the old drawing unreadable. Arced over the top instead, so
+      // it is visible as what it is -- a sideways or upward dependency --
+      // and crosses nothing it does not have to.
+      const x1 = s.x + NW * 0.5, x2 = t.x + NW * 0.5;
+      const span = Math.abs(y2 - y1) + Math.abs(x2 - x1);
+      const bow = Math.min(TOP - 8, 26 + span * 0.14);
+      const top = Math.min(y1, y2) - bow;
+      d = `M ${x1} ${y1 - NH / 2} C ${x1} ${top}, ${x2} ${top}, ${x2} ${y2 - NH / 2}`;
+    }
+    wires += `<path d="${d}"
+      fill="none" stroke="${stroke}" stroke-width="${width}" stroke-linecap="round"
+      stroke-dasharray="${live ? '8 8' : '0'}" marker-end="url(#${markerFor.get(stroke)})"
+      style="opacity:${opacity.toFixed(2)};animation:${live && !dim ? 'dashflow 0.75s linear infinite' : 'none'};transition:opacity 0.25s"></path>`;
   });
 
   let defs = '';
@@ -655,33 +845,36 @@ function render() {
   html += `<svg id="wires" width="${W}" height="${H}"><defs>${defs}</defs>${wires}</svg>`;
 
   visible.forEach((n) => {
-    const k = KIND[n.kind], p = pos[n.id];
+    const k = kindOf(n), p = pos[n.id];
     if (!p) return;
-    const isHot = hot && hot.has(n.id);
-    const isSeed = seedIds.has(n.id);
-    const dim = hot && !isHot;
+    const heat = heatOf(n);
+    const r = ramp(heat);
+    const inFocus = hot && hot.has(n.id);
+    // A seed is a node an advisory names outright -- the origin of a radius,
+    // not a passenger in it. It keeps the pulse and the solid badge.
+    const isSeed = seedIds.has(n.id) || (n.hops === 0 && n.vuln);
+    const dim = hot && !inFocus;
     const sel = state.selected === n.id;
-    const accent = isHot ? HOT : col(k.hue, 0.78, 0.15);
-    const ring = isHot ? 'oklch(0.7 0.2 25 / 0.18)' : col(k.hue, 0.78, 0.15) + ' / 0.15';
-    const bg = isHot
-      ? 'linear-gradient(140deg, oklch(0.3 0.09 25) 0%, oklch(0.23 0.05 15) 100%)'
-      : `linear-gradient(140deg, ${col(k.hue, 0.29, 0.055)} 0%, oklch(0.22 0.025 265) 100%)`;
-    const border = sel ? 'oklch(0.9 0.02 265)' : isHot ? 'oklch(0.62 0.17 25)' : col(k.hue, 0.42, 0.07);
-    const shadow = isHot ? '0 8px 28px oklch(0.55 0.19 25 / 0.35)'
-      : sel ? '0 8px 28px oklch(0.1 0 0 / 0.5)' : '0 4px 16px oklch(0.12 0.02 265 / 0.45)';
+    // The card is coloured by heat; the kind keeps a stripe down its left
+    // edge, so "what is this" and "how bad is this" are two readable channels
+    // instead of one overloaded one.
+    const border = sel ? 'oklch(0.9 0.02 265)' : r.border;
+    const shadow = sel ? '0 8px 28px oklch(0.1 0 0 / 0.5)' : r.shadow;
     // The package view names its own badges: 'CVE' would be wrong on a node
     // flagged by a simulated supply-chain incident with no CVE attached.
-    const flag = n.flag || (isSeed ? 'CVE' : isHot ? 'ON PATH' : null);
+    const flag = n.flag || (isSeed ? 'CVE' : inFocus ? 'ON PATH' : null);
+    const hotFlag = heat >= 0.6;
 
     html += `<div class="node" data-id="${esc(n.id)}"
-      style="left:${p.x}px;top:${p.y}px;width:${NW}px;min-height:${NH}px;background:${bg};
-             border:1px solid ${border};box-shadow:${shadow};opacity:${dim ? 0.34 : 1}">
-      <div class="dot" style="background:${accent};box-shadow:0 0 0 4px ${ring}${isSeed ? ';animation:pulseGlow 1.4s ease-in-out infinite' : ''}"></div>
+      style="left:${p.x}px;top:${p.y}px;width:${NW}px;min-height:${NH}px;background:${r.bg};
+             border:1px solid ${border};border-left:3px solid ${col(k.hue, 0.60, 0.12)};
+             box-shadow:${shadow};opacity:${dim ? 0.34 : 1}">
+      <div class="dot" style="background:${r.accent};box-shadow:0 0 0 4px ${r.ring}${isSeed ? ';animation:pulseGlow 1.4s ease-in-out infinite' : ''}"></div>
       <div class="body">
         <div class="lbl" style="color:${dim ? 'oklch(0.78 0.01 265)' : 'oklch(0.97 0.01 265)'}">${esc(n.label)}</div>
         <div class="sub">${esc(n.sub)}</div>
       </div>
-      ${flag ? `<div class="flag" style="background:${isSeed ? 'oklch(0.7 0.2 25)' : 'oklch(0.32 0.09 25)'};color:${isSeed ? 'oklch(0.16 0.03 25)' : 'oklch(0.86 0.1 25)'}">${flag}</div>` : ''}
+      ${flag ? `<div class="flag" style="background:${isSeed ? r.accent : cola(r.hue, 0.32, 0.09, 1)};color:${isSeed ? col(r.hue, 0.16, 0.03) : col(r.hue, 0.88, 0.10)}">${esc(flag)}</div>` : ''}
     </div>`;
   });
 
@@ -692,13 +885,13 @@ function render() {
     const n = hidden[l];
     if (!n) return;
     const y = TOP + byLayer[l].length * (NH + ROWG);
-    html += `<div class="more" data-layer="${l}" style="left:${l * COLW}px;top:${y}px;width:${NW}px">
+    html += `<div class="more" data-layer="${l}" style="left:${slotOf[l] * COLW}px;top:${y}px;width:${NW}px">
       +${n} more &middot; show all</div>`;
   });
   layers.forEach((l) => {
     if (!state.expanded.has(l)) return;
     const y = TOP + byLayer[l].length * (NH + ROWG);
-    html += `<div class="more collapse" data-collapse="${l}" style="left:${l * COLW}px;top:${y}px;width:${NW}px">
+    html += `<div class="more collapse" data-collapse="${l}" style="left:${slotOf[l] * COLW}px;top:${y}px;width:${NW}px">
       collapse back to the blast radius</div>`;
   });
 
@@ -735,7 +928,7 @@ function paintPanel(g, nodeById, hot, seedIds) {
   if (!sn) { panel.style.display = 'none'; return; }
   panel.style.display = 'flex';
 
-  const k = KIND[sn.kind];
+  const k = kindOf(sn);
   const isHot = hot && hot.has(sn.id);
   // Read off the payload, not off state.mode: the panel describes the graph it
   // was handed, and the two disagree for one frame while a tab switch is in
@@ -754,7 +947,7 @@ function paintPanel(g, nodeById, hot, seedIds) {
         idx: String(chain.length + 1).padStart(2, '0'),
         name: n2.label,
         loc: n2.file || (n2.pkg ? 'node_modules/' + n2.pkg : '—'),
-        color: HOT
+        color: ramp(heatOf(n2)).accent
       });
       const nxt = g.edges.filter(([a, b]) => a === cur && hot.has(b))[0];
       cur = nxt ? nxt[1] : null;
@@ -765,16 +958,21 @@ function paintPanel(g, nodeById, hot, seedIds) {
     }));
   }
 
-  const isSeed = seedIds.has(sn.id);
+  const snRamp = ramp(heatOf(sn));
+  const isSeed = seedIds.has(sn.id) || (sn.hops === 0 && sn.vuln);
   // In the package view the verdict is the server's, not the renderer's: it is
   // a function of which evidence atoms fired, and deciding that twice -- once
   // where the evidence is and once here -- is how the two drift apart.
-  const status = sn.verdict || (isHot
-    ? (isSeed ? 'Vulnerable package — CVE reachable from production traffic'
-              : 'On the blast radius: reachable path to the vulnerable package')
-    : 'No reachable path to the queried advisory');
-  const alarmed = sn.verdict ? !!sn.alarm : isHot;
-  const ring = isHot ? 'oklch(0.7 0.2 25 / 0.18)' : col(k.hue, 0.78, 0.15) + ' / 0.15';
+  // Spoken from `heat`, not from the query highlight: what this node's
+  // exposure *is* does not depend on what is currently typed in the box.
+  const status = sn.verdict || (sn.vuln
+    ? (sn.hops === 0
+        ? `Vulnerable — ${esc(sn.advisory || 'an advisory')} names this exact version`
+        : `In the blast radius of ${esc(sn.vulnSource || 'a vulnerable package')}, ${sn.hops} hop(s) away`)
+    : (isHot ? 'On the queried path; no advisory reaches it'
+             : 'No advisory reaches this node'));
+  const alarmed = sn.verdict ? !!sn.alarm : !!sn.vuln;
+  const ring = snRamp.ring;
 
   const meta = [
     ['id', sn.id],
@@ -792,7 +990,7 @@ function paintPanel(g, nodeById, hot, seedIds) {
 
   panel.innerHTML = `
     <div class="head">
-      <div style="flex:none;width:12px;height:12px;border-radius:50%;margin-top:5px;background:${isHot ? HOT : col(k.hue, 0.78, 0.15)};box-shadow:0 0 0 5px ${ring}"></div>
+      <div style="flex:none;width:12px;height:12px;border-radius:50%;margin-top:5px;background:${snRamp.accent};box-shadow:0 0 0 5px ${ring}"></div>
       <div style="flex:1;min-width:0">
         <div class="title">${esc(sn.label)}</div>
         <div class="kind">${esc(k.label)}${sn.version ? ' · ' + esc(sn.version) : ''}</div>
@@ -851,6 +1049,26 @@ function evidenceBlock(sn) {
 /* ------------------------------------------------------------------ */
 /* footer metrics + legend                                             */
 /* ------------------------------------------------------------------ */
+/* The ramp, stated. A gradient nobody can decode is decoration; this says
+   which end is which and that green means "checked, nothing reaches it"
+   rather than "not checked". */
+function heatLegend(g) {
+  const stops = [
+    [1.0, 'at the CVE'],
+    [0.7, '1-2 hops'],
+    [0.4, 'further out'],
+    [0, 'no advisory reaches it']
+  ];
+  const exp = (g && g.exposure) || {};
+  const head = exp.advisories
+    ? `<span class="t" style="opacity:0.75">${exp.exposed} of ${exp.total} exposed &middot; </span>`
+    : `<span class="t" style="opacity:0.75">no known vulnerabilities &middot; </span>`;
+  return head + stops.map(([h, label]) => {
+    const r = ramp(h);
+    return `<div class="item"><div class="sw" style="background:${r.accent};box-shadow:0 0 0 3px ${r.ring}"></div><span class="t">${esc(label)}</span></div>`;
+  }).join('');
+}
+
 function paintFooter(g, hot, hotEdges) {
   // The macro tab is the package blast radius; 'package' is the engine's
   // own name for the payload it builds, kept so blastradius/pkg stays the
@@ -862,13 +1080,17 @@ function paintFooter(g, hot, hotEdges) {
 
   // Micro only. The macro view returned above, and it counts what the graph
   // knows rather than what is lit up -- see paintPkgFooter.
-  const defs = [['Affected entry routes', ['route'], 25],
-                ['Reached functions', ['fn', 'handler'], 150],
+  // Counted from `vuln`, not from the query highlight. The old version
+  // reported 0 vulnerable imports on a graph full of them whenever the search
+  // box was empty, which is the same picture as "you are fine".
+  const countVuln = (kinds) => g.nodes.filter((n) => n.vuln && kinds.includes(n.kind)).length;
+  const defs = [['Exposed routes', ['route'], 25],
+                ['Exposed functions', ['fn', 'handler', 'entry'], 150],
                 ['Vulnerable imports', ['import'], 340]];
 
   $('metrics').innerHTML = defs.map(([label, kinds, hue]) => {
-    const v = kinds ? countHot(kinds) : hotEdges.length;
-    const of = kinds ? 'of ' + total(kinds) : 'edges on path';
+    const v = hot ? countHot(kinds) : countVuln(kinds);
+    const of = (hot ? 'on path, of ' : 'of ') + total(kinds);
     return `<div class="metric" style="border:1px solid ${col(hue, 0.42, 0.08)}">
       <div class="l">${esc(label)}</div>
       <div class="r">
@@ -877,13 +1099,7 @@ function paintFooter(g, hot, hotEdges) {
       </div></div>`;
   }).join('');
 
-  const legendDefs = [['entry', 'entry point'], ['route', 'route'],
-                      ['fn', 'function'], ['import', 'import']];
-
-  $('legend').innerHTML = legendDefs.map(([k, label]) =>
-    `<div class="item"><div class="sw" style="background:${col(KIND[k].hue, 0.78, 0.15)}"></div><span class="t">${esc(label)}</span></div>`
-  ).join('') +
-  `<div class="item"><div class="sw" style="background:${HOT};box-shadow:0 0 0 3px oklch(0.7 0.2 25 / 0.2)"></div><span class="t">compromised path</span></div>`;
+  $('legend').innerHTML = heatLegend(g);
 }
 
 /* The package view counts what the graph knows, not what is lit up.
@@ -893,12 +1109,19 @@ function paintFooter(g, hot, hotEdges) {
  * claim is that a range-only tool reports *many* of them. */
 function paintPkgFooter(g) {
   const st = g.stats || {};
-  const defs = [
-    ['Range admits it', st.range_admits || 0, 'range-only leads', 75],
-    ['Lockfile resolves it', st.lockfile_entries || 0, 'confirmed', 200],
-    ['Exposed projects', st.exposed_projects || 0, 'of ' + (state.serviceCount || '?'), 265],
-    ['Answered in', Math.round(st.query_ms || 0), 'ms', 150]
-  ];
+  const defs = g.view === 'project'
+    ? [
+        ['Vulnerable packages', st.vulnerable_versions || 0, 'named by an advisory', 25],
+        ['In the blast radius', st.in_radius || 0, 'of ' + (st.resolved_versions || 0) + ' resolved', 40],
+        ['Advisories', (g.verdict && g.verdict.advisory_ids || []).length, 'published', 75],
+        ['Answered in', Math.round(st.query_ms || 0), 'ms', 150]
+      ]
+    : [
+        ['Range admits it', st.range_admits || 0, 'range-only leads', 75],
+        ['Lockfile resolves it', st.lockfile_entries || 0, 'confirmed', 200],
+        ['Exposed projects', st.exposed_projects || 0, 'of ' + (state.serviceCount || '?'), 265],
+        ['Answered in', Math.round(st.query_ms || 0), 'ms', 150]
+      ];
   $('metrics').innerHTML = defs.map(([label, v, of, hue]) =>
     `<div class="metric tight" style="border:1px solid ${col(hue, 0.42, 0.08)}">
       <div class="l">${esc(label)}</div>
@@ -907,13 +1130,8 @@ function paintPkgFooter(g) {
         <div class="o">${esc(of)}</div>
       </div></div>`).join('');
 
-  const legendDefs = [['threat', 'incident'], ['compromised', 'compromised'],
-    ['possible', 'range admits'], ['resolution', 'lockfile resolves'],
-    ['exposed', 'exposed'], ['related', 'identity only']];
   $('legend').classList.add('compact');
-  $('legend').innerHTML = legendDefs.map(([k, label]) =>
-    `<div class="item"><div class="sw" style="background:${col(KIND[k].hue, 0.78, 0.15)}"></div><span class="t">${esc(label)}</span></div>`
-  ).join('');
+  $('legend').innerHTML = heatLegend(g);
 }
 
 /* ------------------------------------------------------------------ */
@@ -940,8 +1158,13 @@ function notice(html, bad) {
 }
 
 async function loadPackageGraph(force) {
-  if (!state.pkgSpec) { state.graphs.macro = null; return; }
-  if (state.graphs.macro && state.graphs.macro.target === state.pkgSpec && !force) return;
+  // No target selected means "show me the repo", not "show me nothing". The
+  // project view is the landing state: after a scan the question is what is
+  // wrong with this codebase, and picking a package first requires already
+  // knowing the answer.
+  if (!state.pkgSpec) return loadProjectGraph(force);
+  if (state.graphs.macro && state.graphs.macro.target === state.pkgSpec
+      && state.graphs.macro.view !== 'project' && !force) return;
   const r = await fetch('/api/pkg/graph?spec=' + encodeURIComponent(state.pkgSpec));
   if (!r.ok) {
     const e = await r.json().catch(() => ({ detail: r.statusText }));
@@ -957,11 +1180,32 @@ async function loadPackageGraph(force) {
   state.graphs.macro = g.exists ? g : null;
 }
 
+/* The whole repository: every package an advisory reaches, and the dependency
+   chain that carries it there. Cached server-side against the read epoch, so
+   returning here after a drill-down costs one round trip and no recompute. */
+async function loadProjectGraph(force) {
+  if (state.graphs.macro && state.graphs.macro.view === 'project' && !force) return;
+  const r = await fetch('/api/pkg/project');
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({ detail: r.statusText }));
+    state.graphs.macro = null;
+    state.pkgError = e.detail || r.statusText;
+    return;
+  }
+  state.pkgError = '';
+  const g = await r.json();
+  state.graphs.macro = g.exists ? g : null;
+  if (!g.exists) state.pkgError = 'Nothing ingested yet. Run: blastradius pipeline';
+}
+
 async function loadPkgTargets() {
   const r = await fetch('/api/pkg/targets?limit=6');
   if (!r.ok) return;
   state.pkgTargets = await r.json();
-  if (!state.pkgSpec && state.pkgTargets.length) state.pkgSpec = state.pkgTargets[0].spec;
+  // Deliberately not auto-selecting a target any more: doing so opened the
+  // Explorer on one arbitrary package's blast radius, which looks like the
+  // whole answer. The project view opens instead, and the chips stay as the
+  // way in to a specific version.
 }
 
 /* Mark, or retract. The same button does both, because a demo that can only
@@ -990,7 +1234,8 @@ async function toggleMark() {
 }
 
 async function setPkgTarget(spec) {
-  state.pkgSpec = spec;
+  // '' is meaningful: it is the way back out to the whole project.
+  state.pkgSpec = spec || '';
   state.selected = null;
   state.autoFit = true;
   $('q').value = spec;
@@ -1002,19 +1247,21 @@ async function setPkgTarget(spec) {
 async function loadAdvisories() {
   const r = await fetch('/api/advisories');
   if (!r.ok) return;
-  state.advisories = await r.json();
+  // Sorted here rather than at render: the chip elements carry their index
+  // into this array, so rendering from a sorted *copy* would hand every click
+  // the wrong advisory.
+  state.advisories = sortAdvisories(await r.json());
   paintChips();
 }
 
 const SEVERITY_RANK = { critical: 0, high: 1, moderate: 2, medium: 2, low: 3, unknown: 4 };
 
-function pickOpeningQuery() {
-  const withVersion = state.advisories.filter((a) => a.query.includes('@'));
-  const pool = withVersion.length ? withVersion : state.advisories;
-  if (!pool.length) return '';
-  const sorted = [...pool].sort((a, b) =>
+/* Worst first, so the chip row leads with the advisory most worth clicking.
+   Nothing opens on a query any more -- see boot -- but the ordering still
+   decides which chip a viewer reaches for first. */
+function sortAdvisories(list) {
+  return [...list].sort((a, b) =>
     (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9));
-  return sorted[0].query;
 }
 
 function paintChips() {
@@ -1024,12 +1271,23 @@ function paintChips() {
   if (state.mode === 'macro') {
     // Each chip states the gap it will demonstrate before it is clicked: how
     // many versions a range admits against how many projects installed it.
-    $('chips').innerHTML = state.pkgTargets.map((t, i) =>
-      `<div class="chip${t.marked ? ' on' : ''}" data-i="${i}" title="${esc(t.spec)}">${esc(t.spec)}
-        <span class="n">${t.range_admits} admit · ${t.projects} installed${t.marked ? ' · MARKED' : ''}</span></div>`
-    ).join('');
+    // The way back out. Without it, drilling into a package is a one-way trip
+    // and the project view is only reachable by clearing the box by hand.
+    const g = state.graphs.macro;
+    const onProject = !state.pkgSpec;
+    const exp = (g && g.exposure) || {};
+    $('chips').innerHTML =
+      `<div class="chip${onProject ? ' on' : ''}" data-i="-1" title="the whole repository">whole project
+        <span class="n">${exp.advisories != null
+          ? exp.advisories + ' vulnerable · ' + exp.exposed + ' in radius'
+          : 'every exposed package'}</span></div>` +
+      state.pkgTargets.map((t, i) =>
+        `<div class="chip${t.spec === state.pkgSpec ? ' on' : ''}" data-i="${i}" title="${esc(t.spec)}">${esc(t.spec)}
+          <span class="n">${t.range_admits} admit · ${t.projects} installed${t.marked ? ' · MARKED' : ''}</span></div>`
+      ).join('');
     $('chips').querySelectorAll('.chip').forEach((el) => {
-      el.onclick = () => setPkgTarget(state.pkgTargets[+el.dataset.i].spec);
+      const i = +el.dataset.i;
+      el.onclick = () => setPkgTarget(i < 0 ? '' : state.pkgTargets[i].spec);
     });
     return;
   }
@@ -1071,12 +1329,13 @@ async function setMode(mode) {
   $('markWrap').style.display = pkg ? 'flex' : 'none';
   $('clear').style.display = pkg ? 'none' : 'block';
   $('q').placeholder = pkg
-    ? 'target a version, e.g. lodash@4.17.21 — press Enter'
+    ? 'whole project — or target one version, e.g. lodash@4.17.21, then Enter'
     : 'trace a vulnerable package, e.g. vulnerable-pkg@1.0.5';
   $('q').value = pkg ? state.pkgSpec : state.query;
 
   if (pkg && !state.pkgTargets.length) await loadPkgTargets();
-  if (pkg && !state.pkgSpec && state.pkgTargets.length) state.pkgSpec = state.pkgTargets[0].spec;
+  // An empty box in the package tab now means the project view, so it is left
+  // empty rather than pre-filled with an arbitrary chip.
   if (pkg) $('q').value = state.pkgSpec;
 
   await loadGraph(mode);
@@ -1164,7 +1423,13 @@ document.addEventListener('keydown', (e) => {
   // Advisories first: they still drive the micro search box, and the opening
   // query is picked from them even though the macro tab does not use it.
   await loadAdvisories();
-  if (!state.query) state.query = pickOpeningQuery();
+  // Deliberately no opening query. It made sense when the code view had no
+  // colour of its own and an empty box meant an undifferentiated grey graph:
+  // pre-filling the worst advisory at least showed something. The graph now
+  // carries its own exposure, and pre-filling instead dimmed 500 nodes down
+  // to a query the user never typed -- most damagingly for an advisory on a
+  // package no source file imports, which lit nothing and reported "0 of 500"
+  // over a graph with sixteen exposed functions in it.
 
   // Then hand the opening tab to setMode rather than loading the graph here.
   // The macro view is scoped to one version, so it cannot be fetched until a

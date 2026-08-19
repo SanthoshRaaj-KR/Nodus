@@ -47,6 +47,7 @@ from .identity import (
     normalize_repo_url,
     organization_key,
     package_key,
+    service_key,
     split_scope,
     version_key,
 )
@@ -98,6 +99,12 @@ class IngestReport:
     repositories: int = 0
     typosquat_edges: int = 0
     advisories: int = 0
+    affects_edges: int = 0
+    #: (advisory_id, "name@version") pairs an advisory named but the graph does
+    #: not hold. Counted rather than dropped: a run that attaches *nothing*
+    #: used to render identically to a healthy one, because `advisories` counts
+    #: Advisory nodes and an Advisory with no AFFECTS edge is still a node.
+    unattached: list[str] = field(default_factory=list)
     unresolved: set[str] = field(default_factory=set)
     registry_errors: list[str] = field(default_factory=list)
     write: WriteReport | None = None
@@ -118,7 +125,16 @@ class IngestReport:
             f"repositories    {self.repositories:,}",
             f"typosquat       {self.typosquat_edges:,}",
             f"advisories      {self.advisories:,}",
+            f"AFFECTS         {self.affects_edges:,}",
         ]
+        if self.advisories and not self.affects_edges:
+            lines.append(
+                "  !! every advisory failed to attach -- the graph holds no "
+                "version any advisory names. Check that both ingest tiers key "
+                "PackageVersion through identity.version_key."
+            )
+        if self.unattached:
+            lines.append(f"unattached      {len(self.unattached)}")
         if self.unresolved:
             lines.append(f"unresolved deps {len(self.unresolved)}")
         if self.registry_errors:
@@ -470,7 +486,7 @@ def ingest(
 
         for rel_path, service in lock.services.items():
             svc_id = writer.node(
-                schema.SERVICE, f"svc:{service}", name=service,
+                schema.SERVICE, service_key(service), name=service,
                 repo=lock.repo, path=rel_path or ".",
             )
             report.projects.append(service)
@@ -562,12 +578,28 @@ def ingest(
                 try:
                     norm = normalize_name(name)
                 except InvalidPackageName:
+                    report.unattached.append(
+                        f"{advisory.advisory_id}: {name}@{version} (unkeyable name)"
+                    )
                     continue
                 target = version_ids.get((norm, version))
                 if target is None:
+                    # Usually legitimate -- an advisory covering a version this
+                    # lockfile does not resolve -- but it is also exactly what
+                    # a key-scheme mismatch looks like, so it is counted.
+                    report.unattached.append(
+                        f"{advisory.advisory_id}: {norm}@{version} (not in graph)"
+                    )
                     continue
                 writer.edge(schema.AFFECTS, adv_id, target,
                             fixed_version=fixed, source=config.source_osv)
+                report.affects_edges += 1
+
+    if scan:
+        note = f"{report.affects_edges:,} AFFECTS edge(s)"
+        if report.unattached:
+            note += f", {len(report.unattached)} advisory target(s) not in graph"
+        log(f"[7/7] advisories: {note}")
 
     # -- 9. typosquat neighbourhood ----------------------------------------
 

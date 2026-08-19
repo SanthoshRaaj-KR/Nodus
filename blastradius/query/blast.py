@@ -167,14 +167,25 @@ def held_versions(client: HydraClient, package: str) -> list[dict]:
 
 
 def _candidate_ids(package: str) -> list[tuple[str, int]] | None:
-    """(key, id) pairs for a package name, or None if the map is unusable."""
+    """(key, id) pairs for a package name, or None if the map is unusable.
+
+    The prefix is the package's purl, not the bare name: ``PackageVersion``
+    keys are ``pkg:npm/lodash@4.17.21``, so a bare ``lodash@`` prefix matches
+    nothing. It also has to be the *normalised* purl, or a lockfile that spells
+    a name with capitals would miss its own versions.
+    """
     from ..ids import DEFAULT_DB, IdAllocator
+    from ..pkg.identity import InvalidPackageName, package_key
 
     if not DEFAULT_DB.exists():
         return None
     try:
+        prefix = package_key(package) + "@"
+    except InvalidPackageName:
+        return None
+    try:
         with IdAllocator(DEFAULT_DB) as ids:
-            return ids.keys_with_prefix(schema.PACKAGE_VERSION, package + "@")
+            return ids.keys_with_prefix(schema.PACKAGE_VERSION, prefix)
     except Exception:
         return None
 

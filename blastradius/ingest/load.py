@@ -22,6 +22,7 @@ from pathlib import Path
 from .. import schema
 from ..hydra_client import HydraClient
 from ..ids import IdAllocator
+from ..pkg.identity import service_key
 from .bridge import link_imports
 from .lockfile import ParsedLock, find_lockfiles, parse_package_lock
 
@@ -182,7 +183,7 @@ class Loader:
         for ws_path, name in lock.services.items():
             service_ids[name] = self.node(
                 schema.SERVICE,
-                name,
+                service_key(name),
                 name=name,
                 repo=lock.repo,
                 path=ws_path or ".",
@@ -416,7 +417,7 @@ def ingest_corpus(
 
         # The root service is the "" workspace entry; fall back to the folder.
         service_name = lock.services.get("", service)
-        service_id = loader.ids.get(schema.SERVICE, service_name)
+        service_id = loader.ids.get(schema.SERVICE, service_key(service_name))
 
         scan = run_scanner(project, service_name)
         loader._log(f"  scanner:  {json.dumps(scan['stats'])}")
@@ -514,7 +515,7 @@ def ingest_micro(
     loader._log(f"  scanned in {elapsed:.1f}s")
 
     service_id = loader.node(
-        schema.SERVICE, service, name=service, repo=project.name, path="."
+        schema.SERVICE, service_key(service), name=service, repo=project.name, path="."
     )
     loader.load_micro(scan, service_id)
     loader.report.services.append(service)

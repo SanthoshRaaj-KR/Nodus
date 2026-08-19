@@ -228,6 +228,34 @@ def pkg_graph(spec: str):
         raise HTTPException(status_code=503, detail=str(exc)) from None
 
 
+@app.get("/api/pkg/project")
+def pkg_project():
+    """The whole project: every exposed package and the chain that reaches it.
+
+    This is the default package view. ``/api/pkg/graph`` answers "tell me about
+    this one version", which is the right question only once you already know
+    which version to ask about; after a scan, the question is "what is wrong
+    with this repo", and that one needs the tree.
+
+    Cached against the read epoch like the code view, and for the same reason:
+    the exposure model is several unpinned whole-graph sweeps plus a BFS, which
+    is far too slow to redo per click and changes only when the data does.
+    """
+    epoch = _read_epoch()
+    cached = _graph_cache.get("pkg-project")
+    if cached and epoch is not None and cached[0] == epoch:
+        return cached[1]
+
+    try:
+        payload = pkgview.project_graph(client, ids)
+    except HydraError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+    if epoch is not None:
+        _graph_cache["pkg-project"] = (epoch, payload)
+    return payload
+
+
 @app.get("/api/pkg/targets")
 def pkg_targets(limit: int = 6):
     """Versions worth marking, so the demo is one click rather than typing."""

@@ -114,7 +114,7 @@ def test_generated_file_round_trips_into_the_query_layer(tmp_path):
     assert advisory.matches("4.17.20")
     assert not advisory.matches("4.17.21")
     assert advisory.severity == "high"
-    assert advisory.keys_among(["4.17.19", "4.17.20"]) == ["lodash@4.17.20"]
+    assert advisory.keys_among(["4.17.19", "4.17.20"]) == ["pkg:npm/lodash@4.17.20"]
 
 
 def test_exact_versions_never_become_a_range(tmp_path):
