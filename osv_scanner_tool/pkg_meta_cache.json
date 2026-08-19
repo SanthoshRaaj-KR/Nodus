@@ -1,0 +1,480 @@
+{
+ "ts": 1787049452.590923,
+ "packages": {
+  "annotated-doc": {
+   "name": "annotated-doc",
+   "maintainers": [],
+   "author": "",
+   "homepage": "https://github.com/fastapi/annotated-doc",
+   "license": "MIT",
+   "latest_version": "0.0.5"
+  },
+  "annotated-types": {
+   "name": "annotated-types",
+   "maintainers": [],
+   "author": "",
+   "homepage": "https://github.com/annotated-types/annotated-types",
+   "license": "MIT",
+   "latest_version": "0.8.0"
+  },
+  "balanced-match": {
+   "name": "balanced-match",
+   "maintainers": [
+    "juliangruber"
+   ],
+   "author": "",
+   "homepage": "https://github.com/juliangruber/balanced-match#readme",
+   "license": "MIT",
+   "latest_version": "4.0.4"
+  },
+  "anyio": {
+   "name": "anyio",
+   "maintainers": [],
+   "author": "",
+   "homepage": "",
+   "license": "MIT",
+   "latest_version": "4.14.2"
+  },
+  "@ts-morph/common": {
+   "name": "@ts-morph/common",
+   "maintainers": [
+    "dsherret"
+   ],
+   "author": "David Sherret",
+   "homepage": "https://github.com/dsherret/ts-morph#readme",
+   "license": "MIT",
+   "latest_version": "0.29.0"
+  },
+  "click": {
+   "name": "click",
+   "maintainers": [
+    "Pallets <contact@palletsprojects.com>"
+   ],
+   "author": "",
+   "homepage": "",
+   "license": "BSD-3-Clause",
+   "latest_version": "8.4.2"
+  },
+  "brace-expansion": {
+   "name": "brace-expansion",
+   "maintainers": [
+    "juliangruber",
+    "isaacs"
+   ],
+   "author": "",
+   "homepage": "https://github.com/juliangruber/brace-expansion#readme",
+   "license": "MIT",
+   "latest_version": "5.0.9"
+  },
+  "braces": {
+   "name": "braces",
+   "maintainers": [
+    "jonschlinkert",
+    "doowb"
+   ],
+   "author": "Jon Schlinkert",
+   "homepage": "https://github.com/micromatch/braces",
+   "license": "MIT",
+   "latest_version": "3.0.3"
+  },
+  "body-parser": {
+   "name": "body-parser",
+   "maintainers": [
+    "dougwilson",
+    "ulisesgascon",
+    "jonchurch",
+    "wesleytodd"
+   ],
+   "author": "",
+   "homepage": "https://github.com/expressjs/body-parser#readme",
+   "license": "MIT",
+   "latest_version": "2.3.0"
+  },
+  "glob-parent": {
+   "name": "glob-parent",
+   "maintainers": [
+    "yocontra",
+    "phated",
+    "es128",
+    "doowb"
+   ],
+   "author": "Gulp Team",
+   "homepage": "https://github.com/gulpjs/glob-parent#readme",
+   "license": "ISC",
+   "latest_version": "6.0.2"
+  },
+  "fill-range": {
+   "name": "fill-range",
+   "maintainers": [
+    "es128",
+    "jonschlinkert",
+    "doowb"
+   ],
+   "author": "Jon Schlinkert",
+   "homepage": "https://github.com/jonschlinkert/fill-range",
+   "license": "MIT",
+   "latest_version": "7.1.1"
+  },
+  "fastq": {
+   "name": "fastq",
+   "maintainers": [
+    "matteo.collina"
+   ],
+   "author": "Matteo Collina",
+   "homepage": "https://github.com/mcollina/fastq#readme",
+   "license": "ISC",
+   "latest_version": "1.20.1"
+  },
+  "debug": {
+   "name": "debug",
+   "maintainers": [
+    "qix",
+    "tootallnate"
+   ],
+   "author": "Josh Junon",
+   "homepage": "https://github.com/debug-js/debug#readme",
+   "license": "MIT",
+   "latest_version": "4.4.3"
+  },
+  "fast-glob": {
+   "name": "fast-glob",
+   "maintainers": [
+    "mrmlnc"
+   ],
+   "author": "Denis Malinochkin",
+   "homepage": "https://github.com/mrmlnc/fast-glob#readme",
+   "license": "MIT",
+   "latest_version": "3.3.3"
+  },
+  "code-block-writer": {
+   "name": "code-block-writer",
+   "maintainers": [
+    "dsherret"
+   ],
+   "author": "David Sherret",
+   "homepage": "https://github.com/dsherret/code-block-writer#readme",
+   "license": "MIT",
+   "latest_version": "13.0.3"
+  },
+  "h11": {
+   "name": "h11",
+   "maintainers": [],
+   "author": "Nathaniel J. Smith",
+   "homepage": "https://github.com/python-hyper/h11",
+   "license": "MIT",
+   "latest_version": "0.16.0"
+  },
+  "idna": {
+   "name": "idna",
+   "maintainers": [],
+   "author": "",
+   "homepage": "",
+   "license": "BSD-3-Clause",
+   "latest_version": "3.19"
+  },
+  "is-extglob": {
+   "name": "is-extglob",
+   "maintainers": [
+    "doowb",
+    "jonschlinkert"
+   ],
+   "author": "Jon Schlinkert",
+   "homepage": "https://github.com/jonschlinkert/is-extglob",
+   "license": "MIT",
+   "latest_version": "2.1.1"
+  },
+  "is-glob": {
+   "name": "is-glob",
+   "maintainers": [
+    "phated",
+    "jonschlinkert",
+    "doowb"
+   ],
+   "author": "Jon Schlinkert",
+   "homepage": "https://github.com/micromatch/is-glob",
+   "license": "MIT",
+   "latest_version": "4.0.3"
+  },
+  "is-number": {
+   "name": "is-number",
+   "maintainers": [
+    "doowb",
+    "jonschlinkert",
+    "realityking"
+   ],
+   "author": "Jon Schlinkert",
+   "homepage": "https://github.com/jonschlinkert/is-number",
+   "license": "MIT",
+   "latest_version": "7.0.0"
+  },
+  "fastapi": {
+   "name": "fastapi",
+   "maintainers": [],
+   "author": "",
+   "homepage": "https://github.com/fastapi/fastapi",
+   "license": "MIT",
+   "latest_version": "0.141.1"
+  },
+  "merge2": {
+   "name": "merge2",
+   "maintainers": [
+    "zensh"
+   ],
+   "author": "",
+   "homepage": "https://github.com/teambition/merge2",
+   "license": "MIT",
+   "latest_version": "1.4.1"
+  },
+  "httptools": {
+   "name": "httptools",
+   "maintainers": [],
+   "author": "",
+   "homepage": "https://github.com/MagicStack/httptools",
+   "license": "MIT",
+   "latest_version": "0.8.0"
+  },
+  "express": {
+   "name": "express",
+   "maintainers": [
+    "wesleytodd",
+    "jonchurch",
+    "ctcpip",
+    "ulisesgascon",
+    "sheplu"
+   ],
+   "author": "TJ Holowaychuk",
+   "homepage": "https://expressjs.com/",
+   "license": "MIT",
+   "latest_version": "5.2.1"
+  },
+  "path-browserify": {
+   "name": "path-browserify",
+   "maintainers": [
+    "goto-bus-stop"
+   ],
+   "author": "James Halliday",
+   "homepage": "https://github.com/browserify/path-browserify",
+   "license": "MIT",
+   "latest_version": "1.0.1"
+  },
+  "mkdirp": {
+   "name": "mkdirp",
+   "maintainers": [
+    "isaacs"
+   ],
+   "author": "",
+   "homepage": "https://github.com/isaacs/node-mkdirp#readme",
+   "license": "MIT",
+   "latest_version": "3.0.1"
+  },
+  "micromatch": {
+   "name": "micromatch",
+   "maintainers": [
+    "jonschlinkert",
+    "doowb",
+    "danez"
+   ],
+   "author": "Jon Schlinkert",
+   "homepage": "https://github.com/micromatch/micromatch",
+   "license": "MIT",
+   "latest_version": "4.0.8"
+  },
+  "ms": {
+   "name": "ms",
+   "maintainers": [
+    "matheuss",
+    "rauchg",
+    "nick.tracey",
+    "vercel-release-bot",
+    "zeit-bot",
+    "matt.straka"
+   ],
+   "author": "",
+   "homepage": "https://github.com/vercel/ms#readme",
+   "license": "MIT",
+   "latest_version": "2.1.3"
+  },
+  "minimatch": {
+   "name": "minimatch",
+   "maintainers": [
+    "isaacs"
+   ],
+   "author": "Isaac Z. Schlueter",
+   "homepage": "https://github.com/isaacs/minimatch#readme",
+   "license": "BlueOak-1.0.0",
+   "latest_version": "10.2.6"
+  },
+  "picomatch": {
+   "name": "picomatch",
+   "maintainers": [
+    "mrmlnc",
+    "jonschlinkert",
+    "doowb",
+    "danez"
+   ],
+   "author": "Jon Schlinkert",
+   "homepage": "https://github.com/micromatch/picomatch",
+   "license": "MIT",
+   "latest_version": "4.0.5"
+  },
+  "reusify": {
+   "name": "reusify",
+   "maintainers": [
+    "matteo.collina"
+   ],
+   "author": "Matteo Collina",
+   "homepage": "https://github.com/mcollina/reusify#readme",
+   "license": "MIT",
+   "latest_version": "1.1.0"
+  },
+  "queue-microtask": {
+   "name": "queue-microtask",
+   "maintainers": [
+    "feross"
+   ],
+   "author": "Feross Aboukhadijeh",
+   "homepage": "https://github.com/feross/queue-microtask",
+   "license": "MIT",
+   "latest_version": "1.2.3"
+  },
+  "python-dotenv": {
+   "name": "python-dotenv",
+   "maintainers": [],
+   "author": "",
+   "homepage": "",
+   "license": "BSD-3-Clause",
+   "latest_version": "1.2.3"
+  },
+  "run-parallel": {
+   "name": "run-parallel",
+   "maintainers": [
+    "feross"
+   ],
+   "author": "Feross Aboukhadijeh",
+   "homepage": "https://github.com/feross/run-parallel",
+   "license": "MIT",
+   "latest_version": "1.2.0"
+  },
+  "pyyaml": {
+   "name": "pyyaml",
+   "maintainers": [],
+   "author": "Kirill Simonov",
+   "homepage": "https://pyyaml.org/",
+   "license": "MIT",
+   "latest_version": "6.0.3"
+  },
+  "to-regex-range": {
+   "name": "to-regex-range",
+   "maintainers": [
+    "doowb",
+    "jonschlinkert"
+   ],
+   "author": "Jon Schlinkert",
+   "homepage": "https://github.com/micromatch/to-regex-range",
+   "license": "MIT",
+   "latest_version": "5.0.1"
+  },
+  "starlette": {
+   "name": "starlette",
+   "maintainers": [
+    "Marcelo Trylesinski <marcelotryle@gmail.com>"
+   ],
+   "author": "",
+   "homepage": "https://github.com/Kludex/starlette",
+   "license": "BSD-3-Clause",
+   "latest_version": "1.6.0"
+  },
+  "typing-extensions": {
+   "name": "typing-extensions",
+   "maintainers": [],
+   "author": "",
+   "homepage": "",
+   "license": "PSF-2.0",
+   "latest_version": "4.16.0"
+  },
+  "typing-inspection": {
+   "name": "typing-inspection",
+   "maintainers": [],
+   "author": "",
+   "homepage": "https://github.com/pydantic/typing-inspection",
+   "license": "MIT",
+   "latest_version": "0.4.4"
+  },
+  "ts-morph": {
+   "name": "ts-morph",
+   "maintainers": [
+    "dsherret"
+   ],
+   "author": "David Sherret",
+   "homepage": "https://github.com/dsherret/ts-morph#readme",
+   "license": "MIT",
+   "latest_version": "28.0.0"
+  },
+  "uvicorn": {
+   "name": "uvicorn",
+   "maintainers": [
+    "Marcelo Trylesinski <marcelotryle@gmail.com>"
+   ],
+   "author": "",
+   "homepage": "https://uvicorn.dev/",
+   "license": "BSD-3-Clause",
+   "latest_version": "0.52.3"
+  },
+  "uvloop": {
+   "name": "uvloop",
+   "maintainers": [],
+   "author": "",
+   "homepage": "",
+   "license": "MIT License",
+   "latest_version": "0.22.1"
+  },
+  "pydantic": {
+   "name": "pydantic",
+   "maintainers": [],
+   "author": "",
+   "homepage": "https://github.com/pydantic/pydantic",
+   "license": "MIT",
+   "latest_version": "2.13.4"
+  },
+  "watchfiles": {
+   "name": "watchfiles",
+   "maintainers": [],
+   "author": "",
+   "homepage": "https://github.com/samuelcolvin/watchfiles",
+   "license": "MIT",
+   "latest_version": "1.2.0"
+  },
+  "websockets": {
+   "name": "websockets",
+   "maintainers": [],
+   "author": "",
+   "homepage": "https://github.com/python-websockets/websockets",
+   "license": "BSD-3-Clause",
+   "latest_version": "17.0.1"
+  },
+  "pydantic-core": {
+   "name": "pydantic-core",
+   "maintainers": [],
+   "author": "",
+   "homepage": "https://github.com/pydantic",
+   "license": "MIT",
+   "latest_version": "2.48.0"
+  },
+  "typescript": {
+   "name": "typescript",
+   "maintainers": [
+    "microsoft1es",
+    "typescript-bot",
+    "weswigham",
+    "andrewbranch",
+    "typescript-deploys",
+    "microsoft-oss-releases",
+    "jakebailey"
+   ],
+   "author": "Microsoft Corp.",
+   "homepage": "https://www.typescriptlang.org/",
+   "license": "Apache-2.0",
+   "latest_version": "7.0.2"
+  }
+ }
+}
