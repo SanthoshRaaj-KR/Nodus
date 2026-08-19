@@ -566,7 +566,113 @@ def cmd_osv_scan(args) -> int:
     return 0
 
 
-@@PIPELINE@@
+def cmd_pipeline(args) -> int:
+    """Scan one repository and rebuild the whole graph from it, timed.
+
+    The orchestration lives in :mod:`blastradius.pipeline`; this is the part
+    that prints. Keeping them apart is what lets a test drive a whole run
+    without capturing stdout, and what stops the concurrency from being
+    tangled up with ANSI codes.
+    """
+    from . import node
+    from .pipeline import DEFAULT_CORPUS, run_pipeline
+
+    repo = Path(args.repo) if args.repo else DEFAULT_CORPUS
+    if not repo.is_dir():
+        _suggest_paths(str(repo))
+        return 2
+
+    print()
+    print(rule("preflight"))
+    if not node.daemon_ready():
+        print(RED("  Docker is not reachable. Start Docker Desktop, then retry."))
+        print()
+        return 2
+    if not node.readyz():
+        print(RED("  HydraDB is not up. Run: python -m blastradius.cli up"))
+        print()
+        return 2
+
+    from .pkg.osvscan import osv_scanner_available
+
+    scanner = osv_scanner_available() or "api.osv.dev (binary not installed)"
+    print(f"  node            : {GREEN('ready')}")
+    print(f"  scanner         : {scanner}")
+    print(f"  repository      : {repo}")
+
+    lockfiles = [
+        p for p in repo.rglob("package-lock.json") if "node_modules" not in p.parts
+    ]
+    print(f"  lockfiles       : {len(lockfiles)}")
+    if not lockfiles:
+        print()
+        print(YELLOW("  No package-lock.json under this path, so there is nothing"))
+        print(YELLOW("  to resolve and nothing to scan. Point at a repo that has one."))
+        print()
+        return 2
+
+    client = HydraClient(base_url=args.url)
+    report = run_pipeline(
+        repo,
+        client,
+        reset=args.reset,
+        skip_micro=args.skip_micro,
+        offline=args.offline,
+        abbreviated=args.abbreviated,
+        typosquat=not args.no_typosquat,
+        engine=args.engine,
+        include_python=args.python,
+        advisory_dir=None if args.no_advisories else args.advisories,
+        out_dir=args.out,
+        parallel=not args.sequential,
+        verbose=not args.quiet,
+        on_stage=lambda name: print("\n" + rule(name)),
+    )
+
+    print()
+    print(rule("PIPELINE"))
+    print()
+    print(report.render())
+    print()
+
+    if report.failures:
+        for name, message in report.failures.items():
+            print(RED(f"  {name} failed: {message}"))
+        print()
+
+    if report.advisory_nodes == 0:
+        print(YELLOW("  No Advisory nodes landed. Either the repo has no known"))
+        print(YELLOW("  vulnerabilities, or the scanned versions are not the ones"))
+        print(YELLOW("  the lockfiles resolved -- check the scan log."))
+    else:
+        print(
+            f"  {GREEN(str(report.advisory_nodes) + ' advisories')} now sit on "
+            f"{report.affects} package version(s), from a live scan of"
+        )
+        print(f"  {repo}")
+        print()
+        print("  Open the Explorer and the scanned findings are the target chips:")
+        print(GREEN("    python -m blastradius.cli ui"))
+        if report.scan:
+            print()
+            print("  Or from here:")
+            for spec, _rows in report.scan.top[:3]:
+                print(GREEN(f"    python -m blastradius.pkg.cli simulate {spec}"))
+
+    out_dir = (
+        Path(report.scan.csv_path).parent
+        if report.scan and report.scan.csv_path
+        else Path("data") / "osv"
+    )
+    log_path = Path(args.log) if args.log else out_dir / "pipeline-log.md"
+    report.write_log(log_path)
+    print()
+    print(f"  log report      {log_path}")
+    print(f"  machine report  {log_path.with_suffix('.json')}")
+    print()
+    return 2 if report.failures else 0
+
+
 def cmd_serve(args) -> int:
     import uvicorn
 
@@ -772,10 +878,17 @@ def main(argv: list[str] | None = None) -> int:
         "pipeline",
         help="scan one repo and rebuild both graph tiers from it, timed",
     )
-    pipe.add_argument("repo", help="path to the repository to scan and ingest")
+    # Defaulting to corpus/ makes the common case a bare `pipeline`. It is
+    # still an argument, because pointing it at a checkout somewhere else is
+    # the whole reason the graph is not hardcoded any more.
+    pipe.add_argument("repo", nargs="?", default=None,
+                      help="repository to scan and ingest (default: corpus/)")
     _scan_flags(pipe)
     pipe.add_argument("--reset", action="store_true",
                       help="empty the graph and id map first")
+    pipe.add_argument("--sequential", action="store_true",
+                      help="run every stage in turn instead of overlapping "
+                           "the scan, the code graph and the registry prefetch")
     pipe.add_argument("--skip-micro", action="store_true",
                       help="package tier only, skip the ts-morph call graph")
     pipe.add_argument("--offline", action="store_true",
