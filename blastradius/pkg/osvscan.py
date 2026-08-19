@@ -216,6 +216,13 @@ class ScanRun:
     started_at: float = 0.0
     scan: OsvScan | None = None
     notes: list[str] = field(default_factory=list)
+    #: The manifests the scanner actually parsed. Empty while manifests exist
+    #: on disk is the silent-skip case, and it is why this is recorded rather
+    #: than inferred from the finding count.
+    sources: list[str] = field(default_factory=list)
+    #: True when the scan read nothing at all. Zero findings from a blind scan
+    #: is not a clean bill of health, and callers must be able to tell.
+    blind: bool = False
 
     def render(self) -> str:
         eco = ", ".join(f"{k}={v}" for k, v in sorted(self.ecosystems.items()))
@@ -229,6 +236,8 @@ class ScanRun:
             f"findings        {self.findings:,}",
             f"advisories      {self.advisories:,}  (after alias merge)",
             f"vulnerable pkgs {self.packages:,}",
+            f"sources parsed  {len(self.sources)}"
+            + ("   <-- NOTHING WAS SCANNED" if self.blind else ""),
             f"ecosystems      {eco or '(none)'}",
         ]
         if self.csv_path:
@@ -262,6 +271,8 @@ class ScanRun:
             "findings": self.findings,
             "advisories": self.advisories,
             "vulnerable_packages": self.packages,
+            "sources_parsed": self.sources,
+            "blind": self.blind,
             "ecosystems": self.ecosystems,
             "top_versions": [{"spec": n, "rows": c} for n, c in self.top],
             "steps": [
@@ -296,12 +307,12 @@ def osv_scanner_available() -> str | None:
     return shutil.which("osv-scanner")
 
 
-def _scan_with_binary(repo: Path) -> tuple[list[dict], str]:
+def _scan_with_binary(repo: Path) -> tuple[list[dict], str, list[str]]:
     """Drive the real scanner through the teammate's wrapper."""
     from osv_scanner_tool.scan import scan_repo
 
     summary = scan_repo(str(repo))
-    return summary["details"], "osv-scanner"
+    return summary["details"], "osv-scanner", summary.get("sources", [])
 
 
 def _http_json(url: str, payload: dict | None = None, timeout: int = 30) -> dict:
@@ -343,7 +354,7 @@ def _resolved_versions(repo: Path, include_python: bool) -> list[tuple[str, str,
 
 def _scan_with_api(
     repo: Path, include_python: bool, batch: int = 500
-) -> tuple[list[dict], str]:
+) -> tuple[list[dict], str, list[str]]:
     """Fallback: resolve locally, ask api.osv.dev about the exact versions.
 
     ``querybatch`` returns ids only, so each distinct id is then fetched once
@@ -353,7 +364,10 @@ def _scan_with_api(
     """
     triples = _resolved_versions(repo, include_python)
     if not triples:
-        return [], "osv-api"
+        return [], "osv-api", []
+    # This path resolves the manifests itself, so "what did it actually read"
+    # is the set of packages it resolved rather than a list of files.
+    sources = sorted({f"{eco}:{name}" for eco, name, _v in triples})
 
     queries = [
         {"package": {"name": name, "ecosystem": eco}, "version": version}
@@ -387,7 +401,7 @@ def _scan_with_api(
             if record is None:
                 continue
             details.append(_row_from_osv_record(record, eco, name, version))
-    return details, "osv-api"
+    return details, "osv-api", sources
 
 
 def _row_from_osv_record(record: dict, ecosystem: str, name: str, version: str) -> dict:
@@ -594,14 +608,33 @@ def scan_repository(
 
     def do_scan():
         if use_binary:
-            rows, name = _scan_with_binary(repo)
+            rows, name, sources = _scan_with_binary(repo)
         else:
-            rows, name = _scan_with_api(repo, include_python)
-        return (rows, name), f"{len(rows)} row(s) via {name}"
+            rows, name, sources = _scan_with_api(repo, include_python)
+        return (rows, name, sources), (
+            f"{len(rows)} row(s) from {len(sources)} source(s) via {name}"
+        )
 
-    rows, run.engine = timer.run(
+    rows, run.engine, run.sources = timer.run(
         "osv scan (binary)" if use_binary else "osv scan (api)", do_scan
     )
+
+    # The distinction that matters more than any other here. A scanner that
+    # walked the tree and opened nothing reports exactly what a clean repo
+    # reports -- zero findings -- and "you have no vulnerabilities" is the one
+    # wrong answer this tool must never give quietly. osv-scanner honours
+    # .gitignore by default, and the repos under test live in a directory that
+    # is git-ignored on purpose, so this is not a hypothetical.
+    manifest_count = sum(len(v) for v in run.manifests.values())
+    if manifest_count and not run.sources:
+        run.blind = True
+        run.notes.append(
+            f"NOTHING WAS SCANNED. {manifest_count} manifest(s) are on disk but "
+            f"the scanner parsed none of them, so 'no findings' here means "
+            f"'no answer', not 'no vulnerabilities'. The usual cause is that "
+            f"the path is excluded by a .gitignore -- osv-scanner honours one "
+            f"unless it is run with --no-ignore."
+        )
     if not use_binary and engine == "auto":
         run.notes.append(
             "osv-scanner is not installed, so this ran against api.osv.dev over "

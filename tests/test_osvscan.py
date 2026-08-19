@@ -279,3 +279,99 @@ def test_shareless_steps_are_excluded_from_a_derived_total():
     table = osvscan.render_steps(steps)
     assert "TOTAL" in table
     assert "     8.000" in table  # 4 + 4, not 4 + 3 + 4
+
+
+# -- the silent-skip guard -------------------------------------------------
+
+
+def test_a_scan_that_read_nothing_is_flagged_blind(tmp_path, monkeypatch):
+    """The worst failure this tool has: osv-scanner honours .gitignore, the
+    repos under test live in a git-ignored directory, and a scan that opened
+    no files reports exactly what a clean repo reports -- zero findings."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package-lock.json").write_text(
+        json.dumps({"lockfileVersion": 3, "packages": {}}), encoding="utf-8"
+    )
+
+    import osv_scanner_tool.scan as scanmod
+
+    monkeypatch.setattr(
+        scanmod, "scan_repo",
+        lambda path, **_kw: {"details": [], "sources": []},
+    )
+    run = osvscan.scan_repository(
+        repo, out_dir=tmp_path / "out", advisory_dir=None,
+        engine="binary", verbose=False,
+    )
+    assert run.findings == 0
+    assert run.blind is True
+    assert any("NOTHING WAS SCANNED" in note for note in run.notes)
+
+
+def test_a_scan_that_read_the_manifest_and_found_nothing_is_clean(tmp_path, monkeypatch):
+    """The other half of the same distinction: parsed a source, found no
+    vulnerabilities. That one really is good news and must not be flagged."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package-lock.json").write_text(
+        json.dumps({"lockfileVersion": 3, "packages": {}}), encoding="utf-8"
+    )
+
+    import osv_scanner_tool.scan as scanmod
+
+    monkeypatch.setattr(
+        scanmod, "scan_repo",
+        lambda path, **_kw: {
+            "details": [], "sources": [str(repo / "package-lock.json")],
+        },
+    )
+    run = osvscan.scan_repository(
+        repo, out_dir=tmp_path / "out", advisory_dir=None,
+        engine="binary", verbose=False,
+    )
+    assert run.findings == 0
+    assert run.blind is False
+    assert not any("NOTHING WAS SCANNED" in note for note in run.notes)
+
+
+def test_no_manifests_at_all_is_not_a_blind_scan(tmp_path, monkeypatch):
+    """An empty directory has nothing to scan. Reporting that as a suppressed
+    scan would cry wolf on the one case where zero really means zero."""
+    repo = tmp_path / "empty"
+    repo.mkdir()
+
+    import osv_scanner_tool.scan as scanmod
+
+    monkeypatch.setattr(
+        scanmod, "scan_repo", lambda path, **_kw: {"details": [], "sources": []}
+    )
+    run = osvscan.scan_repository(
+        repo, out_dir=tmp_path / "out", advisory_dir=None,
+        engine="binary", verbose=False,
+    )
+    assert run.blind is False
+
+
+def test_the_scanner_is_invoked_with_no_ignore(monkeypatch):
+    """The fix itself, pinned. A .gitignore in the tree being scanned must not
+    decide what gets scanned."""
+    import osv_scanner_tool.scan as scanmod
+
+    seen = {}
+
+    class _Result:
+        returncode = 0
+        stdout = json.dumps({"results": []})
+        stderr = ""
+
+    def fake_run(command, **_kw):
+        seen["command"] = command
+        return _Result()
+
+    monkeypatch.setattr(scanmod.subprocess, "run", fake_run)
+    scanmod.scan_repo("some/path")
+    assert "--no-ignore" in seen["command"]
+
+    scanmod.scan_repo("some/path", respect_gitignore=True)
+    assert "--no-ignore" not in seen["command"]

@@ -80,6 +80,72 @@ def _advisory_subtitle(advisory: dict) -> str:
     return f"{severity.upper()} - {vector}" if severity else vector
 
 
+#: Worst severity first, so a version carrying three advisories is summarised
+#: by the one that would get somebody paged.
+_SEVERITY_ORDER = {"critical": 4, "high": 3, "moderate": 2, "medium": 2, "low": 1}
+
+
+def _verdict(result: Any, compromised: bool) -> dict:
+    """The conclusion in words: what was found, and does it reach anything.
+
+    Separate from the graph on purpose. The columns carry the *argument* --
+    what a range admits versus what a lockfile resolved -- and an argument is
+    not an answer. This is the answer, including the answer "nothing", which
+    on a graph alone is indistinguishable from a view that failed to render.
+    """
+    advisories = list(result.advisories)
+    exposed = [p["service"] for p in result.exposed_projects]
+
+    worst = ""
+    for advisory in advisories:
+        label = _severity_of(advisory)
+        if _SEVERITY_ORDER.get(label, 0) > _SEVERITY_ORDER.get(worst, 0):
+            worst = label
+
+    ids = [a.get("advisory_id") for a in advisories if a.get("advisory_id")]
+    fixes = sorted({
+        a["fixed_version"] for a in advisories
+        if a.get("fixed_version") and isinstance(a.get("fixed_version"), str)
+    })
+
+    if compromised:
+        level, headline = "incident", "Marked as compromised (simulated)"
+    elif advisories:
+        level = worst or "advisory"
+        headline = (
+            f"{len(advisories)} known {'vulnerability' if len(advisories) == 1 else 'vulnerabilities'}"
+        )
+    else:
+        level, headline = "clean", "No known vulnerabilities"
+
+    if advisories or compromised:
+        if exposed:
+            reach = (
+                f"reaches {len(exposed)} project"
+                + ("" if len(exposed) == 1 else "s")
+                + ": " + ", ".join(sorted(exposed)[:4])
+            )
+        else:
+            reach = "no project's lockfile resolves this version"
+    else:
+        reach = (
+            f"installed in {len(exposed)} project"
+            + ("" if len(exposed) == 1 else "s")
+            if exposed else "not installed by any project here"
+        )
+
+    return {
+        "level": level,
+        "severity": worst,
+        "headline": headline,
+        "reach": reach,
+        "advisory_ids": ids,
+        "fixed_versions": fixes,
+        "exposed": sorted(exposed),
+        "compromised": compromised,
+    }
+
+
 def _fmt_ts(value: Any) -> str:
     """Epoch seconds -> a date, or a word where the sentinel means something."""
     try:
@@ -183,12 +249,27 @@ def package_graph(
             # straight from the feed, so it leads.
             "sub": _advisory_subtitle(advisory),
             "severity": _severity_of(advisory),
-            "hot": False,
-            "conf": Confidence.MEDIUM,
+            # A published advisory naming this exact version IS the threat.
+            # This was False back when the only thing that could be hot was a
+            # synthetic incident somebody clicked, and the consequence once
+            # advisories became real was the view arguing against itself: the
+            # threat column reported "0 of 1" and folded a genuine CVE behind
+            # a "show all", while the simulated incident beside it was drawn
+            # in full. Scanned findings are the headline; the simulation is
+            # the what-if.
+            "hot": True,
+            "conf": Confidence.HIGH,
             "why": [Evidence.KNOWN_VULNERABILITY],
-            "verdict": "Published advisory affecting this version",
+            "verdict": "Published advisory affecting this exact version",
             "alarm": True,
-            "file": "advisory",
+            "flag": (_severity_of(advisory) or "advisory").upper(),
+            "file": ", ".join(
+                part for part in (
+                    advisory.get("advisory_id") or "",
+                    f"fixed in {advisory.get('fixed_version')}"
+                    if advisory.get("fixed_version") else "",
+                ) if part
+            ),
             "detail": advisory.get("summary", ""),
         })
         edges.append([nid, target_id])
@@ -409,7 +490,14 @@ def package_graph(
         "target": result.target,
         "exists": True,
         "compromised": compromised,
+        # The finding, in words. The graph shows the argument; this states the
+        # conclusion, because a user who has to read six columns to learn
+        # whether they are affected has not been told whether they are
+        # affected. "Clean" is a result too, and gets said out loud rather
+        # than being left to look like a view that failed to load.
+        "verdict": _verdict(result, compromised),
         "stats": {
+            "advisories": len(result.advisories),
             "range_admits": len(result.direct_dependents),
             "lockfile_entries": len(result.lockfile_entries),
             "exposed_projects": len(result.exposed_projects),

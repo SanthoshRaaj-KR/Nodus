@@ -188,7 +188,7 @@ class HydraClient:
                 if attempt == retries - 1:
                     raise HydraError(
                         f"cannot reach HydraDB at {self.base_url} ({exc.reason}). "
-                        f"Is the container up? Try: hydra.ps1 status"
+                        f"Is the container up? Try: python -m blastradius.cli up"
                     ) from None
                 time.sleep(0.5 * (2**attempt))
 

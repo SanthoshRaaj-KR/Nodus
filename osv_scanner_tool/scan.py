@@ -45,37 +45,56 @@ def _extract_details(data):
     return details
 
 
-def scan_repo(repo_path):
+def scan_repo(repo_path, respect_gitignore=False):
     """Scan a repo/folder for known vulnerabilities via osv-scanner.
+
+    ``respect_gitignore`` is off by default, and that default is load-bearing.
+    osv-scanner honours ``.gitignore`` when walking a directory, which is the
+    right instinct for a tool run inside the project being scanned and the
+    wrong one here: the repos under test are checked out into a directory that
+    is git-ignored precisely because somebody else's history is not ours to
+    commit. "Do not commit this" is not "do not scan this", and the failure is
+    silent -- the scanner walks the tree, extracts nothing, and reports a clean
+    bill of health for code it never opened.
 
     Args:
         repo_path (str): Path to a repo or folder.
+        respect_gitignore (bool): Skip files the repo's .gitignore excludes.
 
     Returns:
-        dict: Scan details with summary, affected packages, and details.
+        dict: Scan summary. ``sources`` names the manifests the scanner
+        actually parsed, which is what separates "scanned, nothing found" from
+        "never read a thing".
     """
-    result = subprocess.run(
-        ["osv-scanner", "scan", "--recursive", repo_path, "--format", "json"],
-        capture_output=True,
-        text=True,
-    )
+    command = ["osv-scanner", "scan", "--recursive"]
+    if not respect_gitignore:
+        command.append("--no-ignore")
+    command += [repo_path, "--format", "json"]
+
+    result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode not in (0, 1):
         if "No package sources found" in result.stderr:
             return {
                 "repo_path": repo_path,
                 "total_vulnerabilities": 0,
                 "affected_packages": 0,
+                "sources": [],
                 "details": [],
             }
         raise RuntimeError(f"osv-scanner failed: {result.stderr}")
 
     data = json.loads(result.stdout)
     details = _extract_details(data)
+    sources = [
+        group.get("source", {}).get("path", "")
+        for group in data.get("results", [])
+    ]
 
     return {
         "repo_path": repo_path,
         "total_vulnerabilities": len(details),
         "affected_packages": len({d["package"] for d in details}),
+        "sources": [s for s in sources if s],
         "details": details,
     }
 

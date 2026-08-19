@@ -23,7 +23,13 @@
 
   #shell {
     height:100vh; height:100dvh; width:100%; display:grid;
-    grid-template-rows:auto 1fr auto; grid-template-columns:minmax(0,1fr);
+    /* header, verdict bar, stage, footer. Each child names its own row below,
+       because the verdict bar is `display:none` when there is no finding to
+       state -- and a display:none element is not a grid item at all, so with
+       implicit placement the footer slid up into the stage's 1fr row and the
+       stage collapsed to nothing. Explicit rows make the layout independent
+       of how many children happen to be visible. */
+    grid-template-rows:auto auto 1fr auto; grid-template-columns:minmax(0,1fr);
     max-width:100vw; overflow:hidden;
     background:
       radial-gradient(1200px 700px at 12% -10%, oklch(0.26 0.07 285) 0%, transparent 60%),
@@ -32,6 +38,10 @@
     color:oklch(0.95 0.01 265);
     font-family:'Space Grotesk', system-ui, sans-serif;
   }
+  #shell > header { grid-row:1; }
+  #shell > #verdict { grid-row:2; }
+  #shell > #stage  { grid-row:3; }
+  #shell > footer  { grid-row:4; }
   header {
     display:flex; align-items:center; gap:24px; flex-wrap:wrap; min-width:0;
     padding:18px 26px; border-bottom:1px solid oklch(0.3 0.03 265);
@@ -68,13 +78,17 @@
   .chip.on .n { color:oklch(0.82 0.06 25); }
   /* The mark control. Deliberately looks like a switch rather than a submit:
      it toggles a fact in the graph, and the same button retracts it. */
+  /* The what-if control, deliberately quiet. It writes a synthetic incident
+     against a healthy package; a scanned CVE beside it is the real finding,
+     and the loudest thing on screen should never be the simulation. */
   .act {
-    cursor:pointer; flex:none; padding:9px 14px; border-radius:10px; white-space:nowrap;
-    font:600 11.5px 'Space Grotesk',sans-serif; letter-spacing:0.04em; text-transform:uppercase;
-    background:oklch(0.3 0.1 25); border:1px solid oklch(0.55 0.15 25); color:oklch(0.93 0.08 25);
+    cursor:pointer; flex:none; padding:7px 12px; border-radius:9px; white-space:nowrap;
+    font:500 11px 'JetBrains Mono',monospace; letter-spacing:0.02em;
+    background:oklch(0.24 0.02 265); border:1px solid oklch(0.38 0.03 265);
+    color:oklch(0.78 0.02 265);
     transition:all 0.15s;
   }
-  .act:hover { background:oklch(0.38 0.13 25); }
+  .act:hover { background:oklch(0.3 0.04 265); color:oklch(0.9 0.02 265); }
   .act.on { background:oklch(0.28 0.05 150); border-color:oklch(0.5 0.1 150); color:oklch(0.9 0.07 150); }
   .act.busy { opacity:0.5; pointer-events:none; }
   .safety {
@@ -145,7 +159,41 @@
   .legend .sw { width:9px; height:9px; border-radius:50%; }
   .legend .t { font:400 11px 'JetBrains Mono',monospace; color:oklch(0.78 0.01 265); }
 
+  /* The verdict bar. The columns below it carry the argument -- what a range
+     admits versus what a lockfile resolved -- and an argument is not an
+     answer. This is the answer, including the answer "nothing found", which
+     on a bare graph is indistinguishable from a view that failed to load. */
+  #verdict {
+    display:none; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:11px 18px; border-bottom:1px solid oklch(0.28 0.03 265);
+    background:oklch(0.19 0.025 265);
+  }
+  #verdict.on { display:flex; }
+  #verdict .sev {
+    flex:none; padding:5px 11px; border-radius:8px;
+    font:700 11px 'Space Grotesk',sans-serif; letter-spacing:0.1em; text-transform:uppercase;
+  }
+  #verdict .head { font:600 14px 'Space Grotesk',sans-serif; color:oklch(0.95 0.01 265); }
+  #verdict .reach { font:400 12px 'JetBrains Mono',monospace; color:oklch(0.76 0.02 265); }
+  #verdict .ids {
+    font:400 11px 'JetBrains Mono',monospace; color:oklch(0.7 0.02 265);
+    margin-left:auto; text-align:right; line-height:1.5;
+  }
+  #verdict .fix { color:oklch(0.82 0.14 150); }
+  /* Severity drives the colour, so "critical" and "clean" can never be
+     mistaken for each other at a glance. */
+  .sev-critical { background:oklch(0.32 0.15 15);  color:oklch(0.93 0.12 15);  border:1px solid oklch(0.55 0.18 15); }
+  .sev-high     { background:oklch(0.32 0.13 35);  color:oklch(0.93 0.11 45);  border:1px solid oklch(0.55 0.16 35); }
+  .sev-moderate { background:oklch(0.3 0.1 75);    color:oklch(0.92 0.1 85);   border:1px solid oklch(0.52 0.12 75); }
+  .sev-low      { background:oklch(0.28 0.06 100); color:oklch(0.9 0.07 100);  border:1px solid oklch(0.48 0.08 100); }
+  .sev-clean    { background:oklch(0.27 0.07 150); color:oklch(0.9 0.09 150);  border:1px solid oklch(0.47 0.1 150); }
+  .sev-incident { background:oklch(0.3 0.1 25);    color:oklch(0.93 0.08 25);  border:1px solid oklch(0.55 0.15 25); }
+  .sev-advisory { background:oklch(0.28 0.05 265); color:oklch(0.88 0.03 265); border:1px solid oklch(0.45 0.05 265); }
+
   .notice { margin:40px auto; max-width:560px; padding:22px 24px; border-radius:14px; background:oklch(0.22 0.03 265); border:1px solid oklch(0.36 0.04 265); font:400 13px 'JetBrains Mono',monospace; line-height:1.7; color:oklch(0.86 0.01 265); }
+  .notice.bad { background:oklch(0.24 0.06 25); border-color:oklch(0.45 0.12 25); }
+  .notice h3 { margin:0 0 10px; font:600 15px 'Space Grotesk',sans-serif; color:oklch(0.96 0.01 265); }
+  .notice pre { margin:10px 0 0; padding:11px 13px; border-radius:9px; background:oklch(0.16 0.02 265); color:oklch(0.85 0.12 200); overflow-x:auto; font-size:12px; }
   .notice b { color:oklch(0.95 0.01 265); font-weight:600; }
   .notice code { color:oklch(0.82 0.14 200); }
 
@@ -245,9 +293,8 @@
       <div class="clear" id="clear">clear</div>
     </div>
 
-    <div id="markWrap" style="display:none;align-items:center;gap:10px">
-      <div class="act" id="markBtn">mark compromised</div>
-      <div class="safety">synthetic · nothing downloaded or run</div>
+    <div id="markWrap" style="display:none;align-items:center;gap:8px">
+      <div class="act" id="markBtn" title="Write a synthetic incident against this version to see what a live compromise would look like. Nothing is downloaded and no package is modified.">simulate compromise</div>
     </div>
 
     <div class="chips">
@@ -255,6 +302,8 @@
       <div id="chips"></div>
     </div>
   </header>
+
+  <div id="verdict"></div>
 
   <div id="stage">
     <div id="scroll"><div id="sizer"><div id="canvas"></div></div></div>
@@ -484,14 +533,38 @@ function setZoom(z, manual) {
 /* ------------------------------------------------------------------ */
 /* render                                                              */
 /* ------------------------------------------------------------------ */
+/* The finding, stated. Everything below is the evidence for it, and evidence
+   alone never told anyone whether they are affected. A clean result is a
+   result and gets said out loud -- silence here reads as a broken page. */
+function paintVerdict(g) {
+  const bar = $('verdict');
+  const v = g && g.verdict;
+  if (!v || state.mode !== 'macro') { bar.className = ''; bar.innerHTML = ''; return; }
+
+  const level = v.compromised ? 'incident' : (v.severity || (v.level === 'clean' ? 'clean' : 'advisory'));
+  const badge = v.compromised ? 'SIMULATED' : (v.severity || (v.level === 'clean' ? 'clear' : 'advisory'));
+  const right = [];
+  if (v.advisory_ids && v.advisory_ids.length) right.push(esc(v.advisory_ids.join(' · ')));
+  if (v.fixed_versions && v.fixed_versions.length) {
+    right.push('<span class="fix">fixed in ' + esc(v.fixed_versions.join(', ')) + '</span>');
+  }
+  bar.className = 'on';
+  bar.innerHTML =
+    `<div class="sev sev-${esc(level)}">${esc(badge)}</div>` +
+    `<div class="head">${esc(v.headline)}</div>` +
+    `<div class="reach">${esc(v.reach)}</div>` +
+    (right.length ? `<div class="ids">${right.join('<br>')}</div>` : '');
+}
+
 function render() {
   const g = state.graphs[state.mode];
   const canvas = $('canvas');
   if (state.mode === 'macro') {
     const marked = !!(g && g.compromised);
-    $('markBtn').textContent = marked ? 'retract incident' : 'mark compromised';
+    $('markBtn').textContent = marked ? 'retract simulation' : 'simulate compromise';
     $('markBtn').classList.toggle('on', marked);
   }
+  paintVerdict(g);
   if (!g) {
     if (state.mode === 'macro') {
       notice(state.pkgError
@@ -506,8 +579,11 @@ function render() {
   if (!g.nodes.length) {
     $('sizer').style.width = 'auto'; $('sizer').style.height = 'auto';
     canvas.style.transform = 'none';
-    canvas.innerHTML = '<div class="notice">The graph is empty for this view.<br><br>' +
-      'Run <code>python -m blastradius.cli ingest</code> to scan the corpus, then reload.</div>';
+    notice('<h3>Nothing in the graph yet</h3>' +
+      'The database is reachable but holds no data for this view. ' +
+      'Scan a repository and build both tiers:' +
+      '<pre>python -m blastradius.cli pipeline --reset</pre>' +
+      'Then reload this page.');
     paintFooter(g, null, []);
     return;
   }
@@ -857,10 +933,10 @@ async function loadGraph(mode) {
   state.graphs[mode] = await r.json();
 }
 
-function notice(html) {
+function notice(html, bad) {
   $('sizer').style.width = 'auto'; $('sizer').style.height = 'auto';
   $('canvas').style.transform = 'none';
-  $('canvas').innerHTML = `<div class="notice">${html}</div>`;
+  $('canvas').innerHTML = `<div class="notice${bad ? ' bad' : ''}">${html}</div>`;
 }
 
 async function loadPackageGraph(force) {
@@ -1048,11 +1124,42 @@ document.addEventListener('keydown', (e) => {
 });
 
 (async function boot() {
+  // Health is checked before anything else and its failure is fatal to the
+  // page, not swallowed. Every fetch below depends on the node being up, so
+  // a dead database used to render as an empty canvas with no explanation --
+  // identical to "you have no vulnerabilities", which is the worst thing this
+  // page could imply.
+  let health = null;
+  try {
+    const r = await fetch('/api/health');
+    health = await r.json();
+  } catch (e) {
+    health = { ok: false, error: String(e) };
+  }
+
+  if (!health || !health.ok) {
+    notice('<h3>Cannot reach the database</h3>' +
+      'The Explorer is running, but HydraDB is not answering on ' +
+      '<code>127.0.0.1:8443</code>, so nothing can be shown. This is a ' +
+      'connection problem, <b>not</b> a clean scan result.' +
+      '<pre>python -m blastradius.cli up</pre>' +
+      (health && health.error ? '<br>' + esc(String(health.error)) : '') +
+      '<br>Then reload this page.', true);
+    return;
+  }
+
   // The exposed-projects metric reads "n of N"; N is the number of projects in
   // the graph, and without it the denominator would be a guess.
-  fetch('/api/health').then((r) => r.ok && r.json()).then((h) => {
-    if (h && h.counts) state.serviceCount = h.counts.Service || 0;
-  }).catch(() => {});
+  if (health.counts) state.serviceCount = health.counts.Service || 0;
+
+  if (health.empty) {
+    notice('<h3>The graph is empty</h3>' +
+      'HydraDB is up but nothing has been ingested. Scan a repository and ' +
+      'build both tiers:' +
+      '<pre>python -m blastradius.cli pipeline --reset</pre>' +
+      'Then reload this page.');
+    return;
+  }
 
   // Advisories first: they still drive the micro search box, and the opening
   // query is picked from them even though the macro tab does not use it.

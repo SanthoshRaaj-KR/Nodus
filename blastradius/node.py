@@ -32,6 +32,13 @@ ADMIN = "http://127.0.0.1:9090"
 IMAGE_UID = "10001:10001"
 
 RUN_ARGS = [
+    # Docker Desktop stops containers when it pauses, updates, or hits its
+    # resource-saver idle timeout, and it does so with a clean SIGTERM -- the
+    # node exits 0 and stays down. Everything then fails at once with no
+    # obvious cause: the Explorer draws an empty canvas, which is much too
+    # close to "you have no vulnerabilities". Restarting on anything except a
+    # deliberate `docker stop` is what keeps a demo alive across a laptop lid.
+    "--restart", "unless-stopped",
     "-p", "7687:7687",
     "-p", "8443:8443",
     "-p", "9090:9090",

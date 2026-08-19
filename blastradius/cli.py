@@ -642,10 +642,19 @@ def cmd_pipeline(args) -> int:
             print(RED(f"  {name} failed: {message}"))
         print()
 
-    if report.advisory_nodes == 0:
-        print(YELLOW("  No Advisory nodes landed. Either the repo has no known"))
-        print(YELLOW("  vulnerabilities, or the scanned versions are not the ones"))
-        print(YELLOW("  the lockfiles resolved -- check the scan log."))
+    if report.scan is not None and report.scan.blind:
+        # Never let this read as good news. Zero findings from a scan that
+        # opened nothing looks identical to zero findings from a clean repo,
+        # and the two could not be further apart.
+        print(RED("  NOTHING WAS SCANNED - this is not a clean bill of health."))
+        for note in report.scan.notes:
+            print(YELLOW(f"  {note}"))
+    elif report.advisory_nodes == 0:
+        print(YELLOW("  No Advisory nodes landed. The scanner parsed "
+                     f"{len(report.scan.sources) if report.scan else 0} source(s) "
+                     "and found nothing,"))
+        print(YELLOW("  so this repo has no known vulnerabilities in the versions"))
+        print(YELLOW("  its lockfiles resolve. Check the scan log if that surprises you."))
     else:
         print(
             f"  {GREEN(str(report.advisory_nodes) + ' advisories')} now sit on "
@@ -672,6 +681,8 @@ def cmd_pipeline(args) -> int:
     print(f"  log report      {log_path}")
     print(f"  machine report  {log_path.with_suffix('.json')}")
     print()
+    if report.scan is not None and report.scan.blind:
+        return 2
     return 2 if report.failures else 0
 
 
