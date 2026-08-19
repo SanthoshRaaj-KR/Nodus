@@ -327,8 +327,11 @@
 
 /* Kept identical to the source design so the two stay visually in step. */
 const KIND = {
-  /* Micro view. The depth-column kinds -- service, direct, transitive, deep --
-     went with the sweep that produced them; nothing emits them now. */
+  /* `service` is still emitted -- project_graph gives a clean project card that
+     kind -- so it stays. The other three depth-column kinds (direct,
+     transitive, deep) went with the sweep that produced them and nothing emits
+     them now. */
+  service:    { hue: 265, label: 'project' },
   entry:      { hue: 265, label: 'application entry point' },
   route:      { hue: 200, label: 'http route' },
   handler:    { hue: 300, label: 'route handler' },
@@ -449,10 +452,10 @@ function layout(visible, allLayers, edges) {
   const layers = allLayers;
   if (!layers.length) return { pos: {}, H: 200, W: 400, layers: [], byLayer, slotOf: {} };
 
-  // Columns pack against each other rather than sitting at `layer * COLW`.
-  // A layer nobody occupies -- a React app has no HTTP routes, so layers 1
-  // and 2 are empty -- would otherwise leave a 600px hole in the middle of
-  // the drawing with no header over it to explain itself.
+  // Slot, not raw layer, so the strip has no gaps. With every declared column
+  // now present this is usually the identity map; it still matters if a
+  // payload ever emits a layer past the columns it declared, which would
+  // otherwise leave a headerless 300px hole.
   const slotOf = {};
   layers.forEach((l, i) => { slotOf[l] = i; });
 
@@ -750,7 +753,17 @@ function render() {
   const seedIds = found ? found.seeds : new Set();
   const nodeById = {}; g.nodes.forEach((n) => { nodeById[n.id] = n; });
 
-  const allLayers = [...new Set(g.nodes.map((n) => n.layer))].sort((a, b) => a - b);
+  // Every column the payload *declares* is drawn, occupied or not. An empty
+  // one is a finding: "RANGE ADMITS - UNCONFIRMED, 0 nodes" says nothing else
+  // in the corpus would even accept this version, and "HTTP ROUTES, 0 nodes"
+  // says this app serves none. Deriving the layer list from the nodes present
+  // instead deleted those columns silently -- on axios@1.12.0 it turned the
+  // six-column argument into four and made an answer look like a missing
+  // feature.
+  const declared = (g.cols && g.cols.length) ? g.cols.length - 1 : 0;
+  const occupied = g.nodes.map((n) => n.layer);
+  const maxLayer = Math.max(declared, ...(occupied.length ? occupied : [0]));
+  const allLayers = Array.from({ length: maxLayer + 1 }, (_, i) => i);
   const { visible, hidden, counts } = selectVisible(g, hot);
   const visibleIds = new Set(visible.map((n) => n.id));
   const drawnEdges = g.edges.filter(([a, b]) => visibleIds.has(a) && visibleIds.has(b));
@@ -773,9 +786,14 @@ function render() {
     const accent = col(kh, 0.78, 0.14);
     html += `<div class="colhead" style="left:${slotOf[l] * COLW}px;top:0;width:${NW}px;border-bottom:1px solid ${col(kh, 0.4, 0.06)}">
       <div class="t" style="color:${accent}">${esc(g.cols[l] || '')}</div>
-      <div class="c">${byLayer[l].length === counts[l]
-        ? counts[l] + ' nodes'
-        : byLayer[l].length + ' of ' + counts[l]}</div></div>`;
+      <div class="c">${(() => {
+        // `counts` is keyed off the nodes that exist, so a declared-but-empty
+        // column has no entry and read "0 of undefined". It is a real answer,
+        // so it gets a real number.
+        const total = counts[l] || 0;
+        const shown = byLayer[l].length;
+        return shown === total ? total + ' nodes' : shown + ' of ' + total;
+      })()}</div></div>`;
     // The graph reads left to right; a column layout with no arrows does not
     // say so on its own.
     if (i < layers.length - 1) {
@@ -1334,8 +1352,17 @@ async function setMode(mode) {
   $('q').value = pkg ? state.pkgSpec : state.query;
 
   if (pkg && !state.pkgTargets.length) await loadPkgTargets();
-  // An empty box in the package tab now means the project view, so it is left
-  // empty rather than pre-filled with an arbitrary chip.
+  // Open on the six-column evidence view for the worst target the graph knows
+  // about, rather than the project overview. The overview answers "what is
+  // wrong with this repo"; this answers "and why should I believe you", which
+  // is the argument the six columns exist to make -- RANGE ADMITS holds the
+  // leads a range-only tool would report, LOCKFILE RESOLVES holds what was
+  // actually installed, and the gap between the two is the point.
+  // `suggested_targets` already ranks by advisories first, so [0] is the
+  // strongest case. The `whole project` chip goes back to the overview.
+  if (pkg && !state.pkgSpec && state.pkgTargets.length) {
+    state.pkgSpec = state.pkgTargets[0].spec;
+  }
   if (pkg) $('q').value = state.pkgSpec;
 
   await loadGraph(mode);

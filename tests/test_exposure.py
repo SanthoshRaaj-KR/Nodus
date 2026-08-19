@@ -286,3 +286,71 @@ def test_the_model_grades_the_live_graph():
     assert 0 in hops
     assert max(hops) >= 1, "no advisory propagated past the package it names"
     assert all(0 < h.heat <= 1.0 for h in model.heat.values())
+
+
+@live
+def test_package_view_grades_its_columns():
+    """The six-column view must grade, and must not overclaim.
+
+    It is the landing view, so its colours are the first thing anyone reads.
+    Two things have to hold at once: the confirmed chain cools as it moves
+    right, and the two columns that are explicitly *not* findings stay off the
+    ramp entirely. Colouring `RANGE ADMITS` warm would assert the range-only
+    guess the whole evidence model exists to replace.
+    """
+    from blastradius.ids import DEFAULT_DB, IdAllocator
+    from blastradius.pkg.graphview import package_graph
+
+    client = _live_client()
+    if not DEFAULT_DB.exists():
+        pytest.skip("no id map")
+    with IdAllocator(DEFAULT_DB) as ids:
+        graph = package_graph(client, ids, "vite", "6.3.6")
+    if not graph.get("exists"):
+        pytest.skip("vite@6.3.6 not ingested")
+
+    by_kind: dict = {}
+    for node in graph["nodes"]:
+        by_kind.setdefault(node["kind"], []).append(node)
+
+    # every node carries the channel, so the renderer never falls back to 0
+    for node in graph["nodes"]:
+        assert "heat" in node and "hops" in node and "vuln" in node, node["id"]
+
+    for kind in ("possible", "related"):
+        for node in by_kind.get(kind, []):
+            assert node["heat"] == 0.0, f"{kind} must stay off the ramp"
+            assert node["vuln"] is False
+
+    subject = by_kind.get("compromised") or by_kind.get("subject")
+    assert subject, "no target node"
+    assert subject[0]["heat"] > 0, "the version the advisories name is not graded"
+
+    # confirmed chain: target (0 hops) -> lockfile (1) -> project (2)
+    chain = [subject[0]]
+    for kind in ("resolution", "exposed"):
+        if by_kind.get(kind):
+            chain.append(by_kind[kind][0])
+    heats = [n["heat"] for n in chain]
+    assert heats == sorted(heats, reverse=True), f"chain does not cool outward: {heats}"
+
+
+@live
+def test_package_view_declares_all_six_columns():
+    """An empty column is an answer, so the payload must still declare it."""
+    from blastradius.ids import DEFAULT_DB, IdAllocator
+    from blastradius.pkg.graphview import COLUMNS, package_graph
+
+    client = _live_client()
+    if not DEFAULT_DB.exists():
+        pytest.skip("no id map")
+    with IdAllocator(DEFAULT_DB) as ids:
+        graph = package_graph(client, ids, "axios", "1.12.0")
+    if not graph.get("exists"):
+        pytest.skip("axios@1.12.0 not ingested")
+
+    assert graph["cols"] == COLUMNS
+    # axios is the case that exposed this: nothing's range admits it, so
+    # column 2 is empty and used to be dropped from the drawing entirely.
+    assert not [n for n in graph["nodes"] if n["layer"] == 2]
+    assert len(graph["cols"]) == 6

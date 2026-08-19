@@ -55,8 +55,24 @@ $Labels = @(
   'Repository', 'Organization', 'PublisherIdentity', 'Advisory', 'Incident'
 )
 
+function Remove-Container {
+  # `docker rm -f` on a container that does not exist writes to stderr, and
+  # PowerShell 5.1 turns a native command's stderr into an ErrorRecord -- which
+  # $ErrorActionPreference = 'Stop' then makes terminating. So the plain
+  # `docker rm -f x 2>$null` this replaces killed the script precisely when the
+  # container was already gone, i.e. every `wipe` followed by `up`, which is
+  # the whole clean-start path. Checking first keeps the removal idempotent.
+  $existing = docker ps --all --quiet --filter "name=^$Container$"
+  if ($existing) { docker rm --force $Container | Out-Null }
+}
+
 function Test-Daemon {
-  docker version --format '{{.Server.Version}}' 2>$null | Out-Null
+  # No 2>$null here: redirecting a native command's stderr in PowerShell 5.1
+  # raises a terminating NativeCommandError under $ErrorActionPreference =
+  # 'Stop', so the "daemon is down" check would die with a stack trace instead
+  # of the sentence below -- which is the one case it exists to report.
+  $ErrorActionPreference = 'Continue'
+  docker version --format '{{.Server.Version}}' | Out-Null
   if ($LASTEXITCODE -ne 0) {
     throw "Docker daemon is not reachable. Start Docker Desktop and try again."
   }
@@ -69,7 +85,14 @@ function Initialize-Volume {
     docker volume create $Volume | Out-Null
   }
   # Seed the store, cache and token, owned by the image's UID. Idempotent.
-  docker run --rm -v "${Volume}:/data" --entrypoint /bin/sh $Image -c `
+  #
+  # `--user 0:0` is required, not tidiness. The image declares USER 10001, and
+  # a freshly created Docker volume is root-owned 0755 -- so the default user
+  # can neither mkdir inside it nor chown it, and seeding a *new* volume fails
+  # with a bare "Permission denied" naming no path. It only ever appeared to
+  # work because an already-seeded volume made the mkdir a no-op; the first
+  # `wipe` exposed it.
+  docker run --rm --user 0:0 -v "${Volume}:/data" --entrypoint /bin/sh $Image -c `
     "mkdir -p /data/store /data/cache && printf '%s\n' '$Token' > /data/auth-token && chown -R 10001:10001 /data" | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "failed to seed volume $Volume" }
 }
@@ -79,7 +102,7 @@ function Start-Node {
   $running = docker ps --quiet --filter "name=^$Container$"
   if ($running) { Write-Host "$Container already running" -ForegroundColor Green; return }
 
-  docker rm -f $Container 2>$null | Out-Null
+  Remove-Container
   Initialize-Volume
 
   Write-Host "starting $Container" -ForegroundColor Cyan
@@ -154,13 +177,13 @@ switch ($Command) {
 
   'down' {
     Test-Daemon
-    docker rm -f $Container 2>$null | Out-Null
+    Remove-Container
     Write-Host "$Container stopped (volume $Volume kept)" -ForegroundColor Yellow
   }
 
   'restart' {
     Test-Daemon
-    docker rm -f $Container 2>$null | Out-Null
+    Remove-Container
     Start-Node
   }
 
@@ -207,8 +230,11 @@ switch ($Command) {
 
   'wipe' {
     Test-Daemon
-    docker rm -f $Container 2>$null | Out-Null
-    docker volume rm $Volume 2>$null | Out-Null
+    Remove-Container
+    # Same stderr-is-terminating trap as Remove-Container: a second `wipe`
+    # would otherwise fail on the volume already being gone.
+    $vol = docker volume ls --quiet --filter "name=^$Volume$"
+    if ($vol) { docker volume rm $Volume | Out-Null }
     if (Test-Path 'data\ids.sqlite') { Remove-Item 'data\ids.sqlite*' -Force }
     Write-Host "container, volume and id map destroyed" -ForegroundColor Red
   }

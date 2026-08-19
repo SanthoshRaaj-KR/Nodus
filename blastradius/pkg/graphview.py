@@ -38,7 +38,7 @@ from typing import Any
 from .. import schema
 from ..hydra_client import HydraClient, HydraError
 from ..ids import IdAllocator
-from ..query.exposure import full_exposure
+from ..query.exposure import DECAY, full_exposure, severity_base
 from .blast import BlastRadiusEngine, Confidence, Evidence
 
 __all__ = [
@@ -189,6 +189,41 @@ def _service_for_entries(client: HydraClient, entries: list[dict]) -> dict[int, 
     return out
 
 
+def _heat(base: float, hops: int, source: str, advisory: str, severity: str) -> dict:
+    """Heat fields for one node of the six-column view.
+
+    This view is already scoped to a single version, so distance is not
+    something to walk for -- the columns *are* the distance. The threat and the
+    version it names sit at hop 0, a lockfile that resolved that version is one
+    hop out, and the project holding that lockfile is two. Feeding those through
+    the same ramp constant as :mod:`blastradius.query.exposure` is what stops
+    this view and the project view disagreeing about the same CVE.
+
+    Columns 2 and 5 deliberately get no heat at all. `RANGE ADMITS` is the
+    range-only guess the evidence model exists to replace -- a version a range
+    would accept is not a version anything installed -- and a shared maintainer
+    never raises a finding above INVESTIGATE. Colouring either of them warm
+    would assert exactly the thing the drawing is arguing against; they keep
+    their kind stripe instead, which says what they are without claiming they
+    are exposed.
+    """
+    heat = max(0.0, base - hops * DECAY)
+    return {
+        "heat": round(heat, 4),
+        "hops": hops,
+        "severity": severity,
+        "vuln": True,
+        "vulnSource": source,
+        "advisory": advisory,
+    }
+
+
+#: A node this view draws but which nothing marks: column 2, column 5, and an
+#: unflagged subject. Same shape, no claim.
+_COOL = {"heat": 0.0, "hops": -1, "severity": "", "vuln": False,
+         "vulnSource": "", "advisory": ""}
+
+
 def package_graph(
     client: HydraClient,
     ids: IdAllocator,
@@ -225,6 +260,21 @@ def package_graph(
     #: the version is a fact about an installation, not a finding.
     flagged = compromised or bool(result.advisories)
 
+    # Where this target starts on the shared ramp. An incident is a confirmed
+    # live compromise, so it outranks any published severity word; otherwise the
+    # worst advisory decides. Same scale as query/exposure.py, deliberately.
+    worst_word = max(
+        (_severity_of(a) for a in result.advisories),
+        key=lambda w: _SEVERITY_ORDER.get(w, 0),
+        default="",
+    )
+    base = 1.0 if compromised else severity_base(worst_word)
+    heat_word = "incident" if compromised else (worst_word or "unknown")
+    heat_src = result.target
+    heat_adv = (
+        (result.advisories[0].get("advisory_id") or "") if result.advisories else ""
+    )
+
     # -- column 0: the threat ---------------------------------------------
     for incident in result.incidents:
         nid = "inc:" + str(incident.get("incident_id"))
@@ -235,6 +285,7 @@ def package_graph(
                 incident.get("status", ""), _fmt_ts(incident.get("live_from"))
             ),
             "hot": True,
+            **_heat(1.0, 0, result.target, "", "incident"),
             "conf": Confidence.CERTAIN,
             "why": [Evidence.DIRECTLY_COMPROMISED],
             "verdict": "Simulated supply-chain compromise, recorded in our own database",
@@ -265,6 +316,11 @@ def package_graph(
             # in full. Scanned findings are the headline; the simulation is
             # the what-if.
             "hot": True,
+            **_heat(
+                severity_base(_severity_of(advisory)), 0, result.target,
+                advisory.get("advisory_id") or "",
+                _severity_of(advisory) or "unknown",
+            ),
             "conf": Confidence.HIGH,
             "why": [Evidence.KNOWN_VULNERABILITY],
             "verdict": "Published advisory affecting this exact version",
@@ -303,6 +359,7 @@ def package_graph(
         # thing on a screen full of red. The advisory node one column left was
         # already fixed for exactly this reason; the fix stopped one node short.
         "hot": flagged,
+        **(_heat(base, 0, heat_src, heat_adv, heat_word) if flagged else _COOL),
         "conf": Confidence.CERTAIN if compromised else (
             Confidence.HIGH if flagged else Confidence.LOW
         ),
@@ -335,6 +392,7 @@ def package_graph(
             "pkg": dependent["name"],
             "version": dependent["version"],
             "hot": False,
+            **_COOL,
             "conf": Confidence.MEDIUM,
             "why": [Evidence.POSSIBLE_EXACT],
             "neg": ["no lockfile in the corpus resolved this pairing"],
@@ -366,6 +424,7 @@ def package_graph(
             "pkg": entry.get("package_name") or name,
             "version": entry.get("resolved_version", ""),
             "hot": flagged,
+            **(_heat(base, 1, heat_src, heat_adv, heat_word) if flagged else _COOL),
             "conf": Confidence.HIGH if flagged else Confidence.LOW,
             "why": [
                 Evidence.RESOLVES_COMPROMISED_VERSION if flagged
@@ -414,6 +473,7 @@ def package_graph(
                 " - dev only" if project.get("dev_only") else "",
             ),
             "hot": flagged,
+            **(_heat(base, 2, heat_src, heat_adv, heat_word) if flagged else _COOL),
             "conf": Confidence.HIGH if flagged else Confidence.LOW,
             "why": why,
             "neg": neg,
@@ -464,6 +524,7 @@ def package_graph(
                 "a repository or a publisher is not exposure"
             ),
             "alarm": False,
+            **_COOL,
             "file": "identity relation",
             "detail": detail,
         }
@@ -515,6 +576,16 @@ def package_graph(
         "target": result.target,
         "exists": True,
         "compromised": compromised,
+        "view": "package",
+        "exposure": {
+            "exposed": sum(1 for n in nodes if n.get("vuln")),
+            "total": len(nodes),
+            "worst": {
+                "heat": round(base, 4), "hops": 0, "severity": heat_word,
+                "source": heat_src, "advisory": heat_adv,
+            } if flagged else None,
+            "advisories": len(result.advisories) + len(result.incidents),
+        },
         # The finding, in words. The graph shows the argument; this states the
         # conclusion, because a user who has to read six columns to learn
         # whether they are affected has not been told whether they are
