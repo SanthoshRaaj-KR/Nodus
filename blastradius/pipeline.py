@@ -93,14 +93,20 @@ class PipelineReport:
     def advisory_nodes(self) -> int:
         return self.counts.get(schema.ADVISORY, 0)
 
+    #: Wall clock of phase A, and of each of its top-level members. Recorded
+    #: when the phase runs rather than derived from `steps` afterwards: the
+    #: scan's own sub-steps are spliced into that list and are *inside* the
+    #: scan's own duration, so summing every concurrent row would count the
+    #: scan twice and overstate what the overlap won.
+    phase_seconds: float = 0.0
+    phase_member_seconds: list[float] = field(default_factory=list)
+
     @property
     def saved_s(self) -> float:
         """Wall clock saved by phase A, versus running its members in turn."""
-        members = [s for s in self.steps if s.concurrent]
-        if not members:
+        if not self.phase_member_seconds:
             return 0.0
-        phase = max((s.seconds for s in self.steps if s.name == PHASE_A), default=0.0)
-        return max(0.0, sum(s.seconds for s in members) - phase)
+        return max(0.0, sum(self.phase_member_seconds) - self.phase_seconds)
 
     def render(self) -> str:
         lines = [
@@ -348,6 +354,9 @@ def run_pipeline(
             for _name, future in futures:
                 future.result()
         phase = time.perf_counter() - phase_start
+        members = report.steps[-len(tasks):]
+        report.phase_seconds = phase
+        report.phase_member_seconds = [s.seconds for s in members]
         # The phase itself is the sequential row; its members hang off it and
         # are marked concurrent, so the share column stays honest.
         report.steps.insert(

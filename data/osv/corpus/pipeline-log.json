@@ -1,12 +1,32 @@
 {
   "repo": "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus",
-  "started_at": 1787126937.29351,
-  "elapsed_s": 19.437,
+  "parallel": false,
+  "started_at": 1787127283.842944,
+  "elapsed_s": 8.719,
+  "saved_s": 0.0,
+  "advisory_nodes": 3,
+  "affects_edges": 5,
+  "graph_counts": {
+    "Service": 2,
+    "PackageVersion": 1322,
+    "File": 11,
+    "Function": 384,
+    "ExternalImport": 15,
+    "PersistenceArtifact": 6,
+    "Package": 294,
+    "Lockfile": 1,
+    "LockfileEntry": 338,
+    "Maintainer": 217,
+    "Repository": 290,
+    "Organization": 12,
+    "PublisherIdentity": 123,
+    "Advisory": 3
+  },
   "scan": {
     "repo": "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus",
     "engine": "osv-scanner",
-    "started_at": 1787126940.2982557,
-    "elapsed_s": 1.4,
+    "started_at": 1787127286.758954,
+    "elapsed_s": 1.344,
     "csv_path": "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\data\\osv\\corpus\\osv_scan_results.csv",
     "advisory_dir": "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\advisories\\generated",
     "advisory_files": [
@@ -51,22 +71,22 @@
     "steps": [
       {
         "name": "discover manifests",
-        "seconds": 0.0032,
+        "seconds": 0.0029,
         "detail": "package-lock=1, requirements=0"
       },
       {
         "name": "osv scan (binary)",
-        "seconds": 1.3533,
+        "seconds": 1.3029,
         "detail": "5 row(s) via osv-scanner"
       },
       {
         "name": "write csv",
-        "seconds": 0.0013,
+        "seconds": 0.0008,
         "detail": "osv_scan_results.csv (21,586 bytes)"
       },
       {
         "name": "merge aliases",
-        "seconds": 0.0322,
+        "seconds": 0.028,
         "detail": "5 findings -> 3 advisories after alias merge (npm=5)"
       },
       {
@@ -77,79 +97,73 @@
     ],
     "notes": []
   },
-  "graph_counts": {
-    "Service": 2,
-    "PackageVersion": 1322,
-    "File": 11,
-    "Function": 384,
-    "ExternalImport": 15,
-    "PersistenceArtifact": 6,
-    "Package": 294,
-    "Lockfile": 1,
-    "LockfileEntry": 338,
-    "Maintainer": 217,
-    "Repository": 290,
-    "Organization": 12,
-    "PublisherIdentity": 123,
-    "Advisory": 3
-  },
-  "advisory_nodes": 3,
-  "affects_edges": 5,
+  "failures": {},
   "steps": [
     {
-      "name": "preflight",
-      "seconds": 0.0997,
-      "detail": "node ready"
-    },
-    {
       "name": "reset",
-      "seconds": 2.8734,
-      "detail": "store dropped, id map cleared, node back up"
+      "seconds": 2.8953,
+      "detail": "store dropped, id map cleared, node back up",
+      "concurrent": false
     },
     {
-      "name": "osv scan",
-      "seconds": 1.4317,
-      "detail": "5 finding(s), 3 advisory(ies) via osv-scanner"
+      "name": "scan",
+      "seconds": 1.3642,
+      "detail": "5 finding(s), 3 advisory(ies) via osv-scanner",
+      "concurrent": false
     },
     {
-      "name": "scan: discover manifests",
-      "seconds": 0.0032,
-      "detail": "package-lock=1, requirements=0"
+      "name": "discover manifests",
+      "seconds": 0.0029,
+      "detail": "package-lock=1, requirements=0",
+      "concurrent": true
     },
     {
-      "name": "scan: osv scan (binary)",
-      "seconds": 1.3533,
-      "detail": "5 row(s) via osv-scanner"
+      "name": "osv scan (binary)",
+      "seconds": 1.3029,
+      "detail": "5 row(s) via osv-scanner",
+      "concurrent": true
     },
     {
-      "name": "scan: write csv",
-      "seconds": 0.0013,
-      "detail": "osv_scan_results.csv (21,586 bytes)"
+      "name": "write csv",
+      "seconds": 0.0008,
+      "detail": "osv_scan_results.csv (21,586 bytes)",
+      "concurrent": true
     },
     {
-      "name": "scan: merge aliases",
-      "seconds": 0.0322,
-      "detail": "5 findings -> 3 advisories after alias merge (npm=5)"
+      "name": "merge aliases",
+      "seconds": 0.028,
+      "detail": "5 findings -> 3 advisories after alias merge (npm=5)",
+      "concurrent": true
     },
     {
-      "name": "scan: write advisory json",
+      "name": "write advisory json",
       "seconds": 0.0025,
-      "detail": "3 file(s)"
+      "detail": "3 file(s)",
+      "concurrent": true
     },
     {
       "name": "code graph ingest",
-      "seconds": 1.5348,
-      "detail": "755 nodes, 3,139 edges"
+      "seconds": 1.4509,
+      "detail": "755 nodes, 3,139 edges",
+      "concurrent": false
+    },
+    {
+      "name": "registry prefetch",
+      "seconds": 0.6041,
+      "detail": "294 package(s) warmed, 0 fetched",
+      "concurrent": false
     },
     {
       "name": "package tier ingest",
-      "seconds": 13.1159,
-      "detail": "984 versions, 3 advisories, 338 closure edges"
+      "seconds": 2.1805,
+      "detail": "984 versions, 3 advisories, 338 closure edges",
+      "concurrent": false
     },
     {
       "name": "verify",
-      "seconds": 0.3812,
-      "detail": "3 Advisory nodes, 5 AFFECTS edges"
+      "seconds": 0.2235,
+      "detail": "3 Advisory nodes, 5 AFFECTS edges",
+      "concurrent": false
     }
   ]
 }

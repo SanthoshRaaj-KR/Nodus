@@ -477,6 +477,22 @@ def suggested_targets(client: HydraClient, limit: int = 6) -> list[dict]:
     except HydraError:
         marked = set()
 
+    # What the scan found. Before advisories were scanned there were never
+    # any, so ranking by range-admits alone was harmless; now it is the bug
+    # that matters most here. A chip list ordered by how many versions a range
+    # admits offers packages with no known vulnerability at all, and buries
+    # the ones an advisory actually names -- which are the only reason anyone
+    # opened this view.
+    try:
+        vulnerable: dict[str, int] = {}
+        for row in client.query(
+            "MATCH (a:Advisory)-[:AFFECTS]->(v:PackageVersion) "
+            "RETURN v.key AS key, count(*) AS n"
+        ).rows:
+            vulnerable[row["key"]] = row["n"]
+    except HydraError:
+        vulnerable = {}
+
     out = []
     for row in resolved:
         key = row["key"]
@@ -485,9 +501,18 @@ def suggested_targets(client: HydraClient, limit: int = 6) -> list[dict]:
             "projects": row["projects"],
             "range_admits": admits.get(key, 0),
             "marked": key in marked,
+            "advisories": vulnerable.get(key, 0),
         })
+    # Marked first (somebody is mid-investigation), then anything an advisory
+    # names, then the range-only spread as the tie-break it always was.
     out.sort(
-        key=lambda r: (r["marked"], r["range_admits"], r["projects"]), reverse=True
+        key=lambda r: (
+            r["marked"],
+            r["advisories"],
+            r["range_admits"],
+            r["projects"],
+        ),
+        reverse=True,
     )
     return out[:limit]
 

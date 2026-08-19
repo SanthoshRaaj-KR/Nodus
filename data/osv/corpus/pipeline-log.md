@@ -1,31 +1,34 @@
 # Blast Radius pipeline log
 
-generated 2026-08-19 13:38:57
+generated 2026-08-19 13:44:43
 
-- repository: `C:\Users\santh\.vscode\Programming\Hackathons\Luma-Hydra\blastradius\corpus`
-- scanner engine: `osv-scanner`
-- findings: 5 rows -> 3 advisories after alias merge
-- Advisory nodes in graph: 3
-- AFFECTS edges: 5
-
-## Timing
+## Summary
 
 ```
-step                           seconds   share  detail
----------------------------  ---------  ------  --------------------------------------------
-preflight                        0.100    0.5%  node ready
-reset                            2.873   14.8%  store dropped, id map cleared, node back up
-osv scan                         1.432    7.4%  5 finding(s), 3 advisory(ies) via osv-scanner
-  scan: discover manifests       0.003    0.0%  package-lock=1, requirements=0
-  scan: osv scan (binary)        1.353    7.0%  5 row(s) via osv-scanner
-  scan: write csv                0.001    0.0%  osv_scan_results.csv (21,586 bytes)
-  scan: merge aliases            0.032    0.2%  5 findings -> 3 advisories after alias merge (npm=5)
-  scan: write advisory json      0.003    0.0%  3 file(s)
-code graph ingest                1.535    7.9%  755 nodes, 3,139 edges
-package tier ingest             13.116   67.5%  984 versions, 3 advisories, 338 closure edges
-verify                           0.381    2.0%  3 Advisory nodes, 5 AFFECTS edges
----------------------------  ---------  ------
-TOTAL                           19.437  100.0%
+repo             C:\Users\santh\.vscode\Programming\Hackathons\Luma-Hydra\blastradius\corpus
+mode             sequential
+scanner          osv-scanner
+findings         5 row(s) -> 3 advisory(ies) after alias merge
+Advisory nodes   3
+AFFECTS edges    5
+
+step                       seconds   share  detail
+-----------------------  ---------  ------  --------------------------------------------
+reset                        2.895   33.2%  store dropped, id map cleared, node back up
+scan                         1.364   15.6%  5 finding(s), 3 advisory(ies) via osv-scanner
+    discover manifests       0.003      ||  package-lock=1, requirements=0
+    osv scan (binary)        1.303      ||  5 row(s) via osv-scanner
+    write csv                0.001      ||  osv_scan_results.csv (21,586 bytes)
+    merge aliases            0.028      ||  5 findings -> 3 advisories after alias merge (npm=5)
+    write advisory json      0.003      ||  3 file(s)
+code graph ingest            1.451   16.6%  755 nodes, 3,139 edges
+registry prefetch            0.604    6.9%  294 package(s) warmed, 0 fetched
+package tier ingest          2.181   25.0%  984 versions, 3 advisories, 338 closure edges
+verify                       0.224    2.6%  3 Advisory nodes, 5 AFFECTS edges
+-----------------------  ---------  ------
+TOTAL                        8.719  100.0%
+
+|| ran concurrently with the steps beside it, inside the phase above them.
 ```
 
 ## Scan detail
@@ -51,12 +54,12 @@ most-affected versions
 step                   seconds   share  detail
 -------------------  ---------  ------  --------------------------------------------
 discover manifests       0.003    0.2%  package-lock=1, requirements=0
-osv scan (binary)        1.353   96.7%  5 row(s) via osv-scanner
+osv scan (binary)        1.303   97.0%  5 row(s) via osv-scanner
 write csv                0.001    0.1%  osv_scan_results.csv (21,586 bytes)
-merge aliases            0.032    2.3%  5 findings -> 3 advisories after alias merge (npm=5)
+merge aliases            0.028    2.1%  5 findings -> 3 advisories after alias merge (npm=5)
 write advisory json      0.003    0.2%  3 file(s)
 -------------------  ---------  ------
-TOTAL                    1.400  100.0%
+TOTAL                    1.344  100.0%
 ```
 
 ## Graph contents
@@ -96,5 +99,5 @@ advisories      3
 
 bounds: newest 3 version(s) per package, <= 8 SATISFIED_BY per requirement
 
-ingest took 13.1s
+ingest took 2.2s
 ```

@@ -20,7 +20,7 @@
   ],
   "source": "osv-scan",
   "scanned_repo": "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus",
-  "generated_at": 1787126941,
+  "generated_at": 1787127288,
   "iocs": {
     "paths": [],
     "sha256": [],
