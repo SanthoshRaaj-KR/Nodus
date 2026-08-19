@@ -4,9 +4,11 @@ Prints the macro (lockfile) answer and the micro (call graph) answer side by
 side, because they answer different questions and the gap between them is the
 whole point -- "you have it" versus "a request can reach it".
 
+    python -m blastradius.cli pipeline --reset          # scan corpus/, build both tiers
+    python -m blastradius.cli osv-scan ../my-app        # advisories only, no graph writes
     python -m blastradius.cli check ua-parser-js@0.7.29
     python -m blastradius.cli check express --range ">=4.18.0 <4.19.0"
-    python -m blastradius.cli advisory advisories/GHSA-vuln-pkg-2026.json
+    python -m blastradius.cli advisory advisories/generated/CVE-2021-4229__ua-parser-js.json
     python -m blastradius.cli services
     python -m blastradius.cli stats
 """

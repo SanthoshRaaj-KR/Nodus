@@ -1,0 +1,19 @@
+node_modules/
+__pycache__/
+*.pyc
+data/ids.sqlite*
+corpus/*/node_modules/
+.pytest_cache/
+.playwright-mcp/
+
+# Cloned repos under test are somebody else's history, not ours. Only the
+# planted demo fixture is tracked; anything else dropped in corpus/ stays out.
+corpus/*
+!corpus/payment-api/
+!corpus/fleet/
+registry-cache
+# Scan output. Both are derived from whatever repository was last scanned, so
+# committing them would put a fixed set of vulnerabilities back in the tree --
+# exactly what scanning exists to replace.
+data/osv/
+advisories/generated/

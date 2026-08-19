@@ -91,6 +91,16 @@ class Step:
     #: share of the wall clock -- three 10 s stages inside a 12 s phase would
     #: sum to 250% -- so the table prints a marker where the share goes.
     concurrent: bool = False
+    #: True when this step's time is already counted inside its parent's row.
+    #: Same suppression, different reason, and worth telling apart: a reader
+    #: who sees the concurrency marker on a run that was sequential learns
+    #: something false about how it executed.
+    nested: bool = False
+
+    @property
+    def shareless(self) -> bool:
+        """Steps whose duration must not be given a share of the total."""
+        return self.concurrent or self.nested
 
     @property
     def ms(self) -> float:
@@ -150,7 +160,7 @@ def render_steps(steps: list[Step], total: float | None = None) -> str:
         return "(no steps recorded)"
     width = max(max(len(s.name) for s in steps), len("TOTAL"))
     total = total if total is not None else sum(
-        s.seconds for s in steps if not s.concurrent
+        s.seconds for s in steps if not s.shareless
     )
     lines = [
         f"{'step'.ljust(width)}  {'seconds':>9}  {'share':>6}  detail",
@@ -159,6 +169,8 @@ def render_steps(steps: list[Step], total: float | None = None) -> str:
     for step in steps:
         if step.concurrent:
             share = "    ||"
+        elif step.nested:
+            share = "     >"
         else:
             pct = (step.seconds / total * 100) if total else 0.0
             share = f"{pct:5.1f}%"
@@ -167,10 +179,15 @@ def render_steps(steps: list[Step], total: float | None = None) -> str:
         )
     lines.append(f"{'-' * width}  {'-' * 9}  {'-' * 6}")
     lines.append(f"{'TOTAL'.ljust(width)}  {total:9.3f}  100.0%")
+    notes = []
     if any(s.concurrent for s in steps):
+        notes.append("||  ran alongside the steps beside it, inside the phase "
+                     "above them")
+    if any(s.nested for s in steps):
+        notes.append(">   already counted inside the step above it")
+    if notes:
         lines.append("")
-        lines.append("|| ran concurrently with the steps beside it, inside the "
-                     "phase above them.")
+        lines.extend(notes)
     return "\n".join(lines)
 
 

@@ -71,8 +71,8 @@ cd scanner; npm install; cd ..        # ts-morph, once
 python -m blastradius.cli doctor      # checks every prerequisite, names the fix
 python -m blastradius.cli up          # start the HydraDB container
 
-# Scan a repository for real vulnerabilities and build both tiers from it.
-python -m blastradius.cli pipeline corpus --reset
+# Scan corpus/ for real vulnerabilities and build both tiers from it.
+python -m blastradius.cli pipeline --reset
 
 python -m blastradius.cli status      # both tiers should be non-zero
 python -m blastradius.cli ui          # Blast Radius Explorer, port 8100
@@ -80,7 +80,9 @@ python -m blastradius.cli ui          # Blast Radius Explorer, port 8100
 
 `pipeline` is the whole build: it scans the repository with `osv-scanner`,
 writes the advisories it found, ingests the code graph and the package tier
-from that same path, and prints where the time went. See
+from that same path, and prints where the time went. It defaults to `corpus/`
+and takes any other checkout as an argument. The scan, the code graph and the
+registry prefetch run concurrently — see
 [Where the vulnerabilities come from](#where-the-vulnerabilities-come-from).
 
 The three steps it wraps are still there, and are what to reach for when you
@@ -145,12 +147,11 @@ is what you want, since `wipe` leaves you to run `up` yourself.
 `data/registry-cache/` survives both on purpose: it is a build input rather than
 graph state, and keeping it is what lets the rebuild run `--offline`.
 
-A full rebuild from nothing:
+A full rebuild from nothing is one command, since `pipeline --reset` does the
+demolition and the rebuild in the right order:
 
 ```powershell
-python -m blastradius.cli reset
-python -m blastradius.cli ingest
-python -m blastradius.pkg.cli ingest --offline
+python -m blastradius.cli pipeline --reset
 python -m blastradius.cli stats       # node and edge counts, both tiers
 ```
 
@@ -440,8 +441,8 @@ fight.
 # Scan only: writes the CSV, the advisory JSON, and a timed log report.
 python -m blastradius.cli osv-scan corpus
 
-# Scan and rebuild both tiers from that one repository, end to end.
-python -m blastradius.cli pipeline corpus --reset
+# Scan and rebuild both tiers, end to end. Defaults to corpus/.
+python -m blastradius.cli pipeline --reset
 ```
 
 `pipeline` is the one to reach for. The three commands it replaces —
@@ -451,17 +452,63 @@ gives you a graph whose vulnerabilities describe somebody else's code. It also
 times every stage and writes `pipeline-log.md` beside the CSV, which is the
 only place the end-to-end cost is measured rather than estimated.
 
-Scanning the fleet corpus takes about **17 s** all in, and the scan itself is
-a tenth of it:
+### What runs beside what
+
+Three of the four stages do not depend on each other, so `blastradius/pipeline.py`
+runs them together:
+
+```
++-- phase A (concurrent) ------------------------------------------+
+|  osv scan          -> files only, touches neither graph nor ids  |
+|  code graph ingest -> the only graph writer in this phase        |
+|  registry prefetch -> warms data/registry-cache/, network only   |
++------------------------------------------------------------------+
+                                |
+phase B: package tier ingest  <-+  needs the scan's CSV, the ids the
+                                   code graph allocated, and the registry
+                                   documents now sitting in cache
+```
+
+The split is drawn along what each stage **writes**, not along what would be
+convenient. Exactly one member of phase A writes to the graph and exactly one
+writes `data/ids.sqlite`, so there is no lock to contend and no ordering to get
+wrong. The package tier is not in there because it genuinely depends on all
+three — starting it early would mean ingesting advisories the scan had not
+finished finding.
+
+The prefetch is the one that pays. The package tier spends most of its time
+waiting on the npm registry, and those documents are keyed by package name —
+which the lockfiles already name, before any advisory is known. On a cold cache
+that stage alone was ~11 s of a 19 s run.
+
+`--sequential` turns the overlap off. When a stage fails, being able to run the
+same work in a straight line is worth more than the seconds.
+
+### Measured
+
+One repo (`corpus/drawio-desktop`, 338 packages, 1 lockfile), warm registry
+cache, three runs each, median:
+
+| Mode | Total |
+|---|---:|
+| concurrent | **10.5 s** |
+| `--sequential` | 12.6 s |
+
+Where the concurrent run spends it:
 
 | Stage | Seconds | Share |
 |---|---:|---:|
-| preflight | 0.12 | 0.7% |
-| reset (drop store, clear id map, restart) | 2.94 | 17.2% |
-| osv scan (12 lockfiles → 14 findings → 8 advisories) | 1.78 | 10.5% |
-| code graph ingest (ts-morph) | 8.24 | 48.4% |
-| package tier ingest | 3.56 | 20.9% |
-| verify | 0.39 | 2.3% |
+| reset (drop store, clear id map, restart) | 2.87 | 26.7% |
+| **phase A** | **3.29** | **30.7%** |
+| ├ registry prefetch | 1.68 | ∥ |
+| ├ osv scan (1 lockfile → 5 findings → 3 advisories) | 3.13 | ∥ |
+| └ code graph ingest (ts-morph) | 3.29 | ∥ |
+| package tier ingest | 4.29 | 39.9% |
+| verify | 0.29 | 2.7% |
+
+The `∥` rows overlap, so they are given a marker rather than a share — three
+concurrent stages that each got a percentage would produce a column adding up
+to more than the run took.
 
 The scanner is a Go binary, so a machine without the toolchain cannot
 pip-install its way out of a missing one. `doctor` reports it as a warning

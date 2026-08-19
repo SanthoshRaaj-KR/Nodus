@@ -233,3 +233,49 @@ def test_step_shares_are_of_the_wall_clock_not_the_sum():
 
 def test_render_steps_survives_an_empty_run():
     assert osvscan.render_steps([]) == "(no steps recorded)"
+
+
+# -- concurrent timing -----------------------------------------------------
+
+
+def test_concurrent_steps_get_a_marker_not_a_share():
+    """Three 10s stages inside a 12s phase sum to 250%. A share column that
+    adds up to more than the run took is worse than no share column."""
+    steps = [
+        osvscan.Step("phase A", 12.0, "3 stages"),
+        osvscan.Step("  scan", 10.0, "", concurrent=True),
+        osvscan.Step("  ingest", 10.0, "", concurrent=True),
+        osvscan.Step("  prefetch", 10.0, "", concurrent=True),
+        osvscan.Step("verify", 4.0, ""),
+    ]
+    table = osvscan.render_steps(steps, total=16.0)
+    assert table.count("||") >= 3
+    # Only the two sequential rows carry a percentage.
+    assert " 75.0%" in table  # phase A
+    assert " 25.0%" in table  # verify
+
+
+def test_nested_and_concurrent_are_told_apart():
+    """A sequential run whose sub-steps claimed concurrency would teach the
+    reader something false about how it executed."""
+    steps = [
+        osvscan.Step("scan", 5.0, ""),
+        osvscan.Step("  write csv", 1.0, "", nested=True),
+    ]
+    table = osvscan.render_steps(steps, total=5.0)
+    assert "||" not in table
+    assert ">" in table
+    assert "already counted inside" in table
+
+
+def test_shareless_steps_are_excluded_from_a_derived_total():
+    """With no total passed in, one is summed -- and double-counting a nested
+    step there would shrink every real share."""
+    steps = [
+        osvscan.Step("a", 4.0, ""),
+        osvscan.Step("  a-part", 3.0, "", nested=True),
+        osvscan.Step("b", 4.0, ""),
+    ]
+    table = osvscan.render_steps(steps)
+    assert "TOTAL" in table
+    assert "     8.000" in table  # 4 + 4, not 4 + 3 + 4

@@ -155,6 +155,7 @@ class PipelineReport:
                     "seconds": round(s.seconds, 4),
                     "detail": s.detail,
                     "concurrent": s.concurrent,
+                    "nested": s.nested,
                 }
                 for s in self.steps
             ],
@@ -437,7 +438,7 @@ def run_pipeline(
         )
         if index is not None:
             report.steps[index + 1 : index + 1] = [
-                Step(f"    {s.name}", s.seconds, s.detail, True)
+                Step(f"    {s.name}", s.seconds, s.detail, nested=True)
                 for s in report.scan.steps
             ]
 
