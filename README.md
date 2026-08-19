@@ -110,15 +110,23 @@ ingest allocates fresh ids and writes a second copy of everything beside the
 first.
 
 ```powershell
-python -m blastradius.cli reset       # empty the graph + id map, keep the container
+python -m blastradius.cli reset       # empty the graph + id map, node comes back up
 python -m blastradius.cli wipe        # destroy container, volume and id map (asks first)
 ```
 
-`reset` is the everyday one. It deletes every node this project creates, across
-both tiers, and edges go with them. Re-run both ingests afterwards.
+`reset` is the everyday one, and it takes about five seconds. It drops the
+store and brings the node straight back, so you end up with a running node, an
+empty graph and a fresh id map. Re-run both ingests afterwards.
 
-`wipe` is for when the node itself is wrong — a bad volume, a half-written
-store. It takes the container with it, so follow with `up` before ingesting.
+It works this way because deleting rows does not scale here: the node costs
+roughly 319 ms per node in a batched `DETACH DELETE`, so a few thousand nodes
+takes many minutes *and* trips the 25 s per-query timeout partway through,
+leaving the graph half-cleared. Dropping the store is O(1) and cannot finish
+halfway.
+
+`wipe` is the same demolition without the rebuild, plus a confirmation prompt.
+Reach for it when you want the node gone rather than reset — otherwise `reset`
+is what you want, since `wipe` leaves you to run `up` yourself.
 
 `data/registry-cache/` survives both on purpose: it is a build input rather than
 graph state, and keeping it is what lets the rebuild run `--offline`.
@@ -270,10 +278,10 @@ Without the bridge an import carries no resolved version, so searching by
 package name still highlights but "which version" stays a macro-graph question.
 
 **Clearing state:** see [Starting clean](#starting-clean) above. `reset` drops
-every node across both tiers *and* deletes `data/ids.sqlite`. Those must go
-together. Deleting the Docker volume alone is harmless (ids just
-continue from a higher counter), but deleting `ids.sqlite` while the graph
-still holds data gives every node a fresh id and duplicates the lot.
+the store *and* deletes `data/ids.sqlite`. Those must go together. Dropping the
+store alone is harmless (ids just continue from a higher counter), but deleting
+`ids.sqlite` while the graph still holds data gives every node a fresh id and
+duplicates the lot.
 
 ### Or from the terminal
 

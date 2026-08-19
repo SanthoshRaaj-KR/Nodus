@@ -7,7 +7,9 @@ sees is plain Python -- the wire format is typed cells,
 
 from __future__ import annotations
 
+import itertools
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -95,6 +97,16 @@ def _flatten(cell: Any) -> Any:
     return cell
 
 
+#: Unique per query, and unique per process: two Explorer workers paging at
+#: once must not collide on an id, or one steals the other's cursor.
+_QUERY_SEQ = itertools.count(1)
+_QUERY_PREFIX = f"br-{os.getpid():d}"
+
+
+def _next_query_id() -> str:
+    return f"{_QUERY_PREFIX}-{next(_QUERY_SEQ)}"
+
+
 class HydraClient:
     """Synchronous client over the HTTP query endpoint."""
 
@@ -126,6 +138,13 @@ class HydraClient:
         """Run one statement. One statement per request is a server limit."""
         body: dict[str, Any] = {
             "cell_id": self.cell,
+            # Paging needs this. The server keys a cursor to the query_id that
+            # opened it, and when the field is absent it mints a fresh
+            # `http-query-N` per request -- so a continuation that re-sent
+            # everything except an id could never own the cursor it was
+            # continuing, and every result past the first page came back
+            # `400 result cursor does not belong to this query request`.
+            "query_id": _next_query_id(),
             "query": statement,
             "timeout_ms": self.timeout_ms,
             "page_size": PAGE_SIZE,

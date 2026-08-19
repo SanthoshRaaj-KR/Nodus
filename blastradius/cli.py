@@ -358,19 +358,40 @@ def cmd_status(args) -> int:
 
 
 def cmd_reset(args) -> int:
-    """Delete every node this project creates; edges go with them.
+    """Empty the graph and the id map, leaving a running node behind.
 
-    ALL_NODE_LABELS, not NODE_LABELS: the package tier adds nine labels, and
-    clearing only the original seven while still deleting the id map is the
-    worst of both -- the Package, Lockfile and Incident nodes survive, but the
-    map that addressed them is gone, so the next ingest allocates fresh ids
-    and writes a second copy of everything alongside the first.
+    Done by recreating the store, not by deleting rows. Deleting is the
+    obvious implementation and it does not survive contact with the package
+    tier: this node costs ~319 ms per node in a batched `DETACH DELETE` and
+    ~3.7 ms per edge in a bulk edge delete, so a graph of a few thousand nodes
+    needs many minutes and blows the 25 s per-query timeout in the middle,
+    leaving the graph half-cleared. Chunking smaller only trades one failure
+    for a slower one, and `WITH n LIMIT k` -- the way to bound it server-side
+    -- is rejected by the mutation engine.
+
+    Dropping the volume is O(1) and, unlike a row-by-row sweep, cannot finish
+    partially. The container comes back up before this returns, so the
+    observable contract is unchanged: a running node, an empty graph, and a
+    fresh id map ready for the next ingest.
+
+    The id map has to go with the graph. It is what makes an ingest idempotent
+    -- same natural key in, same node id out -- so keeping it against an empty
+    graph is harmless, but keeping a graph against a deleted map means the
+    next ingest allocates from the block base again and writes a second copy
+    of everything beside the first.
     """
-    client = HydraClient(base_url=args.url)
+    from . import node
+
     print()
-    for label in schema.ALL_NODE_LABELS:
-        client.query(f"MATCH (n:{label}) DETACH DELETE n")
-        print(f"  cleared {label}")
+    try:
+        node.require_daemon()
+        node.wipe(verbose=False)
+        print("  store dropped")
+        node.up(wait=args.wait, verbose=True)
+    except node.NodeError as exc:
+        print(RED(f"{exc}"), file=sys.stderr)
+        return 2
+
     ids_db = Path(__file__).resolve().parent.parent / "data" / "ids.sqlite"
     for leftover in ids_db.parent.glob("ids.sqlite*"):
         leftover.unlink()
@@ -651,7 +672,9 @@ def main(argv: list[str] | None = None) -> int:
     explorer.add_argument("--port", type=int, default=8100)
     explorer.set_defaults(func=cmd_ui)
 
-    rst = sub.add_parser("reset", help="empty the graph, keep the container")
+    rst = sub.add_parser("reset", help="empty the graph + id map, node stays up")
+    rst.add_argument("--wait", type=int, default=90,
+                     help="seconds to wait for readiness after the restart")
     rst.set_defaults(func=cmd_reset)
 
     wp = sub.add_parser("wipe", help="destroy container, volume and id map")
