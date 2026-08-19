@@ -87,6 +87,10 @@ class Step:
     name: str
     seconds: float
     detail: str = ""
+    #: True when this ran alongside other steps. Such a step has no meaningful
+    #: share of the wall clock -- three 10 s stages inside a 12 s phase would
+    #: sum to 250% -- so the table prints a marker where the share goes.
+    concurrent: bool = False
 
     @property
     def ms(self) -> float:
@@ -135,22 +139,38 @@ class _Timer:
 
 
 def render_steps(steps: list[Step], total: float | None = None) -> str:
-    """A timing table. Shares are of the wall clock, so they sum to 100%."""
+    """A timing table against the wall clock.
+
+    Sequential shares sum to 100%. Concurrent steps get a ``||`` marker rather
+    than a share, because their durations overlap: printing a percentage for
+    each would produce a column that adds up to more than the run took, which
+    is worse than printing nothing.
+    """
     if not steps:
         return "(no steps recorded)"
     width = max(max(len(s.name) for s in steps), len("TOTAL"))
-    total = total if total is not None else sum(s.seconds for s in steps)
+    total = total if total is not None else sum(
+        s.seconds for s in steps if not s.concurrent
+    )
     lines = [
         f"{'step'.ljust(width)}  {'seconds':>9}  {'share':>6}  detail",
         f"{'-' * width}  {'-' * 9}  {'-' * 6}  {'-' * 44}",
     ]
     for step in steps:
-        share = (step.seconds / total * 100) if total else 0.0
+        if step.concurrent:
+            share = "    ||"
+        else:
+            pct = (step.seconds / total * 100) if total else 0.0
+            share = f"{pct:5.1f}%"
         lines.append(
-            f"{step.name.ljust(width)}  {step.seconds:9.3f}  {share:5.1f}%  {step.detail}"
+            f"{step.name.ljust(width)}  {step.seconds:9.3f}  {share}  {step.detail}"
         )
     lines.append(f"{'-' * width}  {'-' * 9}  {'-' * 6}")
     lines.append(f"{'TOTAL'.ljust(width)}  {total:9.3f}  100.0%")
+    if any(s.concurrent for s in steps):
+        lines.append("")
+        lines.append("|| ran concurrently with the steps beside it, inside the "
+                     "phase above them.")
     return "\n".join(lines)
 
 

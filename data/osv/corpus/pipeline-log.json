@@ -1,192 +1,155 @@
 {
   "repo": "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus",
-  "started_at": 1787126373.1709433,
-  "elapsed_s": 42.609,
+  "started_at": 1787126937.29351,
+  "elapsed_s": 19.437,
   "scan": {
     "repo": "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus",
     "engine": "osv-scanner",
-    "started_at": 1787126376.175357,
-    "elapsed_s": 1.774,
+    "started_at": 1787126940.2982557,
+    "elapsed_s": 1.4,
     "csv_path": "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\data\\osv\\corpus\\osv_scan_results.csv",
     "advisory_dir": "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\advisories\\generated",
     "advisory_files": [
-      "CVE-2020-28500__lodash.json",
-      "CVE-2021-23337__lodash.json",
-      "CVE-2021-4229__ua-parser-js.json",
-      "CVE-2024-29041__express.json",
-      "CVE-2024-43796__express.json",
-      "CVE-2024-45590__body-parser.json",
-      "CVE-2025-13465__lodash.json",
-      "CVE-2026-12590__body-parser.json",
-      "CVE-2026-25223__fastify.json",
-      "CVE-2026-25224__fastify.json",
-      "CVE-2026-3635__fastify.json",
-      "CVE-2026-41907__uuid.json",
-      "CVE-2026-47219__find-my-way.json"
+      "CVE-2026-18446__fast-uri.json",
+      "CVE-2026-69152__brace-expansion.json",
+      "GHSA-5p4m-2wfm-xmqj__js-yaml.json"
     ],
     "manifests": {
       "requirements": [],
       "package-lock": [
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\drawio-desktop\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\fleet\\cli-tool\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\fleet\\data-pipeline\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\fleet\\frontend-build\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\fleet\\http-client-service\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\fleet\\legacy-pinned-older\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\fleet\\legacy-pinned-service\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\fleet\\logging-service\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\fleet\\no-lodash-service\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\fleet\\orm-backend\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\fleet\\rest-api\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\fleet\\test-harness\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\fleet\\utility-lib\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\GenReal.ai\\package-lock.json",
-        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\payment-api\\package-lock.json"
+        "C:\\Users\\santh\\.vscode\\Programming\\Hackathons\\Luma-Hydra\\blastradius\\corpus\\drawio-desktop\\package-lock.json"
       ]
     },
-    "findings": 19,
-    "advisories": 13,
-    "vulnerable_packages": 7,
+    "findings": 5,
+    "advisories": 3,
+    "vulnerable_packages": 3,
     "ecosystems": {
-      "npm": 19
+      "npm": 5
     },
     "top_versions": [
       {
-        "spec": "lodash@4.17.20",
-        "rows": 5
-      },
-      {
-        "spec": "fastify@4.29.1",
-        "rows": 3
-      },
-      {
-        "spec": "lodash@4.17.21",
-        "rows": 3
-      },
-      {
-        "spec": "body-parser@1.20.1",
-        "rows": 2
-      },
-      {
-        "spec": "express@4.18.2",
-        "rows": 2
-      },
-      {
-        "spec": "find-my-way@8.2.2",
+        "spec": "brace-expansion@1.1.17",
         "rows": 1
       },
       {
-        "spec": "ua-parser-js@0.7.29",
+        "spec": "brace-expansion@2.1.3",
         "rows": 1
       },
       {
-        "spec": "uuid@8.3.2",
+        "spec": "brace-expansion@5.0.8",
+        "rows": 1
+      },
+      {
+        "spec": "fast-uri@3.1.4",
+        "rows": 1
+      },
+      {
+        "spec": "js-yaml@4.3.0",
         "rows": 1
       }
     ],
     "steps": [
       {
         "name": "discover manifests",
-        "seconds": 0.0081,
-        "detail": "package-lock=15, requirements=0"
+        "seconds": 0.0032,
+        "detail": "package-lock=1, requirements=0"
       },
       {
         "name": "osv scan (binary)",
-        "seconds": 1.6999,
-        "detail": "19 row(s) via osv-scanner"
+        "seconds": 1.3533,
+        "detail": "5 row(s) via osv-scanner"
       },
       {
         "name": "write csv",
-        "seconds": 0.0008,
-        "detail": "osv_scan_results.csv (26,775 bytes)"
+        "seconds": 0.0013,
+        "detail": "osv_scan_results.csv (21,586 bytes)"
       },
       {
         "name": "merge aliases",
-        "seconds": 0.0478,
-        "detail": "19 findings -> 13 advisories after alias merge (npm=19)"
+        "seconds": 0.0322,
+        "detail": "5 findings -> 3 advisories after alias merge (npm=5)"
       },
       {
         "name": "write advisory json",
-        "seconds": 0.0082,
-        "detail": "13 file(s)"
+        "seconds": 0.0025,
+        "detail": "3 file(s)"
       }
     ],
     "notes": []
   },
   "graph_counts": {
-    "Service": 30,
-    "PackageVersion": 5632,
-    "File": 45,
-    "Function": 892,
-    "ExternalImport": 36,
-    "Route": 3,
-    "PersistenceArtifact": 7,
-    "Package": 1197,
-    "Lockfile": 15,
-    "LockfileEntry": 1769,
-    "Maintainer": 749,
-    "Repository": 877,
-    "Organization": 70,
-    "PublisherIdentity": 393,
-    "Advisory": 13
+    "Service": 2,
+    "PackageVersion": 1322,
+    "File": 11,
+    "Function": 384,
+    "ExternalImport": 15,
+    "PersistenceArtifact": 6,
+    "Package": 294,
+    "Lockfile": 1,
+    "LockfileEntry": 338,
+    "Maintainer": 217,
+    "Repository": 290,
+    "Organization": 12,
+    "PublisherIdentity": 123,
+    "Advisory": 3
   },
-  "advisory_nodes": 13,
-  "affects_edges": 16,
+  "advisory_nodes": 3,
+  "affects_edges": 5,
   "steps": [
     {
       "name": "preflight",
-      "seconds": 0.1352,
+      "seconds": 0.0997,
       "detail": "node ready"
     },
     {
       "name": "reset",
-      "seconds": 2.845,
+      "seconds": 2.8734,
       "detail": "store dropped, id map cleared, node back up"
     },
     {
       "name": "osv scan",
-      "seconds": 1.7977,
-      "detail": "19 finding(s), 13 advisory(ies) via osv-scanner"
+      "seconds": 1.4317,
+      "detail": "5 finding(s), 3 advisory(ies) via osv-scanner"
     },
     {
       "name": "scan: discover manifests",
-      "seconds": 0.0081,
-      "detail": "package-lock=15, requirements=0"
+      "seconds": 0.0032,
+      "detail": "package-lock=1, requirements=0"
     },
     {
       "name": "scan: osv scan (binary)",
-      "seconds": 1.6999,
-      "detail": "19 row(s) via osv-scanner"
+      "seconds": 1.3533,
+      "detail": "5 row(s) via osv-scanner"
     },
     {
       "name": "scan: write csv",
-      "seconds": 0.0008,
-      "detail": "osv_scan_results.csv (26,775 bytes)"
+      "seconds": 0.0013,
+      "detail": "osv_scan_results.csv (21,586 bytes)"
     },
     {
       "name": "scan: merge aliases",
-      "seconds": 0.0478,
-      "detail": "19 findings -> 13 advisories after alias merge (npm=19)"
+      "seconds": 0.0322,
+      "detail": "5 findings -> 3 advisories after alias merge (npm=5)"
     },
     {
       "name": "scan: write advisory json",
-      "seconds": 0.0082,
-      "detail": "13 file(s)"
+      "seconds": 0.0025,
+      "detail": "3 file(s)"
     },
     {
       "name": "code graph ingest",
-      "seconds": 8.3328,
-      "detail": "2,380 nodes, 12,058 edges"
+      "seconds": 1.5348,
+      "detail": "755 nodes, 3,139 edges"
     },
     {
       "name": "package tier ingest",
-      "seconds": 28.5923,
-      "detail": "4,250 versions, 13 advisories, 1,769 closure edges"
+      "seconds": 13.1159,
+      "detail": "984 versions, 3 advisories, 338 closure edges"
     },
     {
       "name": "verify",
-      "seconds": 0.905,
-      "detail": "13 Advisory nodes, 16 AFFECTS edges"
+      "seconds": 0.3812,
+      "detail": "3 Advisory nodes, 5 AFFECTS edges"
     }
   ]
 }

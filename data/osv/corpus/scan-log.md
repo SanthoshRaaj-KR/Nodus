@@ -1,35 +1,32 @@
 # OSV scan log
 
-generated 2026-08-19 13:29:00
+generated 2026-08-19 13:38:29
 
 ```
 repo            C:\Users\santh\.vscode\Programming\Hackathons\Luma-Hydra\blastradius\corpus
 engine          osv-scanner
-manifests       package-lock=15
-findings        19
-advisories      13  (after alias merge)
-vulnerable pkgs 7
-ecosystems      npm=19
+manifests       package-lock=1
+findings        5
+advisories      3  (after alias merge)
+vulnerable pkgs 3
+ecosystems      npm=5
 csv             C:\Users\santh\.vscode\Programming\Hackathons\Luma-Hydra\blastradius\data\osv\corpus\osv_scan_results.csv
-advisory json   13 file(s) in C:\Users\santh\.vscode\Programming\Hackathons\Luma-Hydra\blastradius\advisories\generated
+advisory json   3 file(s) in C:\Users\santh\.vscode\Programming\Hackathons\Luma-Hydra\blastradius\advisories\generated
 
 most-affected versions
-    lodash@4.17.20                           5 advisory row(s)
-    fastify@4.29.1                           3 advisory row(s)
-    lodash@4.17.21                           3 advisory row(s)
-    body-parser@1.20.1                       2 advisory row(s)
-    express@4.18.2                           2 advisory row(s)
-    find-my-way@8.2.2                        1 advisory row(s)
-    ua-parser-js@0.7.29                      1 advisory row(s)
-    uuid@8.3.2                               1 advisory row(s)
+    brace-expansion@1.1.17                   1 advisory row(s)
+    brace-expansion@2.1.3                    1 advisory row(s)
+    brace-expansion@5.0.8                    1 advisory row(s)
+    fast-uri@3.1.4                           1 advisory row(s)
+    js-yaml@4.3.0                            1 advisory row(s)
 
 step                   seconds   share  detail
 -------------------  ---------  ------  --------------------------------------------
-discover manifests       0.009    0.5%  package-lock=15, requirements=0
-osv scan (binary)        1.717   95.2%  19 row(s) via osv-scanner
-write csv                0.001    0.1%  osv_scan_results.csv (26,775 bytes)
-merge aliases            0.052    2.9%  19 findings -> 13 advisories after alias merge (npm=19)
-write advisory json      0.012    0.6%  13 file(s)
+discover manifests       0.005    0.3%  package-lock=1, requirements=0
+osv scan (binary)        1.430   96.8%  5 row(s) via osv-scanner
+write csv                0.002    0.1%  osv_scan_results.csv (21,586 bytes)
+merge aliases            0.030    2.0%  5 findings -> 3 advisories after alias merge (npm=5)
+write advisory json      0.004    0.2%  3 file(s)
 -------------------  ---------  ------
-TOTAL                    1.803  100.0%
+TOTAL                    1.478  100.0%
 ```
