@@ -36,7 +36,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .identity import is_service_identity, normalize_repo_url
+from .identity import is_service_identity, normalize_repo_url, split_scope
 from .registry import PackumentSummary, VersionSummary
 
 __all__ = [
@@ -138,9 +138,20 @@ class AnomalySignal:
 class CorrelatedBurst:
     """Many packages published by one account inside one window.
 
-    The cross-package signal. A single package publishing three times quickly
-    is a release gone wrong; one account doing it across a dozen packages in
-    six minutes is what the TanStack worm looked like from the outside.
+    The cross-package signal -- and the one that needed the most work to be
+    worth anything, because *volume alone does not distinguish a worm from a
+    release*. Measured against the live feed, 500 consecutive publishes
+    produced seventeen bursts, the largest being `metamaskbot` pushing 97
+    packages in 4.6 minutes. That is quantitatively bigger than the TanStack
+    compromise (84 artifacts, 42 packages, six minutes) and entirely routine:
+    it is one monorepo releasing.
+
+    So the shape is necessary but not sufficient, and `cohesion` is what
+    carries the rest. A burst whose packages all sit under one npm scope, or
+    all build out of one repository, is a monorepo doing what monorepos do.
+    A burst spread across unrelated scopes and repositories is an account
+    reaching places it has no reason to reach at once -- which is the actual
+    signature.
     """
 
     identity: str
@@ -148,6 +159,11 @@ class CorrelatedBurst:
     ended_at: int
     #: package -> the versions it published inside the window
     packages: dict[str, list[str]] = field(default_factory=dict)
+    #: Distinct npm scopes touched. One scope over many packages reads as a
+    #: monorepo; unscoped packages each count as their own.
+    scopes: set[str] = field(default_factory=set)
+    #: Distinct source repositories, where the registry told us.
+    repositories: set[str] = field(default_factory=set)
 
     @property
     def package_count(self) -> int:
@@ -161,12 +177,40 @@ class CorrelatedBurst:
     def span_seconds(self) -> int:
         return max(0, self.ended_at - self.started_at)
 
+    @property
+    def cohesive(self) -> bool:
+        """Do these packages plausibly belong to one project?
+
+        True when one scope or one repository covers the whole burst. A
+        cohesive burst is still reported -- the count is never suppressed --
+        but it is the ordinary case and must not read like an incident.
+        """
+        if self.package_count < 2:
+            return True
+        if len(self.repositories) == 1:
+            return True
+        return len(self.scopes) == 1 and "" not in self.scopes
+
+    @property
+    def verdict(self) -> str:
+        return "release" if self.cohesive else "spread"
+
     def explain(self) -> str:
         minutes = self.span_seconds / 60
-        return (
+        head = (
             f"{self.identity} published {self.artifact_count} artifact(s) "
-            f"across {self.package_count} package(s) in "
-            f"{minutes:.1f} minute(s)"
+            f"across {self.package_count} package(s) in {minutes:.1f} minute(s)"
+        )
+        if self.cohesive:
+            where = (
+                f"one repository ({next(iter(self.repositories))})"
+                if len(self.repositories) == 1 and next(iter(self.repositories))
+                else f"one scope ({next(iter(self.scopes))})"
+            )
+            return f"{head} -- all within {where}, which reads as a release"
+        return (
+            f"{head} -- across {len(self.scopes)} scope(s) and "
+            f"{len(self.repositories) or 'unknown'} repository(ies), which does not"
         )
 
 
@@ -361,8 +405,16 @@ def analyse_correlated_burst(
     now = int(now if now is not None else time.time())
     cutoff = None if horizon_seconds is None else now - horizon_seconds
 
-    by_identity: dict[str, list[tuple[int, str, str]]] = defaultdict(list)
+    # (published_at, package, version, scope, repository) -- scope and
+    # repository are what let a release be told from a spread later.
+    by_identity: dict[str, list[tuple[int, str, str, str, str]]] = defaultdict(list)
     for packument in packuments:
+        try:
+            scope = split_scope(packument.name)[0] or ""
+        except Exception:  # noqa: BLE001 - registry names are not ours
+            scope = ""
+        repo_ref = normalize_repo_url(packument.repository or "")
+        repo = repo_ref.key if repo_ref else ""
         for version in packument.versions.values():
             if version.published_at <= 0 or not version.publisher:
                 continue
@@ -378,7 +430,10 @@ def analyse_correlated_burst(
             if is_service_identity(version.publisher, version.publisher_email):
                 continue
             by_identity[version.publisher.lower()].append(
-                (version.published_at, packument.name, version.version)
+                (
+                    version.published_at, packument.name, version.version,
+                    scope, repo or (version.repository or ""),
+                )
             )
 
     bursts: list[CorrelatedBurst] = []
@@ -390,7 +445,7 @@ def analyse_correlated_burst(
             while events[end][0] - events[start][0] > window_seconds:
                 start += 1
             window = events[start : end + 1]
-            names = {name for _, name, _ in window}
+            names = {name for _, name, _, _, _ in window}
             if len(names) < min_packages:
                 continue
             # Keep the widest window per identity rather than one per position,
@@ -400,16 +455,25 @@ def analyse_correlated_burst(
                 and len(window) > best.artifact_count
             ):
                 grouped: dict[str, list[str]] = defaultdict(list)
-                for _, name, version in window:
+                for _, name, version, _, _ in window:
                     grouped[name].append(version)
                 best = CorrelatedBurst(
                     identity=identity,
                     started_at=window[0][0],
                     ended_at=window[-1][0],
                     packages=dict(grouped),
+                    scopes={scope for _, _, _, scope, _ in window},
+                    repositories={
+                        repo for _, _, _, _, repo in window if repo
+                    },
                 )
         if best is not None:
             bursts.append(best)
 
-    bursts.sort(key=lambda b: (-b.package_count, -b.artifact_count, b.identity))
+    # A spread burst outranks a cohesive one however much smaller it is: 97
+    # packages inside one monorepo is a release, and four across four
+    # unrelated repositories is the thing worth looking at.
+    bursts.sort(key=lambda b: (
+        b.cohesive, -b.package_count, -b.artifact_count, b.identity
+    ))
     return bursts

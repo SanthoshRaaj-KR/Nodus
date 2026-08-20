@@ -190,6 +190,96 @@ def test_publisher_in_maintainer_list_is_silent():
     assert signals(analyse(p), Signal.PUBLISHER_NOT_MAINTAINER) == []
 
 
+# -- a release is not a worm ------------------------------------------------
+
+
+def scoped(scope, i, at, publisher="bot", repo=""):
+    name = f"@{scope}/pkg-{i}"
+    return PackumentSummary(
+        name=name, abbreviated_only=False, repository=repo,
+        versions={"1.0.0": VersionSummary(
+            name=name, version="1.0.0", published_at=at,
+            publisher=publisher, repository=repo,
+        )},
+    )
+
+
+def test_a_monorepo_release_is_marked_cohesive():
+    """The finding that forced this rule.
+
+    Against the live feed, 500 consecutive publishes produced seventeen
+    bursts; the largest was `metamaskbot` pushing 97 packages in 4.6 minutes.
+    That is bigger than the TanStack compromise and entirely routine -- one
+    monorepo releasing. Volume alone cannot tell them apart.
+    """
+    fleet = [scoped("acme", i, BASE + i) for i in range(20)]
+    found = bursts(fleet)
+    assert len(found) == 1
+    assert found[0].cohesive
+    assert found[0].verdict == "release"
+    assert "reads as a release" in found[0].explain()
+
+
+def test_one_repository_across_several_scopes_is_still_cohesive():
+    """Some monorepos publish under more than one scope."""
+    fleet = [
+        scoped("a" if i % 2 else "b", i, BASE + i, repo="https://github.com/o/mono")
+        for i in range(8)
+    ]
+    found = bursts(fleet)
+    assert len(found) == 1
+    assert found[0].cohesive
+
+
+def test_an_account_spread_across_unrelated_projects_is_not_cohesive():
+    """The actual signature: one account reaching places it should not."""
+    fleet = [
+        scoped(f"org{i}", i, BASE + i, repo=f"https://github.com/org{i}/lib{i}")
+        for i in range(6)
+    ]
+    found = bursts(fleet)
+    assert len(found) == 1
+    assert not found[0].cohesive
+    assert found[0].verdict == "spread"
+    assert "which does not" in found[0].explain()
+
+
+def test_unscoped_packages_from_unknown_repositories_are_not_cohesive():
+    """Absent provenance must not be read as shared provenance.
+
+    Every unscoped package has scope "", and treating that as one shared
+    scope would mark the widest possible spread as a tidy release.
+    """
+    fleet = [
+        PackumentSummary(
+            name=f"plain-{i}", abbreviated_only=False,
+            versions={"1.0.0": VersionSummary(
+                name=f"plain-{i}", version="1.0.0",
+                published_at=BASE + i, publisher="bot",
+            )},
+        )
+        for i in range(6)
+    ]
+    found = bursts(fleet)
+    assert len(found) == 1
+    assert not found[0].cohesive
+
+
+def test_spread_bursts_rank_above_bigger_cohesive_ones():
+    """A four-package spread matters more than a ninety-package release."""
+    fleet = [scoped("mono", i, BASE + i, publisher="release-bot") for i in range(30)]
+    fleet += [
+        scoped(f"other{i}", i, BASE + i, publisher="mallory",
+               repo=f"https://github.com/other{i}/x")
+        for i in range(4)
+    ]
+    found = bursts(fleet)
+    assert len(found) == 2
+    assert found[0].identity == "mallory", "the spread must sort first"
+    assert not found[0].cohesive
+    assert found[1].cohesive
+
+
 # -- CI identities are not shared credentials -------------------------------
 
 
