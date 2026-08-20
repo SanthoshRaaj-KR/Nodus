@@ -247,3 +247,41 @@ def test_both_tiers_key_services_alike():
         )
 
     assert service_key("web") == service_key(" WEB ")
+
+
+# -- CI pseudo-identities ---------------------------------------------------
+
+
+def test_oidc_publisher_is_recognised_as_infrastructure():
+    """npm stamps every OIDC publish with one label across all of npm.
+
+    Two packages carrying it share a build system, not a credential, so the
+    inferences that assume otherwise have to be able to tell the difference.
+    """
+    from blastradius.pkg.identity import is_service_identity
+
+    assert is_service_identity("GitHub Actions", "npm-oidc-no-reply@github.com")
+    # The email alone is enough; the display name alone is enough too, since
+    # older records carry one without the other.
+    assert is_service_identity(None, "npm-oidc-no-reply@github.com")
+    assert is_service_identity("github actions", None)
+
+
+def test_a_real_account_is_not_infrastructure():
+    from blastradius.pkg.identity import is_service_identity
+
+    assert not is_service_identity("jdalton", "john@example.com")
+    assert not is_service_identity("bnjmnt4n", None)
+    assert not is_service_identity(None, None)
+    assert not is_service_identity("", "")
+
+
+def test_service_identity_still_gets_a_node_key():
+    """Excluded from inference, not erased from the graph.
+
+    The artifact really was published by that identity and the record should
+    say so; what changes is only which conclusions are drawn from it.
+    """
+    from blastradius.pkg.identity import publisher_key
+
+    assert publisher_key("GitHub Actions") == "npm-user:github actions"

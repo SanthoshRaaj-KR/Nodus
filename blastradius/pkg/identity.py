@@ -271,6 +271,46 @@ def publisher_key(username: str | None, email: str | None = None) -> str | None:
     return maintainer_key(username, email)
 
 
+#: Publisher identities that are **infrastructure, not accounts**.
+#:
+#: npm's OIDC trusted publishing stamps every artifact pushed from a GitHub
+#: Actions workflow with the same pseudo-identity -- username "GitHub Actions",
+#: email ``npm-oidc-no-reply@github.com`` -- regardless of which organisation
+#: owns the workflow. On the corpus in this repo that single label sits on
+#: `pino`, `cookie`, `semver`, `raw-body` and dozens more that share no owner,
+#: no repository and no credential.
+#:
+#: Treating it as a shared publishing account is wrong twice over. It invents a
+#: 77-package "frontier" out of packages that have nothing in common, and it
+#: does so by reading a *security improvement* as a risk: OIDC exists precisely
+#: so that no long-lived token is shared between projects. The identity is
+#: recorded in the graph as it always was; what changes here is that the
+#: inferences which assume "same publisher means same credential" decline to
+#: draw one from it.
+SERVICE_PUBLISHER_EMAILS = frozenset({
+    "npm-oidc-no-reply@github.com",
+})
+
+SERVICE_PUBLISHER_USERNAMES = frozenset({
+    "github actions",
+    "gitlab ci",
+})
+
+
+def is_service_identity(username: str | None, email: str | None = None) -> bool:
+    """Is this a CI/automation pseudo-identity rather than a person or team?
+
+    Callers that reason about *shared credentials* -- the frontier's publisher
+    route, the publisher-versus-maintainer anomaly -- must exclude these, since
+    two packages carrying the same one share a build system, not a secret.
+    """
+    if email and email.strip().lower() in SERVICE_PUBLISHER_EMAILS:
+        return True
+    if username and username.strip().lower() in SERVICE_PUBLISHER_USERNAMES:
+        return True
+    return False
+
+
 def organization_key(name: str) -> str:
     """Identity for an npm scope or a source-host owner.
 
