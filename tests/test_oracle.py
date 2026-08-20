@@ -13,6 +13,7 @@ With a live node: same command; the graph tests skip themselves if HydraDB is
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -186,10 +187,25 @@ live = pytest.mark.skipif(_live_client() is None, reason="HydraDB is not reachab
 
 @live
 def test_graph_exposure_matches_bruteforce():
-    """Q1 against the graph equals the brute-force scan of the lockfiles."""
+    """Q1 against the graph equals the brute-force scan of the lockfiles.
+
+    Data-gated, and finding out why was worth more than the test. It asserts
+    that the graph holds every package the *demo corpus* resolves -- and it
+    only ever passed because the ingest test below had written that corpus
+    into the live graph on some earlier run. Nothing in this file put it
+    there; the dependency was on leftover state from a previous invocation.
+
+    Once that ingest was gated, this failed against a graph legitimately
+    scoped to one repository -- reporting a disagreement between the id map
+    and the graph that did not exist. So it now skips when the corpus is not
+    loaded, the same way the other live tests skip on absent fixtures.
+    """
     from blastradius.query import blast
 
     client = HydraClient()
+    if not blast.held_versions(client, "inquirer"):
+        pytest.skip("demo corpus is not ingested into this graph")
+
     for lock_path in sorted(CORPUS.rglob("package-lock.json")):
         if "node_modules" in lock_path.parts:
             continue
@@ -216,8 +232,28 @@ def test_graph_exposure_matches_bruteforce():
         assert checked, f"{lock_path}: nothing was actually checked"
 
 
-@live
+@pytest.mark.skipif(
+    _live_client() is None
+    or os.environ.get("BLASTRADIUS_DESTRUCTIVE_TESTS") != "1",
+    reason=(
+        "writes the demo corpus into the live graph; "
+        "set BLASTRADIUS_DESTRUCTIVE_TESTS=1 to run it"
+    ),
+)
 def test_idempotent_reingest_does_not_duplicate():
+    """WRITES TO THE LIVE GRAPH. Gated, and it has to be.
+
+    Proving idempotency needs two real ingests, so this cannot be a
+    fixture-only test -- but it ingests the *demo corpus* into whatever graph
+    is currently live and never cleans up. Someone who had scoped their graph
+    to one repository and then ran the suite got twelve synthetic services
+    back, silently, and the graph page drew them as unconnected orphans
+    because the corpus tier writes PRESENT_IN edges the package-tier sweeps
+    do not read.
+
+    Same gate and same reason as test_scale.py: a test that mutates the store
+    must be opted into, never collected by accident.
+    """
     """Ingesting twice must not change the counts.
 
     Compares run N to run N+1 rather than trusting whatever happens to be in

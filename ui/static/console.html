@@ -380,22 +380,40 @@ const EDGE_TYPES=[
   {id:'TYPOSQUAT_OF'    ,help:'Name sits within edit distance of a far more popular package.'}
 ];
 
+/* Two views, not six. The console had four more, and each was either
+   answered better elsewhere or answered nothing:
+
+     Overview      one narrative over the whole project. The Explorer's
+                   header carries the same numbers against a denominator,
+                   which is the version of them worth reading.
+     Code reach    the call graph from entry points. The Explorer traces
+                   the same edges from a *confirmed threat* instead of from
+                   an entry point, which is the direction an incident is
+                   actually worked in.
+     Advisories    a flat list. The Explorer groups the same advisories by
+                   version and says which reach code.
+     Repositories  submit a repo for scanning -- /api/repos was never
+                   implemented, so it degraded to localStorage and queued
+                   nothing. The graph page takes a path and really scans it.
+
+   What is left is what nothing else does:
+
+     Supply chain  the six-column argument, and the only view that renders
+                   `BlastRadiusEngine.analyse()` in full -- range-admits vs
+                   lockfile-resolves, the live window, shared maintainers
+                   and infrastructure, and typosquat neighbours. Four of the
+                   six questions in the brief are answered only here.
+     Assessment    the tiered findings and their evidence chain. The
+                   confidence model -- why a finding is CONFIRMED rather
+                   than INVESTIGATE -- appears nowhere else in the product. */
 const NAV=[
-  ['overview'  ,'Overview'    ,'◱'],
-  ['findings'  ,'Assessment'  ,'▤'],
   ['supply'    ,'Supply chain','◈'],
-  ['code'      ,'Code reach'  ,'⌗'],
-  ['advisories','Advisories'  ,'⚑'],
-  ['repos'     ,'Repositories','◧']
+  ['findings'  ,'Assessment'  ,'▤']
 ];
 
 const TITLES={
-  overview  :['Overview'    ,'one narrative + the numbers behind it'],
-  findings  :['Assessment'  ,'tiered findings with their evidence chain'],
-  supply    :['Supply chain','dependency propagation graph'],
-  code      :['Code reach'  ,'call-graph tracing from entry points'],
-  advisories:['Advisories'  ,'published advisories in this graph'],
-  repos     :['Repositories','submit a GitHub repo for scanning']
+  supply    :['Supply chain','range admits vs lockfile resolves, live window, shared identity, typosquats'],
+  findings  :['Assessment'  ,'tiered findings with their evidence chain']
 };
 
 /* ------------------------------------------------------------------ state */
@@ -445,7 +463,9 @@ async function boot(){
   if(q.get('target')) S.target=q.get('target');
   if(q.get('view')&&TITLES[q.get('view')]) S.view=q.get('view');
 
-  loadRepos();
+  /* loadRepos() used to run here and poll /api/repos, which was never
+     implemented -- a guaranteed 404 in the console on every page load. The
+     view it fed is gone; the graph page takes a path and really scans it. */
   renderTargets();
   await load();
 }
@@ -463,11 +483,11 @@ function specOf(t){
 async function load(){
   S.loading=true; render();
   try{
-    if(S.view==='overview'&&!S.project) S.project=await api('/api/pkg/project');
-    if((S.view==='supply'||S.view==='findings')&&S.target)
+    /* One fetch serves both views: /api/pkg/graph runs engine.analyse(), and
+       Assessment reads the findings off the same payload the Supply chain
+       view draws. */
+    if(S.target)
       S.pkg=await api('/api/pkg/graph?spec='+encodeURIComponent(S.target));
-    if(S.view==='code'&&!S.micro) S.micro=await api('/api/graph?mode=micro');
-    if(S.view==='advisories'&&!S.advisories.length) S.advisories=await api('/api/advisories');
     S.error=null;
   }catch(e){ S.error=e.message; }
   S.loading=false; render();
@@ -499,9 +519,6 @@ function renderNav(){
 function navCount(id){
   if(id==='findings') return S.pkg&&S.pkg.findings?S.pkg.findings.length:'';
   if(id==='supply')   return S.pkg&&S.pkg.nodes?S.pkg.nodes.length:'';
-  if(id==='code')     return S.micro&&S.micro.nodes?S.micro.nodes.length:'';
-  if(id==='advisories')return S.advisories.length||'';
-  if(id==='repos')    return S.repos.length||'';
   return '';
 }
 
@@ -549,28 +566,27 @@ function toneOf(n){
 /* --------------------------------------------------------------- rendering */
 function render(){
   renderNav(); renderTargets(); renderFoot();
-  const [t,sub]=TITLES[S.view]||TITLES.overview;
+  /* Falls back to `supply`, not to a removed view. `TITLES.overview` was the
+     old default and no longer exists, so destructuring it would throw and
+     blank the page rather than degrade. */
+  const [t,sub]=TITLES[S.view]||TITLES.supply;
   $('#viewTitle').textContent=t;
   $('#viewSub').textContent=sub;
-  $('#focusVal').textContent=S.view==='code'?'src call graph':(S.target||'whole project');
+  $('#focusVal').textContent=S.target||'whole project';
 
   const mk=$('#markBtn');
   const isMarked=S.target&&S.marked.has(S.target);
   mk.textContent=isMarked?'retract simulation':'simulate compromise';
   mk.className='act'+(isMarked?' retract':'');
-  mk.disabled=!S.target||S.view==='repos'||S.view==='code';
+  mk.disabled=!S.target;
 
   const b=$('#body');
   if(S.error&&!S.loading){ b.innerHTML=story()+`<div class="banner">${esc(S.error)}</div>`; bind(); return; }
   if(S.loading){ b.innerHTML=story()+`<div class="card"><div class="empty"><span class="spinner"></span>  querying HydraDB…</div></div>`; bind(); return; }
 
   let html=story()+kpis();
-  if(S.view==='overview')   html+=graphCard(S.project,'supply-chain propagation','hover a node to see why it is flagged');
   if(S.view==='supply')     html+=graphCard(S.pkg,'supply-chain propagation','hover a node to see why it is flagged')+stages();
-  if(S.view==='code')       html+=graphCard(S.micro,'call graph · code reach','click to inspect · hover for the reason it is flagged')+inspector();
   if(S.view==='findings')   html+=findings();
-  if(S.view==='advisories') html+=advisories();
-  if(S.view==='repos')      html+=repos();
   b.innerHTML=html;
   bind();
 }
@@ -611,24 +627,7 @@ function story(){
 
 function storyData(){
   if(S.loading) return {tier:'P3',sentence:'Querying the graph…',sub:'one hop over the precomputed closure'};
-  if(S.view==='repos'){
-    return {tier:'P3',
-      sentence:'Submit a public GitHub repository and it is queued for lockfile resolution, OSV scanning, and blast-radius ingest.',
-      sub:S.repos.length+' repository(ies) submitted · nothing is cloned or executed from the browser'};
-  }
-  if(S.view==='advisories'){
-    const hi=S.advisories.filter(a=>(a.severity||'').toUpperCase()==='HIGH').length;
-    return {tier:hi?'P0':'P3',
-      sentence:S.advisories.length?`${S.advisories.length} advisories are filed against packages present in this graph.`
-                                  :'No advisories are loaded for this graph.',
-      sub:`${hi} high · ${S.advisories.length-hi} other`};
-  }
-  if(S.view==='code'&&S.micro){
-    const n=(S.micro.nodes||[]).length;
-    return {tier:'P3',sentence:'Call-graph reach from application entry points through to external package imports.',
-      sub:`${n} nodes traced`};
-  }
-  const g=S.view==='overview'?S.project:S.pkg;
+  const g=S.pkg;
   if(g&&g.verdict){
     const v=g.verdict;
     const tier=v.compromised?'P0':(v.level&&v.level!=='clean'?'P1':'P3');
@@ -641,49 +640,20 @@ function storyData(){
 /* ------------------------------------------------------------------- kpis */
 function kpis(){
   let items=[];
-  if(S.view==='overview'&&S.project){
-    const s=S.project.stats||{};
-    items=[
-      {label:'Vulnerable versions',value:s.vulnerable_versions??0,unit:'seeds',color:s.vulnerable_versions?HIGH:SAFE},
-      {label:'In radius',value:s.in_radius??0,unit:'nodes',color:s.in_radius?MOD:SAFE},
-      {label:'Resolved versions',value:s.resolved_versions??0,unit:'lockfile',color:'#cfd2de'},
-      {label:'Drawn',value:s.drawn??0,unit:'nodes',color:'#cfd2de'},
-      {label:'Answered in',value:s.query_ms??'—',unit:'ms',color:'#cfd2de'}
-    ];
-  } else if((S.view==='supply'||S.view==='findings')&&S.pkg){
+  if(S.pkg){
     const s=S.pkg.stats||{};
+    /* These six are the brief's questions as numbers. `range_admits` beside
+       `lockfile_entries` is the whole argument: the first is what a
+       range-only scanner would page you about, the second is what a lockfile
+       actually installed. `live_window` answers "while it was live". */
     items=[
       {label:'Advisories',value:s.advisories??0,unit:'filed',color:s.advisories?HIGH:SAFE},
       {label:'Range admits it',value:s.range_admits??0,unit:'range-only leads',color:s.range_admits?WARN:SAFE},
       {label:'Lockfile resolves it',value:s.lockfile_entries??0,unit:'confirmed',color:s.lockfile_entries?MOD:SAFE},
-      {label:'Exposed projects',value:s.exposed_projects??0,unit:'of '+(s.exposed_projects??0),color:s.exposed_projects?MOD:SAFE},
+      {label:'Exposed projects',value:s.exposed_projects??0,unit:'transitively',color:s.exposed_projects?MOD:SAFE},
+      {label:'Resolved while live',value:s.live_window_projects??0,unit:'in the window',color:s.live_window_projects?HIGH:SAFE},
       {label:'Related by identity',value:s.related??0,unit:'identity only',color:s.related?WARN:SAFE},
       {label:'Answered in',value:s.query_ms??'—',unit:'ms',color:'#cfd2de'}
-    ];
-  } else if(S.view==='code'&&S.micro){
-    const n=S.micro.nodes||[];
-    const imports=n.filter(x=>x.kind==='import').length;
-    const routes=n.filter(x=>x.kind==='route').length;
-    items=[
-      {label:'Nodes traced',value:n.length,unit:'total',color:'#cfd2de'},
-      {label:'External imports',value:imports,unit:'packages',color:imports?MOD:SAFE},
-      {label:'HTTP routes',value:routes,unit:'entry points',color:routes?MOD:SAFE},
-      {label:'Edges',value:(S.micro.edges||[]).length,unit:'calls',color:'#cfd2de'}
-    ];
-  } else if(S.view==='advisories'){
-    const hi=S.advisories.filter(a=>(a.severity||'').toUpperCase()==='HIGH').length;
-    items=[
-      {label:'High severity',value:hi,unit:'advisories',color:hi?HIGH:SAFE},
-      {label:'Other',value:S.advisories.length-hi,unit:'advisories',color:MOD},
-      {label:'Total',value:S.advisories.length,unit:'in graph',color:'#cfd2de'}
-    ];
-  } else if(S.view==='repos'){
-    const q=S.repos.filter(r=>r.status==='queued').length;
-    const d=S.repos.filter(r=>r.status==='scanned').length;
-    items=[
-      {label:'Submitted',value:S.repos.length,unit:'repos',color:'#cfd2de'},
-      {label:'Queued',value:q,unit:'awaiting scan',color:q?MOD:SAFE},
-      {label:'Scanned',value:d,unit:'ingested',color:d?SAFE:'#cfd2de'}
     ];
   }
   if(!items.length) return '';
@@ -995,7 +965,7 @@ function loadRepos(){
   /* If the backend is live it is the source of truth; local entries are a
      stand-in that gets replaced the moment the endpoint answers. */
   api('/api/repos').then(list=>{
-    if(Array.isArray(list)){ S.repos=list; saveRepos(false); if(S.view==='repos') render(); }
+    if(Array.isArray(list)){ S.repos=list; saveRepos(false); }
   }).catch(()=>{});
 }
 function saveRepos(repaint=true){

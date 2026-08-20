@@ -37,14 +37,37 @@
   --text-2:    #52514e;
   --text-3:    #85847e;
 
+  /* Family anchors -- the three that survive ALL-PAIRS validation in both
+     modes. A fourth was tried and does not exist: violet collapses into blue
+     (CVD dE 2.2), magenta and amber and brown all collapse into the reserved
+     red. Within a family the step is LIGHTNESS, which colour-vision
+     deficiency preserves, so ten node types come out of three hues. */
   --fleet:     #2a78d6;
   --deps:      #1baf7a;
   --identity:  #eb6834;
+
+  /* what you own and could lose */
+  --fleet-1:   #17539e;
+  --fleet-2:   #2a78d6;
+  --fleet-3:   #74b0ee;
+  /* the dependency mass a compromise travels through */
+  --deps-1:    #0f7550;
+  --deps-2:    #1baf7a;
+  --deps-3:    #6bcaa4;
+  /* who could publish the next bad version */
+  --ident-1:   #9c3a16;
+  --ident-2:   #eb6834;
+  --ident-3:   #f29a76;
 
   --ok:        #008300;
   --warn:      #eda100;
   --serious:   #eb6834;
   --critical:  #e34948;
+  /* Threat is a STATUS, never a categorical family -- see the note above.
+     It is the only red on the canvas and it always means "something is
+     known to be wrong here". */
+  --threat-1:  #a81f1b;
+  --threat-2:  #e34948;
 
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -62,10 +85,48 @@
     --deps:      #199e70;
     --identity:  #d95926;
 
+    /* Steps run the other way in dark: the "deep" end of a family has to
+       stay bright enough to clear the surface, so it is the *saturated*
+       step that darkens, not the lightness that drops toward black. */
+    --fleet-1:   #2b6cbb;
+    --fleet-2:   #3987e5;
+    --fleet-3:   #86bcf5;
+    --deps-1:    #147a58;
+    --deps-2:    #199e70;
+    --deps-3:    #57c69f;
+    --ident-1:   #ac4319;
+    --ident-2:   #d95926;
+    --ident-3:   #ea9270;
+
     --warn:      #c98500;
     --serious:   #d95926;
     --critical:  #e66767;
+    --threat-1:  #c0403f;
+    --threat-2:  #e66767;
   }
+}
+/* The media query alone only follows the OS. An explicit theme has to win in
+   BOTH directions, or the toggle appears to do nothing on a machine whose OS
+   already disagrees with it -- which is exactly how this page behaved. */
+:root[data-theme="dark"] {
+  --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #232322;
+  --border: #33332f; --text-1: #ffffff; --text-2: #c3c2b7; --text-3: #8d8c84;
+  --fleet: #3987e5; --deps: #199e70; --identity: #d95926;
+  --fleet-1: #2b6cbb; --fleet-2: #3987e5; --fleet-3: #86bcf5;
+  --deps-1: #147a58;  --deps-2: #199e70;  --deps-3: #57c69f;
+  --ident-1: #ac4319; --ident-2: #d95926; --ident-3: #ea9270;
+  --warn: #c98500; --serious: #d95926; --critical: #e66767;
+  --threat-1: #c0403f; --threat-2: #e66767;
+}
+:root[data-theme="light"] {
+  --surface-0: #ffffff; --surface-1: #fcfcfb; --surface-2: #f3f3f1;
+  --border: #dcdcd6; --text-1: #0b0b0b; --text-2: #52514e; --text-3: #85847e;
+  --fleet: #2a78d6; --deps: #1baf7a; --identity: #eb6834;
+  --fleet-1: #17539e; --fleet-2: #2a78d6; --fleet-3: #74b0ee;
+  --deps-1: #0f7550;  --deps-2: #1baf7a;  --deps-3: #6bcaa4;
+  --ident-1: #9c3a16; --ident-2: #eb6834; --ident-3: #f29a76;
+  --warn: #eda100; --serious: #eb6834; --critical: #e34948;
+  --threat-1: #a81f1b; --threat-2: #e34948;
 }
 
 * { box-sizing: border-box; }
@@ -171,9 +232,36 @@ canvas.dragging { cursor: grabbing; }
   border-radius: 8px; padding: 9px 11px; font-size: 11.5px;
   box-shadow: 0 2px 10px rgba(0,0,0,0.08);
 }
-.legend div { display: flex; align-items: center; gap: 7px; margin: 3px 0; color: var(--text-2); }
-.legend .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-.legend .ring { background: transparent; border: 2px solid var(--identity); }
+/* Collapsible, because a ten-row key is exactly what you want on the first
+   look and exactly what you do not want covering a corner of the graph on
+   every look after that. */
+.legend { max-height: 62%; overflow-y: auto; padding-top: 4px; }
+.legend.shut { max-height: none; overflow: visible; }
+.legend.shut .grp, .legend.shut .row { display: none; }
+.legend .toggle {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: none; border: 0; padding: 2px 0; color: var(--text-3);
+  font: 9.5px ui-sans-serif, system-ui, sans-serif; text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.legend .toggle:hover { color: var(--text-1); }
+.legend .grp {
+  font: 9.5px ui-sans-serif, system-ui, sans-serif; text-transform: uppercase;
+  letter-spacing: 0.07em; color: var(--text-3);
+  margin: 8px 0 3px; display: block;
+}
+.legend .grp:first-child { margin-top: 0; }
+.legend .row {
+  display: flex; align-items: center; gap: 7px; margin: 2.5px 0;
+  color: var(--text-2); line-height: 1.35;
+}
+/* The swatch carries the same three channels the canvas does -- hue, size
+   and filled-vs-ring -- so a circle on screen can be matched to a row here
+   without reading the label first. */
+.legend .dot { border-radius: 50%; flex: none; }
+.legend .row b { font: 600 11px var(--mono); color: var(--text-1); }
+.legend .row span { color: var(--text-3); }
+.legend .swatch { width: 22px; display: flex; justify-content: center; flex: none; }
 
 .hud {
   position: absolute; right: 12px; top: 12px; z-index: 10;
@@ -299,14 +387,11 @@ canvas.dragging { cursor: grabbing; }
   <canvas id="cv"></canvas>
   <div id="tooltip"></div>
   <div class="hud" id="hud">—</div>
-  <div class="legend">
-    <div><i class="dot" style="background:var(--fleet)"></i> your services &amp; lockfiles</div>
-    <div><i class="dot" style="background:var(--deps)"></i> packages &amp; versions</div>
-    <div><i class="dot" style="background:var(--identity)"></i> maintainers &amp; publishers</div>
-    <div><i class="dot ring"></i> repositories &amp; orgs</div>
-    <div><i class="dot" style="background:var(--critical)"></i> advisory / compromised</div>
-    <div class="muted" style="margin-top:4px">size = package &gt; version</div>
-  </div>
+  <!-- Built from STYLE at load, so the key cannot drift from the canvas.
+       Grouped by the question each family answers rather than by node
+       label, because "Organization" is not what anybody is looking for --
+       "who could publish the next bad version" is. -->
+  <div class="legend" id="legend"></div>
   <div id="overlay">
     <div class="box">
       <h3>No graph yet</h3>
@@ -366,31 +451,124 @@ const tooltip = el("tooltip");
 
 /* Colour + geometry per node label. Three hues; everything finer is
    size or fill-vs-ring, never a generated colour. */
+/* One row per node label, and every row states all three channels, because
+   colour alone cannot carry ten classes and pretending otherwise is what
+   made the old five-entry legend unreadable.
+
+     hue    which of the four families -- the question the node answers
+     ring   FILLED is a thing; a RING is a container of things. Applied
+            consistently, so a ring always means "this groups others"
+            (Organization owns packages, Repository builds them, a Lockfile
+            holds entries) rather than being decoration.
+     r      rank inside the family, and the steps are wide enough to read
+            at a glance rather than the 0.4px differences they replaced.
+
+   Read the families as the brief's questions:
+     threat  what is known to be wrong          (the seed)
+     fleet   what you own and could lose        ("which of my services?")
+     deps    what it travels through            (the closure)
+     ident   who could publish the next one     ("shared maintainer?") */
 const STYLE = {
-  Service:           { hue: "fleet",    r: 9,   ring: false },
-  Lockfile:          { hue: "fleet",    r: 4.5, ring: true  },
-  Package:           { hue: "deps",     r: 5.5, ring: false },
-  PackageVersion:    { hue: "deps",     r: 3.2, ring: false },
-  Maintainer:        { hue: "identity", r: 5,   ring: false },
-  PublisherIdentity: { hue: "identity", r: 3.6, ring: false },
-  Organization:      { hue: "identity", r: 6.5, ring: true  },
-  Repository:        { hue: "identity", r: 4,   ring: true  },
-  Advisory:          { hue: "critical", r: 7,   ring: false },
-  Incident:          { hue: "critical", r: 9,   ring: false },
-  LockfileEntry:     { hue: "deps",     r: 2.4, ring: true  },
+  Incident:          { hue: "threat-1", r: 11,  ring: false, group: "threat",
+                       what: "a recorded compromise" },
+  Advisory:          { hue: "threat-2", r: 8,   ring: false, group: "threat",
+                       what: "a published vulnerability" },
+
+  Service:           { hue: "fleet-1",  r: 10,  ring: false, group: "fleet",
+                       what: "a service you deploy" },
+  Lockfile:          { hue: "fleet-3",  r: 5.5, ring: true,  group: "fleet",
+                       what: "its resolved manifest" },
+
+  Package:           { hue: "deps-1",   r: 6,   ring: false, group: "deps",
+                       what: "a package name" },
+  PackageVersion:    { hue: "deps-2",   r: 3.4, ring: false, group: "deps",
+                       what: "one exact version" },
+  LockfileEntry:     { hue: "deps-3",   r: 2.6, ring: true,  group: "deps",
+                       what: "one resolved entry" },
+
+  Organization:      { hue: "ident-1",  r: 7.5, ring: true,  group: "ident",
+                       what: "an npm scope or org" },
+  Repository:        { hue: "ident-1",  r: 5,   ring: true,  group: "ident",
+                       what: "shared source / CI" },
+  Maintainer:        { hue: "ident-2",  r: 5.5, ring: false, group: "ident",
+                       what: "may publish it" },
+  PublisherIdentity: { hue: "ident-3",  r: 3.8, ring: false, group: "ident",
+                       what: "did publish a version" },
 };
 const cssVar = (n) => getComputedStyle(document.documentElement)
   .getPropertyValue("--" + n).trim() || "#888";
 let PALETTE = {};
 function refreshPalette() {
   PALETTE = {};
-  for (const k of ["fleet","deps","identity","critical","warn","ok","border","text-3","surface-1"])
-    PALETTE[k] = cssVar(k);
+  for (const k of [
+    "fleet-1","fleet-2","fleet-3",
+    "deps-1","deps-2","deps-3",
+    "ident-1","ident-2","ident-3",
+    "threat-1","threat-2",
+    "fleet","deps","identity","critical","warn","ok",
+    "border","text-3","surface-1",
+  ]) PALETTE[k] = cssVar(k);
 }
 refreshPalette();
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-  refreshPalette(); draw();
+  refreshPalette(); buildLegend(); draw();
 });
+/* Canvas colours are resolved once and cached, so a theme change has to
+   invalidate them explicitly. The media query covers the OS flipping; this
+   covers `data-theme` being stamped on the root, which fires no event of its
+   own and would otherwise leave the graph painted in the old palette on a
+   correctly-restyled page. */
+new MutationObserver(() => { refreshPalette(); buildLegend(); draw(); })
+  .observe(document.documentElement, { attributeFilter: ["data-theme"] });
+
+/* The families, in the order an incident is actually worked: what is wrong,
+   what it costs you, how it travels, who could do it again. */
+const GROUPS = [
+  ["threat", "what is known to be wrong"],
+  ["fleet",  "what you own and could lose"],
+  ["deps",   "what a compromise travels through"],
+  ["ident",  "who could publish the next one"],
+];
+
+function buildLegend() {
+  const box = el("legend");
+  if (!box) return;
+  box.innerHTML = GROUPS.map(([group, caption]) => {
+    const rows = Object.entries(STYLE)
+      .filter(([, st]) => st.group === group)
+      .map(([label, st]) => {
+        // Swatch radius is the canvas radius, clamped so an 11px Incident
+        // and a 2.6px LockfileEntry both stay legible in a 13px row.
+        const d = Math.max(7, Math.min(14, st.r * 1.35));
+        const colour = `var(--${st.hue})`;
+        const style = st.ring
+          ? `width:${d}px;height:${d}px;background:transparent;border:2px solid ${colour}`
+          : `width:${d}px;height:${d}px;background:${colour}`;
+        return `<div class="row">
+          <span class="swatch"><i class="dot" style="${style}"></i></span>
+          <b>${label}</b><span>${st.what}</span></div>`;
+      }).join("");
+    return `<span class="grp">${caption}</span>${rows}`;
+  }).join("") +
+  `<span class="grp">shape</span>
+   <div class="row"><span class="swatch"><i class="dot"
+     style="width:10px;height:10px;background:var(--text-3)"></i></span>
+     <span>filled — a thing</span></div>
+   <div class="row"><span class="swatch"><i class="dot"
+     style="width:10px;height:10px;background:transparent;border:2px solid var(--text-3)"></i></span>
+     <span>ring — groups other things</span></div>`;
+
+  box.prepend(toggle);
+}
+
+const toggle = document.createElement("button");
+toggle.className = "toggle";
+toggle.textContent = "key ▾";
+toggle.onclick = () => {
+  const box = el("legend");
+  const shut = box.classList.toggle("shut");
+  toggle.textContent = shut ? "key ▸" : "key ▾";
+};
 
 /* ==================================================================
    Layout — force-directed, with a spatial grid so repulsion is O(n)
@@ -583,7 +761,7 @@ function draw() {
 
   for (const n of S.nodes) {
     const p = worldToScreen(n);
-    const st = STYLE[n.label] || { hue: "deps", r: 3, ring: false };
+    const st = STYLE[n.label] || { hue: "deps-2", r: 3, ring: false };
     const r = Math.max(1.2, st.r * Math.sqrt(k));
     if (p.x < -30 || p.x > S.w + 30 || p.y < -30 || p.y > S.h + 30) continue;
 
@@ -592,7 +770,10 @@ function draw() {
     const dimmed = focus && !near.has(n.id);
     ctx.globalAlpha = dimmed ? 0.14 : 1;
 
-    let fill = PALETTE[st.hue] || PALETTE["deps"];
+    let fill = PALETTE[st.hue] || PALETTE["deps-2"];
+    // Heat overrides the family hue, which is the one place a node changes
+    // colour: it means "an alert just landed on this", and it has to beat
+    // whatever the node normally is.
     if (heat > 0) fill = PALETTE["critical"];
 
     ctx.beginPath();
@@ -1163,6 +1344,7 @@ window.__blastRadius = {
   })),
 };
 
+buildLegend();
 resize();
 loop();
 connect();
