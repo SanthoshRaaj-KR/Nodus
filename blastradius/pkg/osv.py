@@ -226,9 +226,16 @@ class Advisory:
     published: int = schema.UNKNOWN_TS
     modified: int = schema.UNKNOWN_TS
     references: set[str] = field(default_factory=set)
-    #: (normalized package name, version) -> fixed_version or ""
-    affected: dict[tuple[str, str], str] = field(default_factory=dict)
-    #: normalized package name -> the version the vulnerable range opens at.
+    #: (ecosystem, normalized package name, version) -> fixed_version or ""
+    #:
+    #: The ecosystem is part of the key, and leaving it out was a real bug:
+    #: `h11` and `idna` are Python packages, and without it the ingest keyed
+    #: them as `pkg:npm/h11@0.9.0` -- an npm package that does not exist.
+    #: Every PyPI advisory produced a fictional npm node that could never
+    #: match the real package, so the finding was permanently orphaned with
+    #: zero exposed services and looked merely uninteresting.
+    affected: dict[tuple[str, str, str], str] = field(default_factory=dict)
+    #: (ecosystem, normalized package name) -> the version the range opens at.
     #: Per package, not per (package, version): "which version introduced it"
     #: is a fact about the package's history, and every affected version of
     #: one package shares the same answer.
@@ -263,15 +270,17 @@ class Advisory:
         if finding.modified > self.modified:
             self.modified = finding.modified
         self.references.update(finding.references)
-        key = (finding.package, finding.version)
+        eco = (finding.ecosystem or "npm").strip().lower()
+        key = (eco, finding.package, finding.version)
         if finding.fixed_version or key not in self.affected:
             self.affected[key] = finding.fixed_version
         # First non-empty wins rather than last. Rows for one advisory repeat
         # the same range once per affected version, so they agree; when a feed
         # omits it on some rows, keeping the first real answer beats letting a
         # later blank overwrite it.
-        if finding.introduced_version and not self.introduced.get(finding.package):
-            self.introduced[finding.package] = finding.introduced_version
+        intro_key = (eco, finding.package)
+        if finding.introduced_version and not self.introduced.get(intro_key):
+            self.introduced[intro_key] = finding.introduced_version
 
 
 @dataclass
@@ -294,16 +303,19 @@ class OsvScan:
         return dict(counts)
 
     def advisories_for_ecosystem(self, ecosystem: str) -> list[Advisory]:
+        """Advisories naming at least one package in this ecosystem.
+
+        Reads the ecosystem off the affected key rather than rebuilding a
+        lookup set from the findings. The old version matched `(package,
+        version)` pairs against keys that now carry three elements, so it
+        matched nothing at all -- silently returning zero advisories for every
+        ecosystem.
+        """
         want = ecosystem.strip().lower()
-        keep = {
-            (f.package, f.version)
-            for f in self.findings
-            if f.ecosystem.strip().lower() == want
-        }
         return [
             adv
             for adv in self.advisories.values()
-            if any(k in keep for k in adv.affected)
+            if any(eco == want for eco, _name, _version in adv.affected)
         ]
 
     def summary(self) -> str:

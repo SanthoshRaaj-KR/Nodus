@@ -506,6 +506,38 @@ returned zero rows, so the product reported a clean bill of health for a repo
 with 96 published advisories in it. `tests/test_identity.py` and
 `tests/test_exposure.py` hold the guards.
 
+### Two ecosystems, one key space
+
+npm's `requests` and PyPI's `requests` are unrelated projects, so the ecosystem
+is part of the key, not a property hanging off the node:
+
+```
+pkg:npm/lodash@4.17.21          pkg:pypi/h11@0.16.0
+```
+
+This was not theoretical. Before the ecosystem reached the key, every PyPI
+advisory in the supplied OSV scan was written through npm's name rules as
+`pkg:npm/h11@0.9.0` — a package that does not exist. The finding could never
+attach to the real node, so it sat in the graph with zero exposed services and
+read as merely uninteresting rather than as broken.
+
+PyPI names are normalised per PEP 503 (`Flask_SQLAlchemy`, `flask-sqlalchemy`
+and `Flask.SQLAlchemy` are one project), and versions are compared per PEP 440
+by `blastradius/pkg/pep440.py` — written by hand rather than taking a
+dependency, and differential-tested against `packaging` across the whole
+cross-product of a version corpus when it happens to be importable. That test is
+what found the two rules not derivable from the ordering: `>1.0` must **not**
+match `1.0.post1`, and the mirror rule for `<` and pre-releases.
+
+A PyPI resolution records how much it is worth as evidence, because a
+`requirements.txt` is an instruction and a lockfile is a record:
+
+| `source` on `RESOLVED_IN` | what it means |
+|---|---|
+| `pypi-locked` | a lock file named the exact version (`poetry.lock`, `uv.lock`) |
+| `pypi-pinned` | the manifest pinned it with `==` |
+| `pypi-resolved` | pip chose it from a range, just now — a forecast |
+
 ### Exposure is one model, read by both views
 
 `blastradius/query/exposure.py` walks the package tree, the bridge and the code

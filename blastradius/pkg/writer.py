@@ -44,14 +44,19 @@ __all__ = ["NODE_PROPS", "EDGE_PROPS", "PackageGraphWriter", "WriteReport"]
 NODE_PROPS: dict[str, tuple[str, ...]] = {
     schema.PACKAGE: (
         "key", "name", "scope", "latest_version", "version_count",
+        # Which registry this name belongs to. npm's `requests` and PyPI's
+        # `requests` are unrelated projects; the purl key already separates
+        # them, and this is what lets a query filter or a UI label them
+        # without parsing the key back apart.
+        "ecosystem",
         "downloads", "deprecated", "source", "ingested_at",
     ),
     # Superset of the sample loader's PackageVersion properties, so a graph
     # written by this pipeline still answers the queries that shipped with it.
     schema.PACKAGE_VERSION: (
-        "key", "name", "version", "dev", "integrity", "published_at",
-        "withdrawn_at", "license", "deprecated", "has_install_script",
-        "description", "source", "ingested_at",
+        "key", "name", "version", "ecosystem", "dev", "integrity",
+        "published_at", "withdrawn_at", "license", "deprecated",
+        "has_install_script", "description", "source", "ingested_at",
     ),
     schema.SERVICE: ("name", "repo", "path"),
     schema.LOCKFILE: (
@@ -91,6 +96,12 @@ NODE_PROPS: dict[str, tuple[str, ...]] = {
 #: the same properties so a query reads the same fields whichever way it walks.
 EDGE_PROPS: dict[str, tuple[str, ...]] = {
     schema.HAS_VERSION: ("source",),
+    # The resolved parent -> child edge. npm gets its closure from the
+    # lockfile and writes REQUIRES/SATISFIED_BY; a Python resolution is
+    # already exact, so it writes the resolved edge directly -- and it is the
+    # edge the Explorer's reach walk reads, so both ecosystems answer the same
+    # question through the same relationship.
+    schema.DEPENDS_ON: ("source",),
     schema.REQUIRES: ("range", "dep_type", "optional", "peer", "bundled", "source"),
     schema.SATISFIED_BY: ("range", "dep_type", "source"),
     schema.HAS_LOCKFILE: ("source",),
@@ -117,6 +128,8 @@ EDGE_PROPS: dict[str, tuple[str, ...]] = {
 #: and still satisfy the write-every-property rule.
 _DEFAULTS: dict[str, Any] = {
     "source": "unknown",
+    # npm unless a caller says otherwise; every existing write is npm.
+    "ecosystem": "npm",
     "ingested_at": schema.UNKNOWN_TS,
     "published_at": schema.UNKNOWN_TS,
     "withdrawn_at": schema.STILL_LIVE,

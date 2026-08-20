@@ -621,9 +621,18 @@ defaults now agree, and a test pins the pairing itself rather than the generator
 - **CVSS base score is not derived from the vector.** The OSV CSV leaves `severity_score` empty while
   populating `cvss_vector`. The score stays at its sentinel and the UI shows the vector; showing a number
   nobody computed would be worse than showing none. Deferred by agreement.
-- **The supplied OSV CSV is 100% PyPI.** The reader is ecosystem-generic and routes on the `ecosystem`
-  column; the graph and enrichment are npm. PyPI rows ingest as advisories and are reported as
-  out-of-scope-for-enrichment rather than silently dropped. An npm-shaped CSV exercises the full path.
+- **PyPI has no publish identity, so it has no blast frontier.** npm's packument carries the maintainer
+  list and the publishing account for every version, which is what the frontier is built from. PyPI's JSON
+  API carries an `author` string and nothing about who pressed publish, so the frontier's maintainer and
+  publisher routes have no PyPI equivalent. That is a property of the registry, and it is stated rather
+  than papered over with a weaker signal. Repository-shared identity still works on both.
+- **A `requirements.txt` resolution is a forecast, not an observation.** A lockfile records the exact
+  version that is installed; a requirements file admits a range, and what pip picks depends on the day you
+  ran it. So every PyPI `RESOLVED_IN` edge carries its grade in `source` — `pypi-locked`,
+  `pypi-pinned`, `pypi-resolved` — and only the first two say anything about a deployed environment.
+  Measured here: `requirements.txt` asks for `uvicorn` and resolves `h11@0.16.0`, while the OSV scan
+  reports an advisory against `h11@0.9.0` — a version nothing here would install now, but which an older
+  environment may well be running.
 - **The package view is scoped to one version at a time.** That is deliberate — the answer is a single-hop
   lookup, and a whole-graph package sweep would be 3,277 nodes of DOM. But it means there is no "show me
   every marked version at once" overview yet.

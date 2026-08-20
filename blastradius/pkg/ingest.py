@@ -41,9 +41,11 @@ from ..ids import IdAllocator
 from ..ingest.lockfile import ParsedLock, find_lockfiles, parse_package_lock
 from . import semver
 from .identity import (
+    PYPI,
     InvalidPackageName,
     maintainer_key,
     normalize_name,
+    normalize_pypi_name,
     normalize_repo_url,
     organization_key,
     package_key,
@@ -265,13 +267,13 @@ def ingest(
     # -- 2. advisories -----------------------------------------------------
 
     scan: OsvScan | None = None
-    advisory_versions: set[tuple[str, str]] = set()
+    advisory_versions: set[tuple[str, str, str]] = set()
     if osv_csv:
         scan = load_osv_csv(osv_csv)
         log(f"[2/7] advisories: {scan.summary()}")
         for advisory in scan.advisories.values():
-            for name, version in advisory.affected:
-                advisory_versions.add((name, version))
+            for eco, name, version in advisory.affected:
+                advisory_versions.add((eco, name, version))
     else:
         log("[2/7] advisories: none supplied")
 
@@ -297,7 +299,15 @@ def ingest(
     materialised: dict[str, set[str]] = {}
     for name, version in resolved.values():
         materialised.setdefault(name, set()).add(version)
-    for name, version in advisory_versions:
+    for eco, name, version in advisory_versions:
+        # Only npm versions are materialised here. A PyPI advisory used to be
+        # keyed through npm's name rules and written as `pkg:npm/h11@0.9.0`,
+        # a package that does not exist -- so the finding could never attach
+        # to the real PyPI node and reported zero exposed services. PyPI
+        # versions are written by `pypi.ingest_pypi`, which owns that key
+        # space; here they are skipped rather than mis-keyed.
+        if eco not in ("npm", ""):
+            continue
         try:
             materialised.setdefault(normalize_name(name), set()).add(version)
         except InvalidPackageName:
@@ -574,13 +584,40 @@ def ingest(
                 source=config.source_osv, ingested_at=now,
             )
             report.advisories += 1
-            for (name, version), fixed in advisory.affected.items():
+            for (eco, name, version), fixed in advisory.affected.items():
                 try:
-                    norm = normalize_name(name)
+                    norm = (
+                        normalize_pypi_name(name) if eco == "pypi"
+                        else normalize_name(name)
+                    )
                 except InvalidPackageName:
                     report.unattached.append(
                         f"{advisory.advisory_id}: {name}@{version} (unkeyable name)"
                     )
+                    continue
+                if eco == "pypi":
+                    # Resolve against the PyPI key space rather than npm's.
+                    # The node is there when `ingest_pypi` ran; when it did
+                    # not, the advisory is reported unattached, which is the
+                    # honest outcome for "we have no Python tier for this".
+                    pypi_id = ids.lookup(
+                        schema.PACKAGE_VERSION, version_key(norm, version, PYPI)
+                    )
+                    if pypi_id is None:
+                        report.unattached.append(
+                            f"{advisory.advisory_id}: {norm}@{version} "
+                            f"(PyPI, not in graph)"
+                        )
+                        continue
+                    writer.register(schema.PACKAGE_VERSION, pypi_id)
+                    writer.edge(
+                        schema.AFFECTS, adv_id, pypi_id,
+                        fixed_version=fixed,
+                        introduced_version=advisory.introduced.get((eco, norm), ""),
+                        fixed_published_at=schema.UNKNOWN_TS,
+                        source=config.source_osv,
+                    )
+                    report.affects_edges += 1
                     continue
                 target = version_ids.get((norm, version))
                 if target is None:
@@ -611,7 +648,7 @@ def ingest(
 
                 writer.edge(schema.AFFECTS, adv_id, target,
                             fixed_version=fixed,
-                            introduced_version=advisory.introduced.get(norm, ""),
+                            introduced_version=advisory.introduced.get((eco, norm), ""),
                             fixed_published_at=fixed_at,
                             source=config.source_osv)
                 report.affects_edges += 1

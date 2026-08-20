@@ -130,7 +130,11 @@ def test_version_awareness_of_affected_set(tmp_path):
     )
     scan = load_osv_csv(path)
     affected = {k for adv in scan.advisories.values() for k in adv.affected}
-    assert affected == {("lodash", "4.17.20"), ("lodash", "4.17.21")}
+    # The ecosystem is part of the key. Without it `h11` and `idna` -- PyPI
+    # packages -- were keyed through npm's name rules and written as
+    # `pkg:npm/h11@0.9.0`, a package that does not exist, so the advisory
+    # could never attach to the real one.
+    assert affected == {("npm", "lodash", "4.17.20"), ("npm", "lodash", "4.17.21")}
 
 
 def test_npm_names_normalized_but_other_ecosystems_left_alone(tmp_path):
@@ -199,6 +203,13 @@ def test_ecosystem_routing(tmp_path):
     assert scan.ecosystems() == {"npm": 1, "PyPI": 1}
     assert len(scan.for_ecosystem("npm")) == 1
     assert len(scan.advisories_for_ecosystem("npm")) == 1
+
+    # Two ecosystems, two key spaces, and no chance of one being mistaken for
+    # the other: npm's `requests` and PyPI's `requests` are unrelated
+    # projects that happen to share a name.
+    keys = {k for adv in scan.advisories.values() for k in adv.affected}
+    assert ("npm", "lodash", "4.17.21") in keys
+    assert ("pypi", "requests", "2.9.2") in keys
 
 
 # -- against the real supplied file ---------------------------------------

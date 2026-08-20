@@ -503,18 +503,15 @@ def write_advisory_files(
         clear_generated_advisories(directory)
 
     want = ecosystem.strip().lower()
-    in_ecosystem = {
-        (f.package, f.version)
-        for f in scan.findings
-        if f.ecosystem.strip().lower() == want
-    }
 
     written: list[Path] = []
     for advisory in scan.advisories.values():
         by_package: dict[str, list[str]] = {}
         fixes: dict[str, set[str]] = {}
-        for (name, version), fixed in sorted(advisory.affected.items()):
-            if (name, version) not in in_ecosystem:
+        # The ecosystem is part of the key now, so the filter reads it
+        # directly instead of rebuilding a lookup set from the findings.
+        for (eco, name, version), fixed in sorted(advisory.affected.items()):
+            if eco != want:
                 continue
             by_package.setdefault(name, []).append(version)
             if fixed:

@@ -78,6 +78,7 @@ class PipelineReport:
     steps: list[Step] = field(default_factory=list)
     scan: ScanRun | None = None
     micro: Any = None
+    pypi: Any = None
     package: Any = None
     counts: dict[str, int] = field(default_factory=dict)
     affects: int = 0
@@ -404,6 +405,31 @@ def run_pipeline(
         )
 
     timed("package tier ingest", macro_stage)
+
+    # -- phase C: the PyPI tier -------------------------------------------
+    #
+    # After the npm tier, not beside it: the advisory ingest above resolves
+    # PyPI findings by looking their versions up in the id map, so the nodes
+    # have to exist first... which they do not, on the first run. Both orders
+    # are wrong for one run and right afterwards, and this one is wrong in the
+    # safe direction -- an advisory that cannot attach is *reported* as
+    # unattached rather than silently written against a package that does not
+    # exist.
+
+    announce("pypi tier ingest")
+
+    def pypi_stage():
+        from .pkg.pypi import ingest_pypi
+
+        ids = IdAllocator(str(DEFAULT_IDS))
+        try:
+            result = ingest_pypi(repo, client, ids, verbose=False)
+        finally:
+            ids.close()
+        report.pypi = result
+        return result, result.render()
+
+    timed("pypi tier ingest", pypi_stage)
 
     # -- verify ------------------------------------------------------------
 
