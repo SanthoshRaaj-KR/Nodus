@@ -1,11 +1,11 @@
 {
-  "outputDirectory": "ui/static",
+  "buildCommand": "mkdir -p .vercel-static && cp -r ui/static/. .vercel-static/ && cp .vercel-static/index.html .vercel-static/explorer.html && cp ui/static/start.html .vercel-static/index.html",
+  "outputDirectory": ".vercel-static",
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://18.61.84.138.sslip.io/api/:path*" },
     { "source": "/static/:path*", "destination": "/:path*" },
     { "source": "/console", "destination": "/console.html" },
-    { "source": "/explorer", "destination": "/index.html" },
-    { "source": "/graph", "destination": "/graph.html" },
-    { "source": "/", "destination": "/console.html" }
+    { "source": "/explorer", "destination": "/explorer.html" },
+    { "source": "/graph", "destination": "/graph.html" }
   ]
 }
