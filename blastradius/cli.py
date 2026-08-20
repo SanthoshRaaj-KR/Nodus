@@ -931,7 +931,7 @@ def main(argv: list[str] | None = None) -> int:
     srv.set_defaults(func=cmd_serve)
 
     explorer = sub.add_parser("ui", help="run the Blast Radius Explorer frontend")
-    explorer.add_argument("--port", type=int, default=8100)
+    explorer.add_argument("--port", type=int, default=8000)
     explorer.set_defaults(func=cmd_ui)
 
     rst = sub.add_parser("reset", help="empty the graph + id map, node stays up")

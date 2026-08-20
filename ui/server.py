@@ -204,6 +204,27 @@ def advisories():
     return out
 
 
+@app.get("/api/services")
+def services() -> list[dict]:
+    result = client.query(
+        "MATCH (s:Service) RETURN s.id AS id, s.name AS name, s.repo AS repo "
+        "ORDER BY name"
+    )
+    return result.rows
+
+
+@app.post("/api/paths")
+def paths(payload: dict) -> dict:
+    """Dependency chains from compromised packages out to services."""
+    keys = payload.get("keys") or []
+    targets = payload.get("services") or []
+    try:
+        found = blast.dependency_paths(client, keys, targets)
+    except HydraError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    return {"paths": found, "count": len(found)}
+
+
 @app.get("/api/assess")
 def assess(package: str, version: str = "", range: str = ""):
     """Severity verdict for the queried package, for the footer strip."""
