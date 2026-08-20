@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { TIERS, TONES, EDGE_COLOR, TIER_OF_TONE, WHY, WHY_EDGES, MOD, toneOf } from '../lib/tokens';
+import { ATOMS, COLUMN_HELP } from '../lib/explain';
 
 /* The lane renderer.
  *
@@ -12,7 +13,10 @@ import { TIERS, TONES, EDGE_COLOR, TIER_OF_TONE, WHY, WHY_EDGES, MOD, toneOf } f
 const LANE_W = 244;
 const LANE_GAP = 32;
 const ROW_H = 62;
-const TOP = 68;
+//: Room for the lane header *and* its explanation line. The columns are the
+//: argument the graph makes, so the space to say what each one means is not
+//: optional chrome.
+const TOP = 140;
 
 const TAGS = {
   compromised: { text: 'COMPROMISED', bg: 'rgba(179,38,44,0.9)', fg: '#fff' },
@@ -42,24 +46,55 @@ function layout(g) {
   return { byLayer, layers, laneX, pos, width, height };
 }
 
+/* The hover card speaks in the engine's words, not the renderer's.
+ *
+ * It used to print a generic sentence per colour ("Amber because a traced edge
+ * chain connects it…"), which is true of the colour but says nothing about
+ * *this* node. Every node already carries its own `verdict`, the atoms that
+ * fired, and the witness on disk — so show those, and fall back to the generic
+ * gloss only when a node has no verdict of its own. */
 function Tooltip({ hover }) {
   if (!hover) return null;
-  const tier = TIER_OF_TONE[hover.tone];
+  const { node, tone } = hover;
+  const tier = TIER_OF_TONE[tone];
   const T = TIERS[tier];
+  const atoms = node.why || [];
+  const negs = node.neg || [];
+
   return (
     <div className="tip" style={{ left: hover.x, top: hover.y }}>
       <div className="r">
         <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: T.color }}>{T.glyph}</span>
-        <span className="nm">{hover.name}</span>
+        <span className="nm">{node.label}</span>
         <span className="spacer" />
-        <span className="tr" style={{ color: T.color }}>{tier}</span>
+        <span className="tr" style={{ color: T.color }}>{node.conf || tier}</span>
       </div>
-      <div className="why">{WHY[hover.tone]}</div>
-      <div className="k">edges that exposed it</div>
+
+      <div className="why">{node.verdict || WHY[tone]}</div>
+
+      {atoms.length > 0 && (
+        <>
+          <div className="k">because</div>
+          {atoms.map((a) => (
+            <div className="tip-atom" key={a}>{ATOMS[a] || a}</div>
+          ))}
+        </>
+      )}
+
+      {negs.length > 0 && (
+        <>
+          <div className="k">but not</div>
+          {negs.map((n, i) => <div className="tip-neg" key={i}>{n}</div>)}
+        </>
+      )}
+
+      <div className="k">edges</div>
       <div className="edges">
-        {(WHY_EDGES[hover.tone] || []).map((e) => <span className="e" key={e}>{e}</span>)}
+        {(WHY_EDGES[tone] || []).map((e) => <span className="e" key={e}>{e}</span>)}
       </div>
-      <div className="mt">{hover.meta}</div>
+
+      {node.file && <div className="mt">{node.file}</div>}
+      <div className="tip-hint">click to pin this detail</div>
     </div>
   );
 }
@@ -142,6 +177,11 @@ export default function GraphCard({ graph, title, hint, selected, onSelect }) {
                   <span className="title">{cols[l] || `layer ${l}`}</span>
                 </div>
                 <div className="count">{group.length} node{group.length === 1 ? '' : 's'}</div>
+                {/* What this column is actually claiming. Without it the six
+                    headings read as jargon and the graph looks like decoration. */}
+                {COLUMN_HELP[cols[l]] && (
+                  <div className="lane-help">{COLUMN_HELP[cols[l]]}</div>
+                )}
                 <div className="rule" style={{ background: rule }} />
               </div>
             );
@@ -158,26 +198,26 @@ export default function GraphCard({ graph, title, hint, selected, onSelect }) {
               `brRise .5s cubic-bezier(.2,.7,.3,1) ${delay.toFixed(2)}s both` +
               (pulse ? `, brPulse 2.6s ease-out ${(delay + 0.7).toFixed(2)}s infinite` : '');
             const tag = TAGS[n.kind];
-            const selectable = n.kind === 'fn' || n.kind === 'import';
             return (
               <div
                 key={n.id}
-                className={`gnode${selected === n.label ? ' sel' : ''}`}
+                className={`gnode${selected === n.id ? ' sel' : ''}`}
                 style={{
                   left: p.x, top: p.y, width: LANE_W,
                   borderColor: T.border, background: T.bg, animation: anim,
                 }}
                 onMouseEnter={() =>
                   setHover({
-                    name: n.label,
-                    meta: n.sub || '',
+                    node: n,
                     tone,
-                    x: Math.max(0, Math.min(p.x, L.width - 300)),
+                    x: Math.max(0, Math.min(p.x, L.width - 320)),
                     y: p.y + 62,
                   })
                 }
                 onMouseLeave={() => setHover(null)}
-                onClick={() => selectable && onSelect && onSelect(n.label)}
+                /* Every node is inspectable, not just functions: "why is this
+                   one here" is the question the whole view exists to answer. */
+                onClick={() => onSelect && onSelect(n)}
               >
                 <div className="r1">
                   <span className="gl" style={{ color: T.dot }}>{T.glyph}</span>

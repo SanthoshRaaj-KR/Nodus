@@ -11,6 +11,7 @@ import Advisories from './components/Advisories';
 import Stages from './components/Stages';
 import Inspector from './components/Inspector';
 import Repos, { parseRepo } from './components/Repos';
+import NodePanel from './components/NodePanel';
 
 const REPO_KEY = 'br.repos.pending';
 
@@ -130,6 +131,7 @@ export default function App() {
     setTarget(spec);
     setPkg(null);
     setFindingIdx(0);
+    setSelected(null);   // the pinned node belonged to the previous graph
     const next = view === 'findings' ? 'findings' : 'supply';
     setView(next);
     syncUrl(next, spec);
@@ -226,13 +228,25 @@ export default function App() {
     content = (
       <>
         {view === 'overview' && (
-          <GraphCard graph={project} title="supply-chain propagation"
-            hint="hover a node to see why it is flagged" />
+          <div className="graph-with-panel">
+            <div className="gwp-main">
+              <GraphCard graph={project} title="supply-chain propagation"
+                hint="click any node to see why it is there"
+                selected={selected?.id} onSelect={setSelected} />
+            </div>
+            <NodePanel node={selected} onClose={() => setSelected(null)} onFocus={pick} />
+          </div>
         )}
         {view === 'supply' && (
           <>
-            <GraphCard graph={pkg} title="supply-chain propagation"
-              hint="hover a node to see why it is flagged" />
+            <div className="graph-with-panel">
+              <div className="gwp-main">
+                <GraphCard graph={pkg} title="supply-chain propagation"
+                  hint="click any node to see why it is there"
+                  selected={selected?.id} onSelect={setSelected} />
+              </div>
+              <NodePanel node={selected} onClose={() => setSelected(null)} onFocus={pick} />
+            </div>
             <Stages pkg={pkg} />
           </>
         )}
@@ -240,8 +254,8 @@ export default function App() {
           <>
             <GraphCard graph={micro} title="call graph · code reach"
               hint="click to inspect · hover for the reason it is flagged"
-              selected={selected} onSelect={setSelected} />
-            <Inspector micro={micro} selected={selected} />
+              selected={selected?.id} onSelect={setSelected} />
+            <Inspector micro={micro} selected={selected?.label} />
           </>
         )}
         {view === 'findings' && (

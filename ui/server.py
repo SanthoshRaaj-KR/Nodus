@@ -157,6 +157,18 @@ def advisories():
                 # repo" rather than "this is our sample".
                 "source": raw.get("source", "sample"),
                 "scanned_repo": raw.get("scanned_repo", ""),
+                # What the advisory actually says. Without these a reader gets
+                # an identifier and a severity word, which names a finding
+                # without explaining it -- "CVE-2020-28500, moderate" tells you
+                # nothing about what breaks or how to fix it. The scan already
+                # wrote all of this to disk; withholding it was the bug.
+                "summary": raw.get("summary", ""),
+                "cvss_vector": raw.get("cvss_vector", ""),
+                "affected_versions": list(raw.get("affected_versions") or []),
+                "fixed_versions": list(raw.get("fixed_versions") or []),
+                "aliases": list(raw.get("aliases") or []),
+                "references": list(raw.get("references") or []),
+                "published_at": raw.get("published_at") or 0,
             }
         )
     return out
