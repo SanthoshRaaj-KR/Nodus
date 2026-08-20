@@ -25,6 +25,10 @@ _FORBIDDEN_MARKERS = ("-pro", "-opus", "-max")
 
 DEFAULT_MODEL = "gpt-5.4-mini"
 
+#: The scope classifier runs on every question, so it goes on the smallest
+#: model available rather than the answering one. It decides one word.
+DEFAULT_GUARD_MODEL = "gpt-5.4-nano"
+
 #: Reasoning effort. Low is the default because time-to-first-token dominates
 #: how fast this feels, and the questions here are lookups over facts already
 #: computed by the tools rather than problems the model has to think through.
@@ -61,6 +65,13 @@ class ChatConfig:
     #: `agent.session_for`. Under data/ because data/ is already gitignored
     #: and already holds the other thing keyed to a graph build (ids.sqlite).
     session_db: Path
+    #: Model for the relevance guardrail. Separate from `model` because it
+    #: answers a one-word classification and should never cost what an
+    #: answer costs.
+    guard_model: str
+    #: Whether the guardrails run at all. Off is for debugging what the
+    #: agent would say unscreened, never for production.
+    guardrails: bool
     #: Ceiling on a single tool result, in characters. Tool payloads are the
     #: one input a user cannot see and cannot bound, and an unbounded one both
     #: slows generation and pushes the briefing out of the prompt cache.
@@ -91,6 +102,8 @@ class ChatConfig:
             "max_turns": self.max_turns,
             "key_present": self.ready,
             "model_allowed": self.model_allowed,
+            "guard_model": self.guard_model,
+            "guardrails": self.guardrails,
         }
 
 
@@ -127,4 +140,11 @@ def config() -> ChatConfig:
             or (ROOT / "data" / "chat-sessions.sqlite")
         ),
         max_tool_chars=_int_env("CHAT_MAX_TOOL_CHARS", 6000),
+        guard_model=(
+            os.environ.get("CHAT_GUARD_MODEL", "").strip() or DEFAULT_GUARD_MODEL
+        ),
+        guardrails=(
+            os.environ.get("CHAT_GUARDRAILS", "1").strip().lower()
+            not in ("0", "false", "no", "off")
+        ),
     )
