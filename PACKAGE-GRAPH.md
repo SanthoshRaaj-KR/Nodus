@@ -209,10 +209,15 @@ Different projects. If those ever return the same set, the version-awareness is 
 
 ---
 
-## 8. Seeing it: the Explorer
+## 8. Seeing it: the console's package view
 
-`python -m blastradius.cli ui` serves the Explorer on port 8100. It already had two tabs, both owned by the
-code-graph half. **Package · Blast Radius** is the third, and it does not work the way they do.
+> **Where this lives now.** This section describes the **Package · Blast Radius** view, which is served by
+> `/console` (and by the React build in `ui/web`). It used to share a page with `/explorer`; `/explorer` has
+> since been rebuilt around confirmed threats and code reach — see §10f. The six-column argument below is
+> unchanged, it is just reached from the console tab rather than the Explorer.
+
+`python -m blastradius.cli ui` serves the pages on port 8100. The console already had two tabs, both owned
+by the code-graph half. **Package · Blast Radius** is the third, and it does not work the way they do.
 
 The other two fetch the whole graph and compute the highlight in the browser by walking edges backwards from
 whatever you typed. That is right for them. It would be wrong here: exposure is a fact already stored on an
@@ -470,6 +475,147 @@ python -m blastradius.pkg.cli anomalies --offline
 
 ---
 
+## 10d. Real time: watching npm rather than waiting for an advisory
+
+Everything above starts the clock when somebody else notices. `osv-scanner` reads a list of *known*
+vulnerabilities, so the earliest it can tell you anything is whenever an advisory was published — which for
+the TanStack worm was a good deal later than the six minutes it took to publish 84 artifacts.
+
+npm replicates its registry as a public CouchDB change feed, and every publish lands there within seconds:
+
+```
+https://replicate.npmjs.com/_changes?since=<seq>
+```
+
+Measured here, the whole registry runs at roughly **0.85 changes per second** — a trivial volume to keep up
+with, and the reason `blastradius/pkg/watcher.py` can be a poll loop rather than a pipeline. `seq` is a
+resumable cursor, so a restarted watcher neither replays nor skips.
+
+```
+publish  ->  feed emits a name  ->  fetch packument (refresh=True)
+         ->  is the newest version < 15 min old?  ->  it was a publish
+         ->  anomaly.analyse_package  ->  is it in this fleet?  ->  SSE to the browser
+```
+
+**A change is not a publish.** The feed also fires for deprecations and dist-tag moves; measured live, about
+two thirds of changes are not publishes. The recency check is what separates them, and it is why the
+packument must be fetched with `refresh=True` — the registry cache has no expiry, which is right for ingest
+(a published version is immutable) and fatal here, where a cache hit returns the state *before* the publish
+and the watcher reports "nothing new" forever.
+
+**Two tiers, because most of npm is not your problem.** An anomaly on a package nobody here has installed is
+worth recording, not worth waking anyone. `Alert.kind` grades `publish` → `anomaly` → `fleet`, and fleet
+membership is decided through the L0 id map, so it costs no graph query at 0.85 lookups a second.
+
+### The finding that made the burst signal usable
+
+Run against 500 consecutive live publishes, `CORRELATED_BURST` produced **seventeen** findings. The largest
+was `metamaskbot` publishing **97 packages in 4.6 minutes** — quantitatively bigger than the TanStack
+compromise, and entirely routine: one monorepo releasing.
+
+So volume is necessary and nowhere near sufficient, and `CorrelatedBurst.cohesive` carries the rest. A burst
+whose packages all sit under one npm scope, or all build out of one repository, is a monorepo doing what
+monorepos do. A burst spread across unrelated scopes *and* repositories is an account reaching places it has
+no reason to reach at once. Spread bursts sort above cohesive ones however much smaller they are.
+
+On the same feed after the change: four bursts, **all four correctly classified as releases**, zero false
+worm alerts. Unscoped packages from unknown repositories are explicitly *not* cohesive — treating absent
+provenance as shared provenance would mark the widest possible spread as a tidy release.
+
+## 10e. The console
+
+`python -m blastradius.cli ui` serves three pages. `/graph` is the new one.
+
+**Point it at any repository.** The path box takes any checkout with a `package-lock.json`; the server
+validates it (refusing system directories and naming what was wrong), runs the whole pipeline on a thread,
+and streams stage progress. Everything downstream — the graph, the watcher's notion of "your fleet", the
+simulation — is defined by whatever was ingested. Pointed at this repository it finds 15 services and 22
+advisory links in about 24 seconds.
+
+**The whole graph as circles.** `/api/graph/full` sweeps every node and edge once and caches against
+`read_epoch`; on the corpus that is ~3,200 nodes and ~11,500 edges in about 2.6 s cold, 60 ms warm. The
+canvas lays them out with a two-scale force simulation — exact repulsion within a 3×3 grid neighbourhood,
+plus a coarse cell-centroid term beyond it. The far term is not an optimisation: with near-field alone
+nothing pushes one cluster away from another and the graph relaxes into a uniform disc, every node locally
+well-spaced and the structure invisible.
+
+Colour is assigned by job, and **three** categorical hues is not an arbitrary stop. This is a node-link
+diagram, so any two classes can end up adjacent; under all-pairs validation the reference palette's first
+three slots are the documented-safe set in both modes, and a fourth fails (violet collapses into blue in
+dark at CVD ΔE 1.9). Everything finer is size, or filled-versus-ring. Status colours sit outside the
+categorical set.
+
+**Simulate a compromise.** Pick a package — or press the button and get a random one, with the range-only
+over-report quoted next to it — and the server marks a synthetic incident, runs the blast radius, the
+frontier and the advisories, and streams each stage. The affected nodes hold a pulsing highlight and the
+camera frames them; *Reset* retracts the incident and the graph goes back as it was.
+
+The incident is synthetic and points at an ordinary healthy public package: nothing is downloaded, nothing
+is executed, and no package is modified.
+
+---
+
+## 10f. The Explorer: the last mile, from a threat to a function
+
+`/explorer` answers two questions in order, and it exists because the second one is the one that decides
+what you do on the morning of an incident.
+
+**1 · What is confirmed wrong?** Published advisories, recorded incidents, registry deprecations — grouped
+by *version*, not by advisory. Three CVEs on `lodash@4.17.20` are one thing to go and fix, and listing them
+as three findings triples the apparent size of the problem without adding an action.
+
+**2 · Can any of it be reached from a line of code here?** This repository resolves **1,703 package
+versions** and contains **8 external imports**. Almost nothing in the tree is named by source. So the walk
+continues past "installed":
+
+```
+Advisory -> PackageVersion -> (dependency chain) -> ExternalImport -> Function -> callers
+```
+
+Measured against this repository: **2 of 13** confirmed threats are reachable from its 180 scanned
+functions. `vite@5.4.21` (CVE-2026-53571, high) is reached twice — directly as `import { defineConfig } from
+"vite"`, and again one hop down through `@vitejs/plugin-react@4.7.0` — both landing in `vite.config.js`.
+`esbuild@0.21.5` is reached through the same file at one and two hops. The other eleven are installed and
+never imported.
+
+**"Not reached" is not "not affected", and the wording has to carry that.** The package really is installed
+and the advisory really does apply; nothing here imports it. That is the difference between *patch now* and
+*patch Tuesday*, and a list that cannot draw it is the flat lockfile scan this project exists to improve on.
+A test asserts the phrasing never says "false positive" or "not affected".
+
+**Ordering puts reachability above severity.** A moderate finding a route handler calls is a worse Monday
+than a critical one on a transitive dev dependency nothing imports. Sorting on severity alone buries the
+finding that has a file to open, so `Threat.rank` sorts on code reach first and severity second.
+
+**Why the diagram has three hues and not four.** The obvious split — red threat, aqua package, orange
+import, blue function — **fails all-pairs validation in both modes**: red against orange lands at
+normal-vision ΔE 7.1, well under the floor of 15, meaning full-colour readers cannot reliably separate them
+either. No amount of secondary encoding excuses that. Orange was dropped and the fourth distinction is
+carried by filled-versus-ring within a family. Red against aqua sits at ΔE 6.9 (light) / 6.5 (dark), inside
+the 6–8 band that is legal *with* secondary encoding, and it has four: fixed column position, a text label
+on every node, distinct radii, and a permanent legend.
+
+Layout is a fixed layered DAG, not a force solver: the columns *are* the semantics, and letting physics
+decide left-to-right order would scramble the one thing the picture is for. Within a column, two barycentre
+passes cut edge crossings.
+
+### The bug this surfaced: a drill that could not be retracted
+
+Building the threat list turned up eight packages marked `SIMULATED_COMPROMISED` by one incident node whose
+summary named only the last of them.
+
+`create_incident` defaulted its `incident_id` to a shared literal `"SYNTHETIC-001"`. `clear_incident`
+defaulted to `incident_id_for(package, version)` — the per-version id. The two defaults disagreed, silently
+and cumulatively: every drill hung another `COMPROMISES` edge off the one shared node and overwrote its
+summary, while every *Reset* looked up an id that had never been written, found nothing, and reported
+success. Eight drills against this repository left eight packages permanently compromised in the graph.
+
+`incident_id_for` was correct, and had been unit-tested since it was written. That was not enough, because
+the generator was never the part that was wrong — nothing pinned that `create_incident` *used* it. The
+defaults now agree, and a test pins the pairing itself rather than the generator.
+
+---
+
 ## 11. Known gaps
 
 - **CVSS base score is not derived from the vector.** The OSV CSV leaves `severity_score` empty while
@@ -491,12 +637,30 @@ python -m blastradius.pkg.cli anomalies --offline
   7.5.11 within a minute — a security fix backported across maintained majors. The *shape* is exactly right
   and the cause is benign, which is why it is INVESTIGATE rather than a finding. Distinguishing them needs
   the diff, not the metadata.
-- **`CORRELATED_BURST` fires on monorepo releases.** `brianc` publishing `pg`, `pg-connection-string` and
-  `pg-protocol` together is one release, not propagation. A `SOURCED_FROM` check would suppress it — same
-  repository means one project — and is the obvious next refinement.
+- **`CORRELATED_BURST` cohesion is a heuristic, not proof.** Scope and repository separate a monorepo
+  release from a spread, and on the live feed that took seventeen findings down to zero false alarms. But an
+  attacker who compromises one maintainer of one monorepo produces a *cohesive* burst and is graded a
+  release; conversely a maintainer who genuinely owns unrelated projects and releases them together is
+  graded a spread. The rule buys precision at a known cost in recall.
+- **The watcher sees npm, not your registry.** A private or proxied registry publishes nothing to
+  `replicate.npmjs.com`, so an internal package is invisible to the live path. The static ingest still
+  covers it.
+- **Live alerts are memory only.** The watcher is an early-warning surface, not a system of record: alerts
+  live in a 500-entry ring buffer and a restart loses them. Anything that matters is also written to the
+  graph by an ingest.
 - **The recency horizon means the tool has no memory.** A compromise older than 90 days is invisible to
   the anomaly checks by default. That is the right default for incident response and the wrong one for
   forensics; `horizon_seconds=None` assesses the whole history.
 - **The scale harness is synthetic.** It answers a complexity question, which does not need real names, and
   it drives the real writer and the real engine. It does not tell you how a 500k-node graph built from
   *actual* npm data would behave — dependency fan-out there is heavily skewed, and this generator's is not.
+- **"Not reached from code" is only as true as the code scan.** The Explorer's second section reads the
+  micro tier, so a repository ingested *without* the AST scanner has zero functions and zero imports — and
+  every finding then reports "installed only". That failure mode reads as good news and is not; the header
+  states the denominator (`… of the 180 function(s) scanned in this repository`) precisely so a zero is
+  visible rather than reassuring. Treat an unscanned repo as unknown, not clean.
+- **Import reach is per-specifier, not per-export.** A file that imports `lodash` and uses only `_.map`
+  reports reach for a CVE in `_.template`. The graph records which module a function imports, not which
+  binding it touched, so this over-reports within a reached package. It never under-reports.
+- **The caller walk stops at two hops.** Deeper callers are counted and reported, never silently dropped,
+  but they are not drawn: a caller tree that runs off the canvas hides the first two hops that matter.

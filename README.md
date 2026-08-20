@@ -163,6 +163,24 @@ explorer. Keeping them apart means the demo surface can be restarted or
 re-skinned without touching what other tools depend on, and it reads HydraDB
 directly rather than proxying — one fewer moving part to fail on stage.
 
+Three pages, each answering a different question:
+
+| Page | Question |
+|---|---|
+| `/console` | Which projects resolved one exact version, and on what evidence? |
+| `/explorer` | What is confirmed wrong, and can any of it be reached from our code? |
+| `/graph` | What is happening on npm right now, and what would a compromise do? |
+
+**`/explorer` — confirmed threats, and the last mile.** Section 1 lists every
+advisory, incident and deprecation against a version this graph holds, grouped
+by version rather than by CVE. Section 2 traces the selected one down to
+source: `PackageVersion -> dependency chain -> ExternalImport -> Function ->
+callers`. On this repository 2 of 13 confirmed threats reach code — `vite@5.4.21`
+via two separate import paths that both land in `vite.config.js`. The other
+eleven are installed and never imported, which the page says in those words:
+*installed, but not reached from your source*. That is not "not affected", and
+it is the difference between patch-now and patch-Tuesday.
+
 **Macro — the supply chain.** Scoped to one exact version, and read left to
 right as an argument:
 
@@ -237,10 +255,20 @@ Two gaps worth knowing about before demoing off this branch:
 - **`/api/repos` has no backend yet.** `ui/web/src/lib/api.js` already says so
   in a comment — the Repos view degrades to `localStorage` and states that
   rather than faking a queue.
-- **`frontier`, `anomalies`, and `scale`** (the CLI surfaces this branch adds —
-  see `python -m blastradius.pkg.cli --help`) are not exposed through
-  `ui/server.py` or either console yet. They're CLI-only for now; wiring them
-  up is follow-up work, not something this merge attempted.
+- **`scale` is CLI-only**, and deliberately: it is a measurement harness, not a
+  view, and its destructive mode is gated behind
+  `BLASTRADIUS_DESTRUCTIVE_TESTS=1`. `frontier` and `anomalies` are no longer
+  CLI-only — the watcher runs the anomaly checks on every live publish and the
+  frontier on every fleet hit — but the UI shows only their *counts*. The
+  routes, per-target evidence atoms and confidence tiers that
+  `python -m blastradius.pkg.cli frontier` prints still have no view.
+- **`compare` has no view either.** Range-only-vs-lockfile-truth is the central
+  accuracy claim and it is reachable only from the CLI; the simulation computes
+  the number and does not render it.
+- **Typosquats are invisible in every UI.** `TYPOSQUAT_OF` edges ship in the
+  `/api/graph/full` payload but are drawn in the same grey as every other edge,
+  and no endpoint returns typosquat findings. The module has six detection
+  techniques and no surface.
 
 ### Making it fast
 
