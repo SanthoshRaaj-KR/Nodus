@@ -18,7 +18,7 @@ from .. import schema
 from ..hydra_client import HydraClient, HydraError
 from ..ids import IdAllocator
 from .bench import run_benchmarks
-from .blast import BlastRadiusEngine, Confidence
+from .blast import BlastRadius, BlastRadiusEngine, Confidence
 from .corpus import generate_corpus
 from .incident import clear_incident, create_incident, incident_id_for
 from .ingest import IngestConfig, ingest
@@ -290,6 +290,229 @@ def cmd_bench(args) -> int:
     return 0
 
 
+def cmd_anomalies(args) -> int:
+    """Publish-time signals over the packages this graph knows about.
+
+    Reads the registry cache rather than the graph: the signals are about
+    *metadata history* -- when versions appeared, who pushed them, what
+    changed between them -- and the graph stores the current state of each
+    version rather than the sequence. `--offline` keeps it reproducible.
+    """
+    from .anomaly import Signal, analyse_correlated_burst, analyse_package
+
+    names = list(args.packages or [])
+    if not names:
+        # Package names come from the local id map, never a label scan: the
+        # scan is rejected outright past 250k nodes by admission control, and
+        # this is the L0 layer that exists to avoid it.
+        ids_probe = IdAllocator(args.ids)
+        try:
+            from .identity import parse_purl
+
+            for key, _ in ids_probe.keys_with_prefix(schema.PACKAGE, "pkg:npm/"):
+                parsed = parse_purl(key)
+                if parsed is not None and not parsed.version:
+                    names.append(parsed.name)
+        finally:
+            ids_probe.close()
+
+    if not names:
+        print(
+            "\nNo packages to analyse. Ingest first, or name them:\n"
+            "    python -m blastradius.pkg.cli anomalies --packages lodash debug\n"
+        )
+        return 1
+
+    names = names[: args.limit_packages]
+    registry = RegistryClient(offline=args.offline)
+    failures: list[str] = []
+    fetched = registry.packuments(
+        names, full=True,
+        on_error=lambda n, exc: failures.append(f"{n}: {type(exc).__name__}"),
+    )
+
+    print(RULE)
+    print(f"PUBLISH ANOMALIES over {len(fetched)} package(s)")
+    print(RULE)
+    if failures:
+        # Never silent: a package we could not read is not a package with
+        # nothing to report, and the difference matters here more than usual.
+        print(
+            f"\n  {len(failures)} package(s) could not be read"
+            f"{' (offline: not in cache)' if args.offline else ''} "
+            f"and were not assessed."
+        )
+        for line in failures[:5]:
+            print(f"      {line}")
+
+    per_signal: dict[str, list] = {}
+    for packument in fetched.values():
+        for signal in analyse_package(packument):
+            per_signal.setdefault(signal.signal, []).append(signal)
+
+    print(f"\n  {'signal':<28} {'count':>7}")
+    print(f"  {'-'*28} {'-'*7}")
+    for name in sorted(Signal.ALL):
+        found = per_signal.get(name, [])
+        if found or args.verbose:
+            print(f"  {name:<28} {len(found):>7}")
+
+    for name in sorted(per_signal):
+        found = per_signal[name]
+        print(f"\n  {name}  ({len(found)})")
+        for signal in found[: args.limit]:
+            print(f"      {signal.explain()}")
+        if len(found) > args.limit:
+            print(f"      ... and {len(found) - args.limit} more")
+
+    bursts = analyse_correlated_burst(list(fetched.values()))
+    print("\n\n  CORRELATED BURSTS -- one account, many packages, one window")
+    print("  This is the shape the TanStack worm had.")
+    if not bursts:
+        print("\n      none found")
+    for burst in bursts[: args.limit]:
+        print(f"\n      {burst.explain()}")
+        for pkg, versions in sorted(burst.packages.items())[:6]:
+            print(f"          {pkg}: {', '.join(versions[:4])}")
+
+    print(
+        "\n\n  Every signal above is INVESTIGATE. None of them asserts that a\n"
+        "  package is malicious.\n"
+    )
+    return 0
+
+
+def cmd_frontier(args) -> int:
+    """What the credentials behind a compromise could publish to next.
+
+    The complement of `simulate`: that one answers "who already has it", this
+    one answers "where does it go from here". Read-only -- it marks nothing and
+    needs no incident, because publish rights exist whether or not anyone has
+    abused them yet.
+    """
+    from .frontier import FrontierEngine
+
+    name, version = _split_spec(args.spec)
+    client = _client(args)
+    _require_node(client)
+    ids = IdAllocator(args.ids)
+    try:
+        engine = FrontierEngine(client, ids)
+        result = BlastRadius(target=f"{name}@{version}")
+        frontier = engine.analyse(
+            name, version, result=result,
+            measure_impact=not args.no_impact,
+        )
+
+        print(RULE)
+        print(frontier.render(limit=args.limit))
+        print()
+        if args.timings and result.timings:
+            print(f"\n  {'query':<38} {'ms':>8} {'rows':>7}")
+            print(f"  {'-'*38} {'-'*8} {'-'*7}")
+            for t in result.timings:
+                print(f"  {t.label:<38} {t.ms:>8.2f} {t.rows:>7}")
+            total = sum(t.ms for t in result.timings)
+            print(f"  {'total':<38} {total:>8.2f}")
+            print()
+    finally:
+        ids.close()
+    return 0
+
+
+def cmd_scale(args) -> int:
+    """Both sweeps, and the conclusion each one supports.
+
+    Destructive by nature: every point needs a graph of a known size, and the
+    only way to get one here is to drop the store between points. That is
+    stated up front rather than discovered afterwards, because the corpus
+    ingest does not survive it.
+    """
+    from .scale import (
+        ScaleSpec, render_sweep, render_verdict, sweep_answer_size,
+        sweep_graph_size,
+    )
+
+    if not args.yes:
+        print(
+            "\nThis DESTROYS the current graph and id map -- it resets the store\n"
+            "once per measured point. Rebuild afterwards with:\n"
+            "    python -m blastradius.cli pipeline --reset\n"
+            "\nRe-run with --yes to proceed.\n"
+        )
+        return 1
+
+    sizes = sorted(args.sizes or [200, 2_000, 20_000])
+    fanouts = args.fanouts or [1, 10, 100, 1_000]
+
+    # Services scale with the graph, so "graph size" grows in every dimension
+    # -- versions, services and the RESOLVED_IN closure alike. Holding services
+    # flat would grow the node count while leaving the adjacency Q5 walks
+    # almost unchanged, which is a much weaker claim than the one being made.
+    largest = sizes[-1]
+
+    def services_for(size: int) -> int:
+        return max(args.probe_fanout, round(args.services * size / largest))
+
+    specs = [
+        ScaleSpec(
+            packages=max(1, size // args.versions_per_package),
+            versions_per_package=args.versions_per_package,
+            services=services_for(size),
+            deps_per_service=args.deps_per_service,
+            probe_fanout=args.probe_fanout,
+            probes=args.probes,
+        )
+        for size in sizes
+    ]
+
+    # Sweep B measures answer sizes up to max(fanouts), which is impossible if
+    # the graph holds fewer services than that. Widen the base rather than
+    # letting the sweep silently clamp every large point to the same number.
+    base = specs[-1]
+    if base.services < max(fanouts):
+        base = ScaleSpec(
+            packages=base.packages,
+            versions_per_package=base.versions_per_package,
+            services=max(fanouts),
+            deps_per_service=base.deps_per_service,
+            probe_fanout=base.probe_fanout,
+            probes=base.probes,
+            seed=base.seed,
+        )
+
+    print(RULE)
+    print("SCALE: does Q5 cost track the answer, or the graph?")
+    print(RULE)
+    print(
+        "\nSynthetic graphs, written through the real writer and measured\n"
+        "through the real engine. Every point asserts Q5 returned exactly the\n"
+        "services attached to its probe, so a fast wrong answer cannot pass."
+    )
+
+    print("\n\nSWEEP A -- graph grows, answer held constant")
+    print("  If the closure claim holds, this line is flat.")
+    a = sweep_graph_size(args.hydra, specs, repeats=args.repeats)
+    print()
+    print(render_sweep(a, "graph"))
+
+    print("\n\nSWEEP B -- graph held constant, answer grows")
+    print("  The control. This line must rise, or Sweep A proves nothing.")
+    b = sweep_answer_size(args.hydra, base, fanouts, repeats=args.repeats)
+    print()
+    print(render_sweep(b, "answer"))
+
+    print("\n\nVERDICT")
+    print(RULE)
+    print(render_verdict(a, b))
+
+    print(
+        "\n\nThe graph is empty now. Rebuild with:\n"
+        "    python -m blastradius.cli pipeline --reset\n"
+    )
+    return 0
+
+
 def _section(title: str, rows: list[str], limit: int = 40) -> None:
     print(f"\n{title}")
     if not rows:
@@ -353,6 +576,49 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--repeats", type=int, default=7)
     p.add_argument("--max-depth", type=int, default=5)
     p.set_defaults(func=cmd_bench)
+
+    p = sub.add_parser(
+        "anomalies", help="publish-time signals: bursts, install scripts, publishers"
+    )
+    p.add_argument("--packages", nargs="+", default=None,
+                   help="names to assess (default: everything in the id map)")
+    p.add_argument("--offline", action="store_true",
+                   help="registry cache only, no network")
+    p.add_argument("--limit", type=int, default=10,
+                   help="rows printed per signal (counts are always true)")
+    p.add_argument("--limit-packages", type=int, default=400)
+    p.add_argument("--verbose", action="store_true",
+                   help="list signals that fired zero times too")
+    p.set_defaults(func=cmd_anomalies)
+
+    p = sub.add_parser(
+        "frontier",
+        help="what the credentials behind this compromise could publish to next",
+    )
+    p.add_argument("spec", help="name@version, e.g. lodash@4.17.21")
+    p.add_argument("--limit", type=int, default=20,
+                   help="frontier rows to print (the count is always the true one)")
+    p.add_argument("--no-impact", action="store_true",
+                   help="skip the fleet-impact query per row")
+    p.add_argument("--timings", action="store_true", help="per-query latency")
+    p.set_defaults(func=cmd_frontier)
+
+    p = sub.add_parser(
+        "scale", help="does Q5 cost track the answer or the graph? (DESTRUCTIVE)"
+    )
+    p.add_argument("--yes", action="store_true",
+                   help="required: this drops the store once per measured point")
+    p.add_argument("--sizes", type=int, nargs="+", default=None,
+                   metavar="N", help="version counts to sweep (default 200 2000 20000)")
+    p.add_argument("--fanouts", type=int, nargs="+", default=None,
+                   metavar="N", help="answer sizes for sweep B (default 1 10 100 1000)")
+    p.add_argument("--versions-per-package", type=int, default=4)
+    p.add_argument("--services", type=int, default=200)
+    p.add_argument("--deps-per-service", type=int, default=300)
+    p.add_argument("--probe-fanout", type=int, default=5)
+    p.add_argument("--probes", type=int, default=3)
+    p.add_argument("--repeats", type=int, default=9)
+    p.set_defaults(func=cmd_scale)
 
     args = parser.parse_args(argv)
     try:

@@ -319,7 +319,17 @@ python -m blastradius.pkg.cli compare lodash@4.17.21     # range-only leads vs l
 python -m blastradius.pkg.cli simulate lodash@4.17.21    # mark it compromised, print the report
 python -m blastradius.pkg.cli retract lodash@4.17.21     # take the mark back off
 python -m blastradius.pkg.cli bench lodash@4.17.21       # query latency
+python -m blastradius.pkg.cli frontier pino@10.2.1       # where the worm goes NEXT
+python -m blastradius.pkg.cli anomalies --offline        # publish-time signals
+python -m blastradius.pkg.cli scale --yes                # the scale experiment (destructive)
 ```
+
+`frontier` is the forward-looking half, and the one no scanner answers: given a
+compromise, which packages can the implicated credentials publish to *next*,
+ranked by how many of your services resolve each one today. See
+[PACKAGE-GRAPH.md §10b](PACKAGE-GRAPH.md). `anomalies` reads publish metadata
+for the worm's own signature — bursts, install scripts appearing, publishes from
+outside the maintainer list.
 
 `compare` is the one that states the case without any UI: it prints how many
 versions a declared range admits against how many a lockfile actually resolved.
