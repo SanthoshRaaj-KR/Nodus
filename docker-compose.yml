@@ -1,0 +1,52 @@
+services:
+  hydradb:
+    image: ghcr.io/hydra-db/hydradb:latest
+    restart: always
+    environment:
+      CLOUD_PROVIDER: aws
+      AWS_BUCKET_NAME: blastradius-hydradb
+      AWS_DEFAULT_REGION: ap-south-2
+      GRAPH_NAMESPACE: default
+      GRAPH_ID: default
+      GRAPH_CELL_ID: cell-0
+      GRAPH_CELLS: cell-0
+      GRAPH_NODE_ID: node-0
+      GRAPH_BOLT_NODE_ADDRESSES: node-0=hydradb:7687
+      GRAPH_ADVERTISED_BOLT_ADDR: hydradb:7687
+      GRAPH_DATA_CACHE_DIR: /data/cache
+      GRAPH_AUTH_TOKEN_FILE: /run/secrets/hydra_token
+      RUST_MIN_STACK: "8388608"
+    ports:
+      - "8443:8443"
+      - "7687:7687"
+    volumes:
+      - hydradb-cache:/data/cache
+      - ./secrets/hydra-token:/run/secrets/hydra_token:ro
+
+  blastradius-api:
+    image: santhosh1710/blastradius:latest
+    restart: always
+    depends_on:
+      - hydradb
+    env_file:
+      - .env
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    depends_on:
+      - blastradius-api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  hydradb-cache:
+  caddy-data:
+  caddy-config:

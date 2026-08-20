@@ -1,0 +1,3 @@
+18.61.84.138.sslip.io {
+	reverse_proxy blastradius-api:8000
+}
