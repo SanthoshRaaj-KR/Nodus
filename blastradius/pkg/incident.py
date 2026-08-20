@@ -66,7 +66,7 @@ def create_incident(
     ids: IdAllocator,
     package: str,
     version: str,
-    incident_id: str = "SYNTHETIC-001",
+    incident_id: str | None = None,
     window_hours: int = 6,
     live_from: int | None = None,
     live_until: int | None = None,
@@ -77,7 +77,20 @@ def create_incident(
     The edge points at the ``PackageVersion``, never at the ``Package``. That
     is the whole version-awareness property: ``lodash@4.17.21`` being marked
     must leave ``4.17.20`` and ``4.17.22`` untouched, and a test asserts it.
+
+    ``incident_id`` defaults to :func:`incident_id_for`, the same default
+    :func:`clear_incident` uses. It used to default to a single shared
+    ``"SYNTHETIC-001"`` instead, and the mismatch was silent and cumulative:
+    every simulation hung another ``COMPROMISES`` edge off the one shared node
+    and overwrote its summary with the newest target, while a retraction
+    looked up the per-version id, found nothing, and reported success. Eight
+    drills against this repo left eight packages permanently marked
+    compromised and one summary claiming all eight were the last one. Callers
+    that pass an explicit id are unaffected; the two defaults now agree, so a
+    caller that passes nothing can no longer create something it cannot
+    remove.
     """
+    incident_id = incident_id or incident_id_for(package, version)
     now = int(time.time())
     until = live_until if live_until is not None else now
     since = live_from if live_from is not None else until - window_hours * 3600

@@ -455,14 +455,21 @@ class LiveState:
     def _run_simulation(self, name: str, version: str, version_id: int) -> None:
         from blastradius.pkg.blast import BlastRadius, BlastRadiusEngine
         from blastradius.pkg.frontier import FrontierEngine
-        from blastradius.pkg.incident import create_incident
+        from blastradius.pkg.incident import create_incident, incident_id_for
 
         def stage(text: str) -> None:
             self.simulation["stage"] = text
             self._emit_sim()
 
         try:
-            create_incident(self.client, self.ids, name, version)
+            # Named explicitly, and it has to match what `clear_simulation`
+            # looks up or Reset retracts nothing. Both now default to the same
+            # per-version id, but naming it here keeps the pairing visible at
+            # the call site rather than resting on two defaults agreeing.
+            create_incident(
+                self.client, self.ids, name, version,
+                incident_id=incident_id_for(name, version),
+            )
 
             engine = BlastRadiusEngine(self.client, self.ids)
             result = BlastRadius(target=f"{name}@{version}", target_id=version_id)

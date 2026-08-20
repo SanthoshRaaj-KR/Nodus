@@ -31,6 +31,34 @@ def test_the_id_is_stable_across_calls():
     assert incident_id_for("lodash", "4.17.21") == incident_id_for("lodash", "4.17.21")
 
 
+def test_create_and_clear_default_to_the_same_id():
+    """The bug the test above did not catch: a correct id nobody called.
+
+    ``incident_id_for`` was right, and pinned, and ``clear_incident``
+    defaulted to it -- while ``create_incident`` defaulted to a literal
+    ``"SYNTHETIC-001"``. So a caller that passed no id wrote one node and
+    retracted another. Every drill hung a further COMPROMISES edge off the
+    shared node, its summary was overwritten by the newest target, and the
+    retraction reported success having deleted nothing. Eight runs against
+    this repo left eight packages permanently marked compromised.
+
+    Testing the generator was not enough, because the generator was never
+    the part that was wrong. This pins the pairing itself.
+    """
+    import inspect
+
+    from blastradius.pkg.incident import clear_incident, create_incident
+
+    create_default = inspect.signature(create_incident).parameters["incident_id"].default
+    clear_default = inspect.signature(clear_incident).parameters["incident_id"].default
+    assert create_default is None, (
+        "create_incident must fall through to incident_id_for, not pin a "
+        "literal id that clear_incident will never look up"
+    )
+    assert clear_default is None
+    assert create_default == clear_default
+
+
 def test_scoped_packages_keep_their_scope_in_the_id():
     scoped = incident_id_for("@angular/core", "17.0.0")
     assert scoped != incident_id_for("core", "17.0.0")
