@@ -46,6 +46,16 @@ from blastradius.hydra_client import (
     DEFAULT_TOKEN,
     HydraClient,
 )
+
+#: Ingest runs `counts_by_label` -- one COUNT(*) per node label -- as its
+#: last step, and against HydraDB's S3 backend that is measurably slower
+#: than against local-filesystem storage: enough to exceed the client's
+#: default 25s timeout on a label with many rows. Ingest already reports
+#: progress through the job's stage list, so a caller is never staring at a
+#: bare spinner -- there is no UX cost to giving this client more room,
+#: unlike the request-serving client in ui/server.py, which stays at the
+#: default because those reads are meant to feel instant.
+_INGEST_TIMEOUT_MS = int(os.environ.get("HYDRA_INGEST_TIMEOUT_MS", "120000"))
 from blastradius.ids import IdAllocator
 from blastradius.pkg.identity import package_key, version_key
 from blastradius.pkg.registry import RegistryClient
@@ -189,6 +199,7 @@ class LiveState:
             token=os.environ.get("HYDRA_TOKEN", DEFAULT_TOKEN),
             namespace=os.environ.get("HYDRA_NAMESPACE", DEFAULT_NAMESPACE),
             graph=os.environ.get("HYDRA_GRAPH", DEFAULT_GRAPH),
+            timeout_ms=_INGEST_TIMEOUT_MS,
         )
         self.ids = IdAllocator()
         self.registry = RegistryClient()
