@@ -41,6 +41,27 @@ __all__ = [
 
 ECOSYSTEM = "npm"
 
+#: The second ecosystem. Kept as a purl type string because that is what the
+#: identity actually is -- `pkg:pypi/requests@2.31.0` -- and because OSV keys
+#: its advisories on the same vocabulary.
+PYPI = "pypi"
+
+#: PEP 503 name normalisation: lowercase, and any run of `-`, `_` or `.`
+#: collapses to a single `-`. `Flask_SQLAlchemy`, `flask-sqlalchemy` and
+#: `Flask.SQLAlchemy` are one project, and a graph that keys them separately
+#: reports three packages where a lockfile installed one.
+_PYPI_SEPARATORS = re.compile(r"[-_.]+")
+
+
+def normalize_pypi_name(name: str) -> str:
+    """PEP 503 normalisation. Raises on anything that cannot be a name."""
+    if not isinstance(name, str) or not name.strip():
+        raise InvalidPackageName(f"empty PyPI package name: {name!r}")
+    normalized = _PYPI_SEPARATORS.sub("-", name.strip().lower())
+    if not normalized or normalized.startswith("-") or normalized.endswith("-"):
+        raise InvalidPackageName(f"not a valid PyPI package name: {name!r}")
+    return normalized
+
 
 class InvalidPackageName(ValueError):
     """A string that cannot be an npm package name."""
@@ -95,18 +116,25 @@ def split_scope(name: str) -> tuple[str | None, str]:
     return None, normalized
 
 
-def package_key(name: str) -> str:
+def package_key(name: str, ecosystem: str = ECOSYSTEM) -> str:
     """Canonical purl for a package, with no version.
 
-    ``pkg:npm/lodash`` / ``pkg:npm/%40angular/core``.
+    ``pkg:npm/lodash`` / ``pkg:npm/%40angular/core`` / ``pkg:pypi/requests``.
+
+    ``ecosystem`` defaults to npm so that every existing call site keeps its
+    meaning; PyPI callers pass it explicitly. The two namespaces cannot
+    collide, which is the point of putting the ecosystem in the key at all --
+    npm's `requests` and PyPI's `requests` are unrelated projects.
     """
+    if ecosystem == PYPI:
+        return f"pkg:{PYPI}/{normalize_pypi_name(name)}"
     scope, bare = split_scope(name)
     if scope:
         return f"pkg:{ECOSYSTEM}/{quote(scope, safe='')}/{bare}"
     return f"pkg:{ECOSYSTEM}/{bare}"
 
 
-def version_key(name: str, version: str) -> str:
+def version_key(name: str, version: str, ecosystem: str = ECOSYSTEM) -> str:
     """Canonical purl for one released version.
 
     The version is *not* normalised through the semver parser here. A registry
@@ -116,7 +144,7 @@ def version_key(name: str, version: str) -> str:
     """
     if not isinstance(version, str) or not version.strip():
         raise InvalidPackageName(f"empty version for package {name!r}")
-    return f"{package_key(name)}@{version.strip()}"
+    return f"{package_key(name, ecosystem)}@{version.strip()}"
 
 
 def service_key(name: str) -> str:
