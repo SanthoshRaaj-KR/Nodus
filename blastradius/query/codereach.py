@@ -49,9 +49,11 @@ __all__ = [
     "CodeIndex",
     "Threat",
     "Reach",
+    "Artifact",
     "build_index",
     "threats",
     "code_reach",
+    "persistence_artifacts",
     "CALLER_DEPTH",
 ]
 
@@ -608,3 +610,82 @@ def code_reach(
         nodes=list(nodes.values()), edges=edges,
         truncated_callers=truncated,
     )
+
+
+# --------------------------------------------------------------------------
+# Persistence: the compromise that survives the uninstall
+# --------------------------------------------------------------------------
+
+@dataclass
+class Artifact:
+    """One file found somewhere a worm hides to outlive its package.
+
+    This is a different kind of fact from everything else in this module, and
+    the difference is the whole reason it has its own section rather than
+    being folded into the threat list. Every other finding here is *exposure*:
+    a version you installed, a package you import, a maintainer who could
+    push again. Removing the package resolves all of them.
+
+    An artifact is *evidence*, and removing the package resolves none of it.
+    The TanStack-class worm wrote into ``.claude/`` and ``.vscode/`` precisely
+    so that ``npm uninstall`` would leave it running. Reporting it beside the
+    advisories, under the same heading, would say the opposite of what is
+    true.
+    """
+
+    path: str
+    kind: str
+    sha256: str
+    service: str
+    first_seen: int
+
+    @property
+    def watched_dir(self) -> str:
+        """The directory that made this worth looking at, if it is one."""
+        for watched in (".claude", ".vscode", ".github/workflows", ".husky"):
+            if self.path.startswith(watched + "/") or self.path == watched:
+                return watched
+        return ""
+
+    def to_dict(self) -> dict:
+        return {
+            "path": self.path,
+            "kind": self.kind,
+            "sha256": self.sha256,
+            "short_sha": self.sha256[:12],
+            "service": self.service,
+            "first_seen": self.first_seen,
+            "watched_dir": self.watched_dir,
+        }
+
+
+def persistence_artifacts(client: HydraClient) -> list[Artifact]:
+    """Every persistence candidate on disk, newest first.
+
+    Nothing here is a verdict either. A `.vscode/settings.json` is a file
+    almost every repository has, and the check reports files in the places a
+    worm is known to use -- not files that are known to be malicious. The
+    kind says which: ``ioc-path`` and ``ioc-content`` matched something an
+    advisory named, ``watched-dir`` is "this is one of the directories, go
+    and look".
+    """
+    rows = client.query(
+        f"MATCH (a:{schema.ARTIFACT}) RETURN a.path AS path, a.kind AS kind, "
+        "a.sha256 AS sha256, a.service AS service, a.first_seen AS first_seen"
+    ).rows
+    found = [
+        Artifact(
+            path=_text(r.get("path")),
+            kind=_text(r.get("kind")) or "watched-dir",
+            sha256=_text(r.get("sha256")),
+            service=_text(r.get("service")),
+            first_seen=_int(r.get("first_seen"), 0),
+        )
+        for r in rows
+        if _text(r.get("path"))
+    ]
+    # An IOC match outranks "it was in a watched directory", then newest
+    # first: a file that appeared today is the one to open.
+    order = {"ioc-content": 0, "ioc-path": 1, "watched-dir": 2}
+    found.sort(key=lambda a: (order.get(a.kind, 3), -a.first_seen, a.path))
+    return found

@@ -428,7 +428,22 @@ def ingest_corpus(
 
         from .persistence import scan_service
 
-        artifacts = scan_service(project, ioc_paths, content_markers)
+        # Scanned at the service directory AND at the repository root, and the
+        # second is not redundant. `.claude/` and `.vscode/` belong to a
+        # checkout, not to a package: in any repo whose lockfile is not at the
+        # top -- a monorepo, a workspace, this one -- the service directory is
+        # `packages/foo/` and the worm's persistence is several levels above
+        # it. Scanning only the service dir found nothing here while a
+        # root-level artifact sat unread, which is the silent all-clear this
+        # whole module exists to avoid.
+        artifacts = list(scan_service(project, ioc_paths, content_markers))
+        seen = {a.key for a in artifacts}
+        if project.resolve() != corpus.resolve():
+            for artifact in scan_service(corpus, ioc_paths, content_markers):
+                if artifact.key not in seen:
+                    artifacts.append(artifact)
+                    seen.add(artifact.key)
+
         for artifact in artifacts:
             aid = loader.node(
                 schema.ARTIFACT,

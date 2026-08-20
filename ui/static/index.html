@@ -221,6 +221,11 @@ main { display: flex; flex-direction: column; overflow: hidden; }
   padding: 8px 10px; font-size: 11px; color: var(--text-2);
   display: flex; flex-direction: column; gap: 4px; pointer-events: none;
 }
+/* `display: flex` on the class outranks the `hidden` attribute's UA rule, so
+   the key stayed on screen over an empty pane however often the attribute was
+   set. Attribute selectors are the same specificity as the class, and this
+   one comes later, so it wins. */
+.legend[hidden] { display: none; }
 .legend div { display: flex; align-items: center; gap: 7px; }
 .legend i {
   width: 11px; height: 11px; border-radius: 50%; flex: none;
@@ -320,6 +325,16 @@ main { display: flex; flex-direction: column; overflow: hidden; }
     </div>
   </div>
   <div class="list" id="list"><div class="muted" style="padding:10px">Loading…</div></div>
+
+  <!-- Its own block, below the findings and visually separated, because it
+       is a different kind of fact: everything above is resolved by removing
+       the package, and nothing here is. -->
+  <div class="sechead" style="position:static; border-top:1px solid var(--border)">
+    <h2>Persistence on disk</h2>
+    <p>Files in the directories a worm uses to survive
+       <code>npm uninstall</code>.</p>
+  </div>
+  <div class="list" id="persist"><div class="muted" style="padding:10px">Checking…</div></div>
 </aside>
 
 <!-- ============ SECTION 2 ============ -->
@@ -775,7 +790,53 @@ el("list").addEventListener("click", (e) => {
   if (!e.target.closest(".card")) { S.picked = null; renderDetail(); markSelected(); }
 });
 
+/* ==================================================================
+   Persistence artifacts
+   ================================================================== */
+async function loadPersistence() {
+  const box = el("persist");
+  let d;
+  try {
+    const r = await fetch("/api/explorer/persistence");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    d = await r.json();
+  } catch (e) {
+    box.innerHTML = `<div class="note bad" style="margin:8px">${esc(String(e))}</div>`;
+    return;
+  }
+
+  const rows = d.artifacts || [];
+  if (!rows.length) {
+    // "Nothing found" and "we did not look" are different answers, and the
+    // second one dressed as the first is the worst output this tool can
+    // produce. Naming the directories that were checked is what separates
+    // them.
+    box.innerHTML = `<div class="note" style="margin:8px">
+      Nothing in ${esc((d.watched_dirs || []).join(", "))}.
+      <span class="muted">These directories are checked on every ingest
+      because a worm that writes there outlives the package that carried
+      it.</span></div>`;
+    return;
+  }
+
+  box.innerHTML = rows.slice(0, 40).map((a) => {
+    const ioc = a.kind !== "watched-dir";
+    return `<div class="card ${ioc ? "reach" : "installed"}">
+      <div class="spec">${esc(a.path)}</div>
+      <div class="meta">
+        <span class="chip ${ioc ? "critical" : "quiet"}"><i></i>${esc(a.kind)}</span>
+        ${a.watched_dir ? `<span class="chip quiet">${esc(a.watched_dir)}</span>` : ""}
+        <span class="muted">${esc(a.service)}</span>
+        <span class="muted">sha ${esc(a.short_sha)}</span>
+      </div>
+    </div>`;
+  }).join("") + (rows.length > 40
+    ? `<div class="muted" style="padding:6px 10px">…and ${rows.length - 40} more</div>`
+    : "");
+}
+
 loadThreats();
+loadPersistence();
 </script>
 </body>
 </html>

@@ -35,6 +35,7 @@ from blastradius.hydra_client import (
     HydraError,
 )
 from blastradius.ids import IdAllocator
+from blastradius.ingest import persistence
 from blastradius.pkg import graphview as pkgview
 from blastradius.pkg import incident as pkgincident
 from blastradius.query import blast, codereach, graphview
@@ -533,6 +534,36 @@ def explorer_reach(spec: str):
     except HydraError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
     return reach.to_dict()
+
+
+@app.get("/api/explorer/persistence")
+def explorer_persistence():
+    """Files sitting where a worm hides to outlive its own package.
+
+    Kept off `/api/explorer/threats` on purpose. Everything in that list is
+    exposure and is resolved by removing the package; these are not. The
+    TanStack-class worm wrote into `.claude/` and `.vscode/` precisely so that
+    `npm uninstall` would leave it running, and reporting the two under one
+    heading would say the opposite of what is true.
+    """
+    try:
+        found = codereach.persistence_artifacts(client)
+    except HydraError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+    rows = [a.to_dict() for a in found]
+    return {
+        "artifacts": rows,
+        "counts": {
+            "total": len(rows),
+            # An IOC match is a named indicator; a watched-dir hit is "this is
+            # one of the places, go and look". Collapsing them would turn
+            # every repo's .vscode/settings.json into a finding.
+            "ioc": sum(1 for r in rows if r["kind"] != "watched-dir"),
+            "watched": sum(1 for r in rows if r["kind"] == "watched-dir"),
+        },
+        "watched_dirs": list(persistence.WATCHED_DIRS),
+    }
 
 
 @app.post("/api/repo/inspect")

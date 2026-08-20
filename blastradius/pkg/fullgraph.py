@@ -53,6 +53,12 @@ NODE_FIELDS: dict[str, tuple[str, ...]] = {
     schema.LOCKFILE: ("path", "service", "entry_count"),
     schema.INCIDENT: ("incident_id", "status", "summary"),
     schema.LOCKFILE_ENTRY: ("package_name", "resolved_version", "depth", "dev"),
+    # The half of the brief nothing was drawing. A worm that persists into
+    # `.claude/` or `.vscode/` survives `npm uninstall`, so removing the
+    # package does not end the compromise -- which makes an artifact on disk
+    # a different kind of fact from "the bad version is in your lockfile".
+    # One is exposure; this is evidence.
+    schema.ARTIFACT: ("path", "kind", "sha256", "service", "first_seen"),
 }
 
 #: Which property reads best as the node's label on screen.
@@ -68,6 +74,7 @@ DISPLAY_FIELD: dict[str, str] = {
     schema.LOCKFILE: "service",
     schema.INCIDENT: "incident_id",
     schema.LOCKFILE_ENTRY: "package_name",
+    schema.ARTIFACT: "path",
 }
 
 #: (edge type, source label, destination label). Order matters only for the
@@ -84,6 +91,7 @@ EDGE_SWEEPS: tuple[tuple[str, str, str], ...] = (
     (schema.REQUIRES, schema.PACKAGE_VERSION, schema.PACKAGE),
     (schema.HAS_LOCKFILE, schema.SERVICE, schema.LOCKFILE),
     (schema.TYPOSQUAT_OF, schema.PACKAGE, schema.PACKAGE),
+    (schema.HAS_ARTIFACT, schema.SERVICE, schema.ARTIFACT),
 )
 
 #: Sweeps held back by default, with the reason each is expensive to draw.
@@ -102,7 +110,7 @@ OPTIONAL_SWEEPS: dict[str, tuple[tuple[str, str, str], str]] = {
 DEFAULT_LABELS: tuple[str, ...] = (
     schema.SERVICE, schema.PACKAGE, schema.PACKAGE_VERSION, schema.MAINTAINER,
     schema.REPOSITORY, schema.PUBLISHER, schema.ADVISORY, schema.ORGANIZATION,
-    schema.LOCKFILE, schema.INCIDENT,
+    schema.LOCKFILE, schema.INCIDENT, schema.ARTIFACT,
 )
 
 

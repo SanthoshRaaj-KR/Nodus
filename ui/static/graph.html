@@ -473,6 +473,10 @@ const STYLE = {
                        what: "a recorded compromise" },
   Advisory:          { hue: "threat-2", r: 8,   ring: false, group: "threat",
                        what: "a published vulnerability" },
+  // Ringed, unlike the other two, because it is not a claim about a package
+  // -- it is a file on disk that outlives one.
+  PersistenceArtifact: { hue: "threat-2", r: 6, ring: true, group: "threat",
+                       what: "survives npm uninstall" },
 
   Service:           { hue: "fleet-1",  r: 10,  ring: false, group: "fleet",
                        what: "a service you deploy" },
