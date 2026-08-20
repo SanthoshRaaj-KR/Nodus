@@ -503,6 +503,27 @@ class LiveState:
             stage("collecting advisories")
             advisories = engine.advisories_for(result, version_id)
 
+            # Two of the brief's six questions, and the simulation was
+            # answering neither: it built a BlastRadius by hand rather than
+            # calling engine.analyse(), so the relationship and typosquat
+            # queries never ran. They are INVESTIGATE-grade by construction --
+            # sharing a maintainer is not a compromise -- but the whole point
+            # of the drill is "what else would you go and look at".
+            stage("finding shared maintainers and infrastructure")
+            package_id = engine.resolve_package(name)
+            shared_maintainer = (
+                engine.shared_maintainer(result, package_id)
+                if package_id is not None else []
+            )
+            shared_repository = engine.shared_repository(result, version_id)
+            shared_publisher = engine.shared_publisher(result, version_id)
+
+            stage("looking for typosquat neighbours")
+            typosquats = (
+                engine.typosquats(result, package_id)
+                if package_id is not None else []
+            )
+
             # Node ids the browser should light up: the compromised version,
             # every service it reaches, and every package on the frontier.
             hot: list[int] = [version_id]
@@ -519,6 +540,29 @@ class LiveState:
                 "range_only": len(direct),
                 "frontier_packages": frontier.reachable_packages,
                 "frontier_sample": [t.package for t in frontier.targets[:12]],
+                # The routes, not just the count. "34 packages" is a number;
+                # "these three accounts reach them, rotate those" is the
+                # action, and the witness set is the only part that names
+                # them.
+                "frontier_detail": [
+                    {
+                        "package": t.package,
+                        "routes": {r: sorted(w) for r, w in t.routes.items()},
+                        "identities": sorted(t.identities),
+                        "confidence": t.confidence,
+                        "atoms": sorted(t.atoms),
+                        "exposed_services": sorted(t.exposed_services),
+                        "impact_measured": t.impact_measured,
+                    }
+                    for t in frontier.targets[:20]
+                ],
+                "frontier_identities": sorted(
+                    {who for t in frontier.targets for who in t.identities}
+                ),
+                "shared_maintainer": shared_maintainer[:40],
+                "shared_repository": shared_repository[:40],
+                "shared_publisher": shared_publisher[:40],
+                "typosquats": typosquats[:40],
                 "advisories": advisories,
                 "hot_nodes": hot,
                 "timings": [

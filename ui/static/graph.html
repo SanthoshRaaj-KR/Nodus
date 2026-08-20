@@ -560,7 +560,14 @@ function buildLegend() {
      <span>filled — a thing</span></div>
    <div class="row"><span class="swatch"><i class="dot"
      style="width:10px;height:10px;background:transparent;border:2px solid var(--text-3)"></i></span>
-     <span>ring — groups other things</span></div>`;
+     <span>ring — groups other things</span></div>
+   <span class="grp">edges</span>
+   <div class="row"><span class="swatch"><i
+     style="width:16px;height:0;border-top:1.5px solid var(--text-3)"></i></span>
+     <span>depends on / published by</span></div>
+   <div class="row"><span class="swatch"><i
+     style="width:16px;height:0;border-top:2px dashed var(--threat-2)"></i></span>
+     <span>a name close enough to be a typosquat</span></div>`;
 
   box.prepend(toggle);
 }
@@ -737,6 +744,7 @@ function draw() {
     ctx.globalAlpha = focus ? 0.1 : 0.22;
     ctx.beginPath();
     for (const e of S.edges) {
+      if (e.type === "TYPOSQUAT_OF") continue;   // drawn separately, below
       const a = S.byId.get(e.source), b = S.byId.get(e.target);
       if (!a || !b) continue;
       const pa = worldToScreen(a), pb = worldToScreen(b);
@@ -745,6 +753,31 @@ function draw() {
       ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y);
     }
     ctx.stroke();
+
+    /* Typosquats, dashed and in the status colour. One of the brief's six
+       questions ships in this payload and has been drawn in the same grey as
+       REQUIRES since the day it was added -- an edge that says "this name is
+       one keystroke from a popular package" is not the same claim as "this
+       package depends on that one", and rendering them identically says it
+       is. Dashed rather than a fourth hue because no fourth hue survives
+       all-pairs validation; see the note at the top. */
+    const squats = S.edges.filter((e) => e.type === "TYPOSQUAT_OF");
+    if (squats.length) {
+      ctx.save();
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = PALETTE["threat-2"];
+      ctx.globalAlpha = focus ? 0.3 : 0.85;
+      ctx.lineWidth = Math.min(1.8, 1.2 * k);
+      ctx.beginPath();
+      for (const e of squats) {
+        const a = S.byId.get(e.source), b = S.byId.get(e.target);
+        if (!a || !b) continue;
+        const pa = worldToScreen(a), pb = worldToScreen(b);
+        ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
 
     if (focus) {
       ctx.globalAlpha = 0.95;
@@ -1282,6 +1315,66 @@ function applyJob(job) {
   }
 }
 
+/* The full answer, not the headline. Everything below was already being
+   computed and thrown away at the browser: the range-only over-report that is
+   this project's central accuracy claim, the per-query timings, the frontier's
+   witness sets, the shared-identity rows and the typosquat neighbours. A count
+   says "34 packages"; the witness set says *which three accounts* to rotate,
+   and only one of those is an action. */
+function renderSimReport(sim, r) {
+  const exposed = r.exposed_services || [];
+  const parts = [
+    `<b>${esc(sim.spec)}</b> marked compromised.`,
+    `<b>${exposed.length}</b> service(s) exposed` +
+      (exposed.length ? ` — ${esc(exposed.join(", "))}` : ""),
+  ];
+
+  // The argument this whole project is built on, finally on screen: a range
+  // that admits a version is not a project that installed it.
+  if (r.range_only != null) {
+    parts.push(
+      `<b>${r.range_only}</b> version(s) whose range admits it — a range-only ` +
+      `scanner would report all of them; <b>${exposed.length}</b> actually ` +
+      `resolved it.`);
+  }
+
+  const detail = r.frontier_detail || [];
+  if (r.frontier_packages) {
+    const who = (r.frontier_identities || []).slice(0, 6);
+    parts.push(
+      `<b>${r.frontier_packages}</b> package(s) on the publish frontier` +
+      (who.length ? `, reachable by ${esc(who.join(", "))}` : "") +
+      (detail.length ? `<br>${detail.slice(0, 4).map((t) =>
+        `&nbsp;&nbsp;${esc(t.package)} <span class="sig">${
+          Object.keys(t.routes || {}).map(esc).join(" ")}</span>`).join("<br>")}` : ""));
+  }
+
+  const squats = r.typosquats || [];
+  if (squats.length) {
+    parts.push(`<b>${squats.length}</b> typosquat neighbour(s): ` +
+      esc(squats.slice(0, 5).map((s) => s.package || s.name || "?").join(", ")));
+  }
+
+  const rel = (r.shared_maintainer || []).length
+            + (r.shared_repository || []).length
+            + (r.shared_publisher || []).length;
+  if (rel) {
+    parts.push(`<b>${rel}</b> package(s) related by identity — shared ` +
+      `maintainer, repository or publisher. Never a verdict on its own.`);
+  }
+
+  parts.push(`<b>${(r.advisories || []).length}</b> advisory(ies).`);
+
+  const timings = r.timings || [];
+  if (timings.length) {
+    const total = timings.reduce((a, t) => a + (t.ms || 0), 0);
+    parts.push(`<span class="muted">answered in ${total.toFixed(1)} ms across ` +
+      `${timings.length} quer${timings.length === 1 ? "y" : "ies"}</span>`);
+  }
+
+  note("simNote", parts.join("<br>"), exposed.length ? "bad" : "good");
+}
+
 function applySim(sim) {
   if (!sim) { S.marked.clear(); return; }
   if (sim.status === "running") {
@@ -1291,14 +1384,7 @@ function applySim(sim) {
   if (sim.status === "failed") return note("simNote", esc(sim.error || "failed"), "bad");
 
   const r = sim.result || {};
-  note("simNote",
-    `<b>${esc(sim.spec)}</b> marked compromised.<br>` +
-    `<b>${(r.exposed_services || []).length}</b> service(s) exposed · ` +
-    `<b>${r.frontier_packages || 0}</b> package(s) on the frontier · ` +
-    `<b>${(r.advisories || []).length}</b> advisory(ies).` +
-    ((r.exposed_services || []).length
-      ? `<br>exposed: ${esc(r.exposed_services.join(", "))}` : ""),
-    (r.exposed_services || []).length ? "bad" : "good");
+  renderSimReport(sim, r);
 
   S.marked = new Set(r.hot_nodes || []);
   S.alpha = Math.max(S.alpha, 0.25);
