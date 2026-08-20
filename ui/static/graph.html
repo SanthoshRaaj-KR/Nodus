@@ -1,0 +1,1172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blast Radius — Live Graph</title>
+<style>
+/* ------------------------------------------------------------------
+   Colour is assigned by the job it does, not by taste.
+
+   THREE categorical hues, and three is not an arbitrary stop: this is a
+   node-link diagram, so every pair of classes can end up adjacent on
+   screen. Under all-pairs validation the reference palette's first three
+   slots are the documented-safe set in BOTH modes; a fourth hue fails
+   (violet collapses into blue in dark at CVD dE 1.9, magenta into orange
+   at normal-vision dE 11.6). So the classes are:
+
+       blue    your fleet -- services and their lockfiles
+       aqua    the dependency mass -- packages and versions
+       orange  provenance -- who publishes, and from where
+
+   Everything finer than that is carried by SIZE and by FILLED vs RING,
+   never by a generated hue. Status colours (advisory, incident, live
+   alert) are reserved and sit outside the categorical set entirely.
+
+   Aqua is below 3:1 on the light surface, so the relief rule applies:
+   the legend is always present, hover always labels the node, and the
+   node panel names the exact type in text.
+   ------------------------------------------------------------------ */
+:root {
+  color-scheme: light dark;
+  --surface-0: #ffffff;
+  --surface-1: #fcfcfb;
+  --surface-2: #f3f3f1;
+  --border:    #dcdcd6;
+  --text-1:    #0b0b0b;
+  --text-2:    #52514e;
+  --text-3:    #85847e;
+
+  --fleet:     #2a78d6;
+  --deps:      #1baf7a;
+  --identity:  #eb6834;
+
+  --ok:        #008300;
+  --warn:      #eda100;
+  --serious:   #eb6834;
+  --critical:  #e34948;
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --surface-2: #232322;
+    --border:    #33332f;
+    --text-1:    #ffffff;
+    --text-2:    #c3c2b7;
+    --text-3:    #8d8c84;
+
+    --fleet:     #3987e5;
+    --deps:      #199e70;
+    --identity:  #d95926;
+
+    --warn:      #c98500;
+    --serious:   #d95926;
+    --critical:  #e66767;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--surface-1);
+  color: var(--text-1);
+  display: grid;
+  grid-template-columns: 300px 1fr 340px;
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+}
+
+header {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-0);
+}
+header h1 { font-size: 14px; margin: 0; letter-spacing: -0.01em; }
+header .sub { color: var(--text-3); font-size: 12px; }
+header nav { margin-left: auto; display: flex; gap: 4px; }
+header nav a {
+  color: var(--text-2); text-decoration: none; font-size: 12px;
+  padding: 5px 10px; border-radius: 6px;
+}
+header nav a:hover { background: var(--surface-2); color: var(--text-1); }
+
+aside, section.right {
+  overflow-y: auto;
+  background: var(--surface-0);
+  padding: 14px;
+}
+aside { border-right: 1px solid var(--border); }
+section.right { border-left: 1px solid var(--border); }
+
+.panel { margin-bottom: 20px; }
+.panel h2 {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--text-3); margin: 0 0 8px; font-weight: 600;
+}
+
+label.field { display: block; margin-bottom: 8px; }
+label.field span { display: block; color: var(--text-2); margin-bottom: 4px; font-size: 12px; }
+input[type=text] {
+  width: 100%; padding: 7px 9px; font: 12px var(--mono);
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface-1); color: var(--text-1);
+}
+input[type=text]:focus { outline: 2px solid var(--fleet); outline-offset: -1px; }
+
+button {
+  font: 500 12px/1 ui-sans-serif, system-ui, sans-serif;
+  padding: 8px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text-1);
+}
+button:hover:not(:disabled) { background: var(--surface-1); border-color: var(--text-3); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.primary { background: var(--fleet); border-color: var(--fleet); color: #fff; }
+button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--fleet); }
+button.danger { background: var(--critical); border-color: var(--critical); color: #fff; }
+button.danger:hover:not(:disabled) { filter: brightness(1.08); background: var(--critical); }
+.row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.note {
+  font-size: 11.5px; color: var(--text-2); line-height: 1.45;
+  background: var(--surface-2); border-radius: 6px; padding: 8px 9px;
+  border-left: 2px solid var(--border);
+}
+.note.bad { border-left-color: var(--critical); }
+.note.good { border-left-color: var(--ok); }
+
+main { position: relative; overflow: hidden; background: var(--surface-1); }
+canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+canvas.dragging { cursor: grabbing; }
+
+#tooltip {
+  position: absolute; pointer-events: none; z-index: 20;
+  background: var(--surface-0); color: var(--text-1);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 9px; font: 12px var(--mono);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.16);
+  max-width: 340px; opacity: 0; transition: opacity 90ms;
+}
+#tooltip .t { color: var(--text-3); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; }
+
+#overlay {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+  z-index: 30; text-align: center; padding: 24px;
+}
+#overlay[hidden] { display: none; }
+#overlay .box { max-width: 420px; }
+#overlay h3 { margin: 0 0 6px; font-size: 15px; }
+#overlay p { margin: 0 0 14px; color: var(--text-2); }
+
+.legend {
+  position: absolute; left: 12px; bottom: 12px; z-index: 10;
+  background: var(--surface-0); border: 1px solid var(--border);
+  border-radius: 8px; padding: 9px 11px; font-size: 11.5px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+}
+.legend div { display: flex; align-items: center; gap: 7px; margin: 3px 0; color: var(--text-2); }
+.legend .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.legend .ring { background: transparent; border: 2px solid var(--identity); }
+
+.hud {
+  position: absolute; right: 12px; top: 12px; z-index: 10;
+  background: var(--surface-0); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 10px;
+  font: 11.5px var(--mono); color: var(--text-2);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+}
+
+.stat { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font-size: 12px; }
+.stat b { font: 600 12px var(--mono); color: var(--text-1); }
+.stat span { color: var(--text-2); }
+
+.feed { display: flex; flex-direction: column; gap: 6px; }
+.alert {
+  border: 1px solid var(--border); border-left-width: 3px;
+  border-radius: 6px; padding: 7px 9px; background: var(--surface-1);
+  font-size: 11.5px; animation: slide 220ms ease-out;
+}
+@keyframes slide { from { opacity: 0; transform: translateX(8px); } }
+.alert.publish  { border-left-color: var(--text-3); }
+.alert.anomaly  { border-left-color: var(--warn); }
+.alert.fleet    { border-left-color: var(--critical); background: color-mix(in srgb, var(--critical) 7%, var(--surface-1)); }
+.alert .name { font: 600 11.5px var(--mono); word-break: break-all; color: var(--text-1); }
+.alert .who  { color: var(--text-3); font-size: 11px; }
+.alert .sig  {
+  display: inline-block; margin: 3px 3px 0 0; padding: 1px 5px;
+  border-radius: 4px; background: var(--surface-2);
+  font: 10px var(--mono); color: var(--text-2);
+}
+.alert.fleet .sig { background: color-mix(in srgb, var(--critical) 18%, var(--surface-2)); }
+
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 11.5px; }
+.kv dt { color: var(--text-3); }
+.kv dd { margin: 0; font-family: var(--mono); word-break: break-all; color: var(--text-1); }
+
+.stages { display: flex; flex-direction: column; gap: 4px; }
+.stage { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-2); }
+.stage .pip { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); flex: none; }
+.stage.ok .pip { background: var(--ok); }
+.stage.running .pip { background: var(--warn); animation: pulse 1s infinite; }
+.stage.failed .pip { background: var(--critical); }
+@keyframes pulse { 50% { opacity: 0.25; } }
+.stage .secs { margin-left: auto; font: 10.5px var(--mono); color: var(--text-3); }
+
+.muted { color: var(--text-3); font-size: 11.5px; }
+.dim { opacity: 0.55; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Blast Radius</h1>
+  <span class="sub">live graph</span>
+  <nav>
+    <a href="/">Console</a>
+    <a href="/explorer">Explorer</a>
+    <a href="/graph">Graph</a>
+  </nav>
+</header>
+
+<aside>
+  <div class="panel">
+    <h2>1 · Point at a repo</h2>
+    <label class="field">
+      <span>Any checkout with a package-lock.json</span>
+      <input type="text" id="repoPath" placeholder="/path/to/your/repo" spellcheck="false">
+    </label>
+    <div class="row">
+      <button id="btnInspect">Inspect</button>
+      <button id="btnIngest" class="primary">Scan &amp; build</button>
+    </div>
+    <div id="repoNote" class="note" style="margin-top:8px; display:none"></div>
+    <div id="stages" class="stages" style="margin-top:10px"></div>
+  </div>
+
+  <div class="panel">
+    <h2>2 · Watch npm live</h2>
+    <div class="row">
+      <button id="btnWatch" class="primary">Start watching</button>
+    </div>
+    <div style="margin-top:9px">
+      <div class="stat"><span>feed cursor</span><b id="wSeq">—</b></div>
+      <div class="stat"><span>changes seen</span><b id="wChanges">0</b></div>
+      <div class="stat"><span>real publishes</span><b id="wPublishes">0</b></div>
+      <div class="stat"><span>anomalies</span><b id="wAnoms">0</b></div>
+      <div class="stat"><span>fleet hits</span><b id="wFleet">0</b></div>
+    </div>
+    <div id="watchNote" class="note" style="margin-top:8px">
+      Idle. Tails <code>replicate.npmjs.com</code> — roughly one publish per
+      second across all of npm.
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>3 · Simulate a compromise</h2>
+    <label class="field">
+      <span>Package to treat as hacked</span>
+      <input type="text" id="simSpec" placeholder="name@version" spellcheck="false">
+    </label>
+    <div class="row">
+      <button id="btnPick">Pick one for me</button>
+      <button id="btnSim" class="danger">Simulate</button>
+      <button id="btnClear">Reset</button>
+    </div>
+    <div id="simNote" class="note" style="margin-top:8px; display:none"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Graph</h2>
+    <div class="stat"><span>nodes</span><b id="gNodes">0</b></div>
+    <div class="stat"><span>edges</span><b id="gEdges">0</b></div>
+    <div class="row" style="margin-top:8px">
+      <button id="btnFit">Fit</button>
+      <button id="btnReload">Reload</button>
+      <button id="btnFreeze">Freeze</button>
+    </div>
+    <div id="omitted" class="muted" style="margin-top:8px"></div>
+  </div>
+</aside>
+
+<main>
+  <canvas id="cv"></canvas>
+  <div id="tooltip"></div>
+  <div class="hud" id="hud">—</div>
+  <div class="legend">
+    <div><i class="dot" style="background:var(--fleet)"></i> your services &amp; lockfiles</div>
+    <div><i class="dot" style="background:var(--deps)"></i> packages &amp; versions</div>
+    <div><i class="dot" style="background:var(--identity)"></i> maintainers &amp; publishers</div>
+    <div><i class="dot ring"></i> repositories &amp; orgs</div>
+    <div><i class="dot" style="background:var(--critical)"></i> advisory / compromised</div>
+    <div class="muted" style="margin-top:4px">size = package &gt; version</div>
+  </div>
+  <div id="overlay">
+    <div class="box">
+      <h3>No graph yet</h3>
+      <p>Point the console at a repository on the left, then press
+         <b>Scan &amp; build</b>. Everything here is drawn from that repo's
+         resolved lockfiles.</p>
+      <button id="btnOverlayLoad">Load what's already in the graph</button>
+    </div>
+  </div>
+</main>
+
+<section class="right">
+  <div class="panel">
+    <h2>Selected node</h2>
+    <div id="nodeDetail" class="muted">Hover a circle to identify it; click to pin its metadata here.</div>
+  </div>
+  <div class="panel">
+    <h2>Correlated bursts</h2>
+    <div id="bursts" class="feed"><div class="muted">
+      One account, many packages, one window — the shape the TanStack worm had.
+    </div></div>
+  </div>
+  <div class="panel">
+    <h2>Live feed</h2>
+    <div id="feed" class="feed"><div class="muted">Nothing yet.</div></div>
+  </div>
+</section>
+
+<script>
+"use strict";
+
+/* ==================================================================
+   State
+   ================================================================== */
+const S = {
+  nodes: [], edges: [], byId: new Map(),
+  /* Two kinds of highlight, and they are not the same thing.
+
+     `hot` is a live alert: something just happened on npm, it should catch
+     the eye and then get out of the way, so it decays. `marked` is the
+     answer to a question the user asked -- the blast radius of a simulated
+     compromise -- and it must persist until they clear it. Running both
+     through one decaying map meant a simulation lit up and then quietly
+     erased itself a couple of seconds later, which read as "nothing was
+     affected". */
+  hot: new Map(),          // node id -> heat 0..1, decays
+  marked: new Set(),       // node ids from a simulation; cleared explicitly
+  selected: null, hovered: null,
+  frozen: false, alpha: 1,
+  cam: { x: 0, y: 0, k: 1 },
+  loaded: false,
+};
+
+const el = (id) => document.getElementById(id);
+const cv = el("cv"), ctx = cv.getContext("2d");
+const tooltip = el("tooltip");
+
+/* Colour + geometry per node label. Three hues; everything finer is
+   size or fill-vs-ring, never a generated colour. */
+const STYLE = {
+  Service:           { hue: "fleet",    r: 9,   ring: false },
+  Lockfile:          { hue: "fleet",    r: 4.5, ring: true  },
+  Package:           { hue: "deps",     r: 5.5, ring: false },
+  PackageVersion:    { hue: "deps",     r: 3.2, ring: false },
+  Maintainer:        { hue: "identity", r: 5,   ring: false },
+  PublisherIdentity: { hue: "identity", r: 3.6, ring: false },
+  Organization:      { hue: "identity", r: 6.5, ring: true  },
+  Repository:        { hue: "identity", r: 4,   ring: true  },
+  Advisory:          { hue: "critical", r: 7,   ring: false },
+  Incident:          { hue: "critical", r: 9,   ring: false },
+  LockfileEntry:     { hue: "deps",     r: 2.4, ring: true  },
+};
+const cssVar = (n) => getComputedStyle(document.documentElement)
+  .getPropertyValue("--" + n).trim() || "#888";
+let PALETTE = {};
+function refreshPalette() {
+  PALETTE = {};
+  for (const k of ["fleet","deps","identity","critical","warn","ok","border","text-3","surface-1"])
+    PALETTE[k] = cssVar(k);
+}
+refreshPalette();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  refreshPalette(); draw();
+});
+
+/* ==================================================================
+   Layout — force-directed, with a spatial grid so repulsion is O(n)
+
+   A naive all-pairs repulsion over 2,600 nodes is 6.8M comparisons per
+   tick, which will not hold a frame budget. Bucketing into a grid and
+   only comparing within neighbouring cells keeps the visual behaviour
+   and makes the cost proportional to node count instead of its square.
+   ================================================================== */
+const SIM = {
+  repel: 1400, spring: 0.02, springLen: 26,
+  gravity: 0.0009, damp: 0.88, cell: 60, maxV: 16,
+  farRepel: 26,     // strength of the coarse cell-to-cell term
+};
+
+function seedLayout() {
+  const n = S.nodes.length || 1;
+  const R = Math.max(260, Math.sqrt(n) * 26);
+  S.nodes.forEach((node, i) => {
+    // Golden-angle spiral: an even starting spread, so the simulation
+    // untangles a graph rather than exploding a random pile.
+    const a = i * 2.39996, rad = R * Math.sqrt(i / n);
+    node.x = Math.cos(a) * rad;
+    node.y = Math.sin(a) * rad;
+    node.vx = 0; node.vy = 0;
+    node.deg = 0;
+  });
+  for (const e of S.edges) {
+    const a = S.byId.get(e.source), b = S.byId.get(e.target);
+    if (a) a.deg++;
+    if (b) b.deg++;
+  }
+}
+
+function tick() {
+  if (S.frozen || S.alpha < 0.005) return;
+  const grid = new Map();
+  const cs = SIM.cell;
+  for (const n of S.nodes) {
+    const key = ((n.x / cs) | 0) + ":" + ((n.y / cs) | 0);
+    let b = grid.get(key);
+    if (!b) grid.set(key, (b = []));
+    b.push(n);
+  }
+
+  /* Two-scale repulsion. Near-field is exact within the 3x3 neighbourhood;
+     beyond that, each cell is collapsed to its centroid and mass.
+
+     The far term is not an optimisation, it is what makes the picture
+     legible. With near-field alone there is no force acting past ~2 cells,
+     so nothing pushes one cluster away from another and the whole graph
+     relaxes into a single uniform disc -- every node locally well-spaced,
+     the structure invisible. This is Barnes-Hut's idea at one level of
+     depth, which is enough here and far less code than the full tree. */
+  const cells = [];
+  for (const [key, bucket] of grid) {
+    let cx = 0, cy = 0;
+    for (const m of bucket) { cx += m.x; cy += m.y; }
+    cells.push({ key, x: cx / bucket.length, y: cy / bucket.length, n: bucket.length });
+  }
+
+  for (const n of S.nodes) {
+    let fx = 0, fy = 0;
+    const gx = (n.x / cs) | 0, gy = (n.y / cs) | 0;
+    for (let ox = -1; ox <= 1; ox++) {
+      for (let oy = -1; oy <= 1; oy++) {
+        const b = grid.get((gx + ox) + ":" + (gy + oy));
+        if (!b) continue;
+        for (const m of b) {
+          if (m === n) continue;
+          let dx = n.x - m.x, dy = n.y - m.y;
+          let d2 = dx * dx + dy * dy;
+          if (d2 < 0.01) { dx = (Math.random() - 0.5); dy = (Math.random() - 0.5); d2 = 0.01; }
+          const f = SIM.repel / d2;
+          const d = Math.sqrt(d2);
+          fx += (dx / d) * f; fy += (dy / d) * f;
+        }
+      }
+    }
+
+    const nearKey = gx + ":" + gy;
+    for (const c of cells) {
+      if (c.key === nearKey) continue;
+      const dx = n.x - c.x, dy = n.y - c.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < cs * cs * 2.25 || d2 > 4.0e6) continue;  // near-field already has it
+      const d = Math.sqrt(d2);
+      const f = (SIM.farRepel * c.n) / d2;
+      fx += (dx / d) * f; fy += (dy / d) * f;
+    }
+
+    fx -= n.x * SIM.gravity * (1 + n.deg * 0.01);
+    fy -= n.y * SIM.gravity * (1 + n.deg * 0.01);
+    n.vx = (n.vx + fx * S.alpha) * SIM.damp;
+    n.vy = (n.vy + fy * S.alpha) * SIM.damp;
+  }
+
+  for (const e of S.edges) {
+    const a = S.byId.get(e.source), b = S.byId.get(e.target);
+    if (!a || !b) continue;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const f = (d - SIM.springLen) * SIM.spring * S.alpha;
+    const ux = (dx / d) * f, uy = (dy / d) * f;
+    a.vx += ux; a.vy += uy; b.vx -= ux; b.vy -= uy;
+  }
+
+  for (const n of S.nodes) {
+    if (n.pinned) { n.vx = n.vy = 0; continue; }
+    n.vx = Math.max(-SIM.maxV, Math.min(SIM.maxV, n.vx));
+    n.vy = Math.max(-SIM.maxV, Math.min(SIM.maxV, n.vy));
+    n.x += n.vx; n.y += n.vy;
+  }
+  S.alpha *= 0.994;
+}
+
+/* ==================================================================
+   Draw
+   ================================================================== */
+function resize() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const r = cv.getBoundingClientRect();
+  cv.width = Math.max(1, r.width * dpr);
+  cv.height = Math.max(1, r.height * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  S.w = r.width; S.h = r.height;
+}
+window.addEventListener("resize", () => { resize(); draw(); });
+
+function worldToScreen(n) {
+  return {
+    x: (n.x - S.cam.x) * S.cam.k + S.w / 2,
+    y: (n.y - S.cam.y) * S.cam.k + S.h / 2,
+  };
+}
+
+function draw() {
+  if (!S.w) resize();
+  ctx.clearRect(0, 0, S.w, S.h);
+  if (!S.nodes.length) return;
+
+  const k = S.cam.k;
+  const focus = S.selected || S.hovered;
+  const near = new Set();
+  if (focus) {
+    near.add(focus.id);
+    for (const e of S.edges) {
+      if (e.source === focus.id) near.add(e.target);
+      else if (e.target === focus.id) near.add(e.source);
+    }
+  }
+
+  // Edges first, recessive. Hidden entirely when zoomed far out: at that
+  // scale 8,500 lines are a grey wash that hides the nodes they connect.
+  if (k > 0.28) {
+    // Recessive, but a mark rather than a rumour: the border token is a
+    // hairline against the chart surface and disappeared entirely at this
+    // density. Edges here are structure, so they get the muted *text* step
+    // and carry their weight through opacity instead.
+    ctx.lineWidth = Math.min(1.1, 0.6 * k);
+    ctx.strokeStyle = PALETTE["text-3"];
+    ctx.globalAlpha = focus ? 0.1 : 0.22;
+    ctx.beginPath();
+    for (const e of S.edges) {
+      const a = S.byId.get(e.source), b = S.byId.get(e.target);
+      if (!a || !b) continue;
+      const pa = worldToScreen(a), pb = worldToScreen(b);
+      if ((pa.x < -60 && pb.x < -60) || (pa.x > S.w + 60 && pb.x > S.w + 60)) continue;
+      if ((pa.y < -60 && pb.y < -60) || (pa.y > S.h + 60 && pb.y > S.h + 60)) continue;
+      ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y);
+    }
+    ctx.stroke();
+
+    if (focus) {
+      ctx.globalAlpha = 0.95;
+      ctx.strokeStyle = PALETTE["fleet"];
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      for (const e of S.edges) {
+        if (e.source !== focus.id && e.target !== focus.id) continue;
+        const a = S.byId.get(e.source), b = S.byId.get(e.target);
+        if (!a || !b) continue;
+        const pa = worldToScreen(a), pb = worldToScreen(b);
+        ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y);
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  for (const n of S.nodes) {
+    const p = worldToScreen(n);
+    const st = STYLE[n.label] || { hue: "deps", r: 3, ring: false };
+    const r = Math.max(1.2, st.r * Math.sqrt(k));
+    if (p.x < -30 || p.x > S.w + 30 || p.y < -30 || p.y > S.h + 30) continue;
+
+    const marked = S.marked.has(n.id);
+    const heat = marked ? 1 : (S.hot.get(n.id) || 0);
+    const dimmed = focus && !near.has(n.id);
+    ctx.globalAlpha = dimmed ? 0.14 : 1;
+
+    let fill = PALETTE[st.hue] || PALETTE["deps"];
+    if (heat > 0) fill = PALETTE["critical"];
+
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    if (st.ring) {
+      ctx.lineWidth = Math.max(1, r * 0.42);
+      ctx.strokeStyle = fill;
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = fill;
+      ctx.fill();
+    }
+
+    // A halo, in motion rather than a fourth hue, so it reads on top of
+    // whatever class colour the node already carries. A live alert's halo
+    // shrinks as it decays; a simulated blast radius breathes instead, so it
+    // stays findable while the reader looks at the panel and back.
+    if (heat > 0) {
+      const pulse = marked
+        ? 0.55 + 0.45 * Math.sin(performance.now() / 430 + n.id * 0.7)
+        : heat;
+      ctx.globalAlpha = dimmed ? 0.1 : pulse * 0.6;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 5 + pulse * 12, 0, Math.PI * 2);
+      ctx.strokeStyle = PALETTE["critical"];
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.globalAlpha = dimmed ? 0.14 : 1;
+    }
+
+    if (focus && n.id === focus.id) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 4, 0, Math.PI * 2);
+      ctx.strokeStyle = PALETTE["text-3"];
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // Labels only when zoomed in enough to read them, and only for the
+  // structurally important classes -- 1,300 version labels at any zoom is
+  // an unreadable mat of text.
+  if (k > 1.5) {
+    ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillStyle = PALETTE["text-3"];
+    ctx.textAlign = "center";
+    for (const n of S.nodes) {
+      if (!(n.label === "Service" || n.label === "Advisory" ||
+            n.label === "Incident" || (k > 2.6 && n.label === "Package"))) continue;
+      const p = worldToScreen(n);
+      if (p.x < 0 || p.x > S.w || p.y < 0 || p.y > S.h) continue;
+      const st = STYLE[n.label] || { r: 3 };
+      ctx.fillText(n.name.slice(0, 30), p.x, p.y - st.r * Math.sqrt(k) - 5);
+    }
+  }
+}
+
+function loop() {
+  tick();
+  // Heat decays so a burst of alerts reads as a wave passing through the
+  // graph rather than a permanently red map.
+  // ~0.0012/frame at 60fps is roughly a 14-second fade. The first cut used
+  // 0.006, which is under 3 seconds -- long enough to miss entirely if you
+  // happened to be reading the panel when the alert landed.
+  if (S.hot.size) {
+    for (const [id, v] of S.hot) {
+      const nv = v - 0.0012;
+      if (nv <= 0) S.hot.delete(id); else S.hot.set(id, nv);
+    }
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+
+/* ==================================================================
+   Interaction
+   ================================================================== */
+function nodeAt(sx, sy) {
+  let best = null, bestD = 14;
+  for (const n of S.nodes) {
+    const p = worldToScreen(n);
+    const d = Math.hypot(p.x - sx, p.y - sy);
+    const st = STYLE[n.label] || { r: 3 };
+    const rr = Math.max(4, st.r * Math.sqrt(S.cam.k));
+    if (d < Math.max(bestD, rr)) { best = n; bestD = d; }
+  }
+  return best;
+}
+
+let drag = null;
+cv.addEventListener("mousedown", (e) => {
+  const n = nodeAt(e.offsetX, e.offsetY);
+  drag = { x: e.offsetX, y: e.offsetY, node: n, moved: false };
+  cv.classList.add("dragging");
+});
+cv.addEventListener("mousemove", (e) => {
+  if (drag) {
+    const dx = e.offsetX - drag.x, dy = e.offsetY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    if (drag.node) {
+      drag.node.pinned = true;
+      drag.node.x += dx / S.cam.k;
+      drag.node.y += dy / S.cam.k;
+      S.alpha = Math.max(S.alpha, 0.35);
+    } else {
+      S.cam.x -= dx / S.cam.k;
+      S.cam.y -= dy / S.cam.k;
+    }
+    drag.x = e.offsetX; drag.y = e.offsetY;
+    return;
+  }
+  const n = nodeAt(e.offsetX, e.offsetY);
+  S.hovered = n;
+  if (n) {
+    tooltip.innerHTML =
+      `<div class="t">${esc(n.label)}</div><div>${esc(n.name)}</div>`;
+    tooltip.style.opacity = "1";
+    const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+    tooltip.style.left = Math.min(S.w - tw - 8, e.offsetX + 14) + "px";
+    tooltip.style.top = Math.max(4, e.offsetY - th - 10) + "px";
+  } else {
+    tooltip.style.opacity = "0";
+  }
+});
+cv.addEventListener("mouseleave", () => {
+  // Without this the last-hovered node stays focused after the pointer has
+  // gone, so the whole graph sits dimmed around a highlight nobody is
+  // pointing at any more.
+  S.hovered = null;
+  tooltip.style.opacity = "0";
+});
+window.addEventListener("mouseup", (e) => {
+  if (drag && !drag.moved) {
+    const n = nodeAt(e.offsetX ?? 0, e.offsetY ?? 0);
+    if (drag.node) selectNode(drag.node);
+    else if (!n) { S.selected = null; renderDetail(null); }
+  }
+  drag = null; cv.classList.remove("dragging");
+});
+cv.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const f = Math.exp(-e.deltaY * 0.0016);
+  const before = { x: (e.offsetX - S.w / 2) / S.cam.k + S.cam.x,
+                   y: (e.offsetY - S.h / 2) / S.cam.k + S.cam.y };
+  S.cam.k = Math.max(0.12, Math.min(9, S.cam.k * f));
+  const after = { x: (e.offsetX - S.w / 2) / S.cam.k + S.cam.x,
+                  y: (e.offsetY - S.h / 2) / S.cam.k + S.cam.y };
+  S.cam.x += before.x - after.x;
+  S.cam.y += before.y - after.y;
+  updateHud();
+}, { passive: false });
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* A spec the simulator will accept, or null. A Package has no version of
+   its own, so its latest is used; anything else cannot be simulated and
+   must say so rather than posting a name the server will reject. */
+function specFor(n, meta) {
+  const m = meta || n.meta || {};
+  if (n.label === "PackageVersion" && m.name && m.version) return `${m.name}@${m.version}`;
+  if (n.label === "Package" && m.name && m.latest_version) return `${m.name}@${m.latest_version}`;
+  return null;
+}
+
+async function selectNode(n) {
+  S.selected = n;
+  renderDetail(n, null);
+  try {
+    const r = await fetch(`/api/graph/node/${n.id}`);
+    if (r.ok) {
+      const d = await r.json();
+      renderDetail(n, d);
+      // Clicking a package is the natural way to choose a simulation
+      // target, so the box follows the selection -- but only ever with a
+      // spec the server can parse.
+      const spec = specFor(n, d.meta);
+      if (spec) el("simSpec").value = spec;
+    }
+  } catch (_) { /* the summary already rendered */ }
+}
+
+function renderDetail(n, detail) {
+  const box = el("nodeDetail");
+  if (!n) {
+    box.className = "muted";
+    box.textContent = "Hover a circle to identify it; click to pin its metadata here.";
+    return;
+  }
+  box.className = "";
+  const meta = (detail && detail.meta) || n.meta || {};
+  const rows = Object.entries(meta)
+    .filter(([k]) => k !== "id")
+    .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+  const linked = S.edges.filter((e) => e.source === n.id || e.target === n.id);
+  const kinds = {};
+  for (const e of linked) kinds[e.type] = (kinds[e.type] || 0) + 1;
+  box.innerHTML =
+    `<div style="font:600 12px var(--mono);word-break:break-all">${esc(n.name)}</div>
+     <div class="muted" style="margin:2px 0 8px">${esc(n.label)}</div>
+     <dl class="kv">${rows || "<dt>—</dt><dd>no metadata</dd>"}</dl>
+     <div class="muted" style="margin-top:9px">${linked.length} connection(s)</div>
+     <div style="margin-top:3px">${
+       Object.entries(kinds).map(([t, c]) =>
+         `<span class="sig" style="display:inline-block;margin:2px 3px 0 0;padding:1px 5px;border-radius:4px;background:var(--surface-2);font:10px var(--mono)">${esc(t)} ${c}</span>`
+       ).join("")}</div>`;
+}
+
+function updateHud() {
+  el("hud").textContent =
+    `${S.nodes.length.toLocaleString()} nodes · ${S.edges.length.toLocaleString()} edges · ${(S.cam.k).toFixed(2)}x`;
+}
+
+/* ==================================================================
+   Data
+   ================================================================== */
+async function loadGraph() {
+  el("overlay").hidden = true;
+  el("hud").textContent = "loading graph…";
+  try {
+    const r = await fetch("/api/graph/full");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const g = await r.json();
+    S.nodes = g.nodes.map((n) => ({ ...n, x: 0, y: 0, vx: 0, vy: 0, deg: 0 }));
+    S.edges = g.edges;
+    S.byId = new Map(S.nodes.map((n) => [n.id, n]));
+    S.loaded = true;
+    seedLayout();
+    S.alpha = 1;
+    S.cam = { x: 0, y: 0, k: 0.6 };
+    // Fit once the layout has had a moment to open out, so the first view
+    // frames the whole graph instead of the seed spiral.
+    setTimeout(fitToView, 1200);
+    setTimeout(fitToView, 4000);
+    el("gNodes").textContent = g.stats.nodes.toLocaleString();
+    el("gEdges").textContent = g.stats.edges.toLocaleString();
+    el("omitted").innerHTML = (g.omitted || [])
+      .map((o) => `not drawn: <b>${esc(o.what)}</b> — ${esc(o.why)}`).join("<br>");
+    updateHud();
+    if (!S.nodes.length) {
+      el("overlay").hidden = false;
+      el("overlay").querySelector("h3").textContent = "Graph is empty";
+      el("overlay").querySelector("p").textContent =
+        "Nothing has been ingested yet. Point at a repository above and press Scan & build.";
+    }
+  } catch (err) {
+    el("hud").textContent = "graph failed to load";
+    el("overlay").hidden = false;
+    el("overlay").querySelector("h3").textContent = "Could not load the graph";
+    el("overlay").querySelector("p").textContent = String(err);
+  }
+}
+
+/* ==================================================================
+   Controls
+   ================================================================== */
+function fitToView() {
+  if (!S.nodes.length) return;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of S.nodes) {
+    if (n.x < minX) minX = n.x;
+    if (n.x > maxX) maxX = n.x;
+    if (n.y < minY) minY = n.y;
+    if (n.y > maxY) maxY = n.y;
+  }
+  const w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
+  S.cam.x = (minX + maxX) / 2;
+  S.cam.y = (minY + maxY) / 2;
+  // Shrink-to-fit only past 1x: blowing a small graph up to fill a monitor
+  // implies more structure than is there.
+  S.cam.k = Math.max(0.1, Math.min(1, Math.min(S.w / w, S.h / h) * 0.88));
+  updateHud();
+}
+
+function focusOn(ids) {
+  const pts = ids.map((id) => S.byId.get(id)).filter(Boolean);
+  if (!pts.length) return;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of pts) {
+    if (n.x < minX) minX = n.x;
+    if (n.x > maxX) maxX = n.x;
+    if (n.y < minY) minY = n.y;
+    if (n.y > maxY) maxY = n.y;
+  }
+  const pad = 120;
+  const w = Math.max(1, maxX - minX) + pad, h = Math.max(1, maxY - minY) + pad;
+  S.cam.x = (minX + maxX) / 2;
+  S.cam.y = (minY + maxY) / 2;
+  S.cam.k = Math.max(0.15, Math.min(2.4, Math.min(S.w / w, S.h / h)));
+  updateHud();
+}
+
+el("btnFit").onclick = fitToView;
+el("btnOverlayLoad").onclick = loadGraph;
+el("btnReload").onclick = loadGraph;
+el("btnFreeze").onclick = () => {
+  S.frozen = !S.frozen;
+  el("btnFreeze").textContent = S.frozen ? "Resume" : "Freeze";
+};
+
+function note(id, text, cls) {
+  const n = el(id);
+  n.style.display = text ? "block" : "none";
+  n.className = "note" + (cls ? " " + cls : "");
+  n.innerHTML = text;
+}
+
+el("btnInspect").onclick = async () => {
+  const p = el("repoPath").value.trim();
+  if (!p) return note("repoNote", "Type a path first.", "bad");
+  note("repoNote", "Looking…");
+  try {
+    const r = await fetch(`/api/repo/inspect?path=${encodeURIComponent(p)}`, { method: "POST" });
+    const d = await r.json();
+    if (!r.ok) return note("repoNote", esc(d.detail || "rejected"), "bad");
+    note("repoNote",
+      `<b>${d.lockfile_count}</b> lockfile(s), <b>${d.source_files}</b> source file(s).` +
+      (d.usable ? " Ready to scan." : `<br>${esc(d.note)}`),
+      d.usable ? "good" : "bad");
+  } catch (e) { note("repoNote", esc(String(e)), "bad"); }
+};
+
+el("btnIngest").onclick = async () => {
+  const p = el("repoPath").value.trim();
+  if (!p) return note("repoNote", "Type a path first.", "bad");
+  el("btnIngest").disabled = true;
+  note("repoNote", "Scanning — this drops the current graph and rebuilds it.");
+  try {
+    const r = await fetch(
+      `/api/repo/ingest?path=${encodeURIComponent(p)}&reset=true`, { method: "POST" });
+    const d = await r.json();
+    if (!r.ok) { note("repoNote", esc(d.detail || "failed"), "bad"); el("btnIngest").disabled = false; }
+  } catch (e) { note("repoNote", esc(String(e)), "bad"); el("btnIngest").disabled = false; }
+};
+
+let watching = false;
+el("btnWatch").onclick = async () => {
+  const url = watching ? "/api/live/watch/stop" : "/api/live/watch/start";
+  el("btnWatch").disabled = true;
+  try {
+    const r = await fetch(url, { method: "POST" });
+    applyWatcher(await r.json());
+  } finally { el("btnWatch").disabled = false; }
+};
+
+function applyWatcher(w) {
+  watching = !!w.running;
+  el("btnWatch").textContent = watching ? "Stop watching" : "Start watching";
+  el("btnWatch").className = watching ? "danger" : "primary";
+  el("wSeq").textContent = w.seq ? String(w.seq) : "—";
+  const c = w.counters || {};
+  el("wChanges").textContent = (c.changes || 0).toLocaleString();
+  el("wPublishes").textContent = (c.publishes || 0).toLocaleString();
+  el("wFleet").textContent = (c.fleet_hits || 0).toLocaleString();
+  if (watching) {
+    note("watchNote",
+      `Live. Every publish on npm is fetched, checked for anomalies, and
+       matched against this repo's dependencies.`, "good");
+  } else {
+    note("watchNote",
+      `Idle. Tails <code>replicate.npmjs.com</code> — roughly one publish per
+       second across all of npm.`);
+  }
+}
+
+el("btnPick").onclick = async () => {
+  try {
+    const r = await fetch("/api/pkg/targets?limit=8");
+    const d = await r.json();
+    // The suggestions are ranked by how wide the range-only over-report is,
+    // which makes the top one the best demo but the same one every time.
+    // Pick at random so repeated presses actually explore the fleet.
+    const all = (d.targets || d || []).filter((t) => t && t.spec);
+    if (!all.length) {
+      // Nothing ranked -- fall back to any version in the drawn graph, so
+      // this still works on a repo with no advisories at all.
+      const versions = S.nodes.filter((n) => n.label === "PackageVersion" && n.meta?.name);
+      if (!versions.length)
+        return note("simNote", "Nothing to pick — ingest a repo first.", "bad");
+      const pick = versions[(Math.random() * versions.length) | 0];
+      el("simSpec").value = `${pick.meta.name}@${pick.meta.version}`;
+      return note("simNote", "Picked at random from the graph.");
+    }
+    const t = all[(Math.random() * all.length) | 0];
+    el("simSpec").value = t.spec;
+    note("simNote",
+      `<b>${esc(t.spec)}</b> — a range-only tool would flag ` +
+      `<b>${t.range_admits}</b> candidate(s) here; <b>${t.projects}</b> ` +
+      `project(s) actually resolved it.`);
+  } catch (e) { note("simNote", esc(String(e)), "bad"); }
+};
+
+el("btnSim").onclick = async () => {
+  const spec = el("simSpec").value.trim();
+  if (!spec) return note("simNote", "Type a package, or press Pick one for me.", "bad");
+  // Caught here rather than as a server 400: a bare package name is the
+  // obvious thing to type, and "expected name@version" reads better before
+  // the request than after it.
+  if (!spec.replace(/^@/, "").includes("@")) {
+    return note("simNote",
+      `<b>${esc(spec)}</b> needs a version — try <code>${esc(spec)}@1.2.3</code>, ` +
+      `or press <b>Pick one for me</b>.`, "bad");
+  }
+  el("btnSim").disabled = true;
+  note("simNote", "Running the pipeline against " + esc(spec) + "…");
+  try {
+    const r = await fetch(`/api/simulate/run?spec=${encodeURIComponent(spec)}`, { method: "POST" });
+    const d = await r.json();
+    if (!r.ok) note("simNote", esc(d.detail || "failed"), "bad");
+  } catch (e) { note("simNote", esc(String(e)), "bad"); }
+  finally { el("btnSim").disabled = false; }
+};
+
+el("btnClear").onclick = async () => {
+  const spec = el("simSpec").value.trim();
+  if (spec) await fetch(`/api/simulate/clear?spec=${encodeURIComponent(spec)}`, { method: "POST" });
+  S.hot.clear();
+  S.marked.clear();
+  note("simNote", "Incident retracted — the graph is back as it was.", "good");
+};
+
+/* ==================================================================
+   Live stream
+   ================================================================== */
+let anomalyCount = 0;
+function addAlert(a) {
+  const feed = el("feed");
+  if (feed.firstChild && feed.firstChild.classList?.contains("muted")) feed.innerHTML = "";
+  const div = document.createElement("div");
+  div.className = "alert " + a.kind;
+  const sigs = (a.signals || []).map((s) =>
+    `<span class="sig">${esc(s.signal)}</span>`).join("");
+  div.innerHTML =
+    `<div class="name">${esc(a.package)}@${esc(a.version)}</div>
+     <div class="who">${esc(a.publisher || "unknown publisher")}${
+       a.in_fleet ? " · <b>in your fleet</b>" : ""}</div>${sigs}` +
+    (a.fleet_services?.length
+      ? `<div class="who" style="margin-top:3px">exposes: ${esc(a.fleet_services.join(", "))}</div>` : "");
+  feed.prepend(div);
+  while (feed.children.length > 60) feed.lastChild.remove();
+
+  if (a.signals?.length) { anomalyCount++; el("wAnoms").textContent = anomalyCount; }
+  heatPackage(a.package, a.in_fleet ? 1 : 0.55);
+}
+
+function heatPackage(name, amount) {
+  for (const n of S.nodes) {
+    if ((n.label === "Package" || n.label === "PackageVersion") && n.meta?.name === name) {
+      S.hot.set(n.id, Math.min(1, (S.hot.get(n.id) || 0) + amount));
+    }
+  }
+}
+
+function applyBursts(bursts) {
+  const box = el("bursts");
+  if (!bursts || !bursts.length) {
+    box.innerHTML = `<div class="muted">One account, many packages, one
+      window — the shape the TanStack worm had. None seen yet.</div>`;
+    return;
+  }
+  // Spread first: a four-package spread across unrelated repositories matters
+  // more than a ninety-package monorepo release, and both are shown because
+  // suppressing the releases would hide how common the shape is.
+  box.innerHTML = bursts.slice(0, 8).map((b) => `
+    <div class="alert ${b.cohesive ? "publish" : "fleet"}">
+      <div class="name">${esc(b.identity)}</div>
+      <div class="who">${b.artifacts} artifact(s) · ${b.packages} package(s)
+        · ${(b.span_seconds / 60).toFixed(1)} min</div>
+      <span class="sig">${b.cohesive ? "release" : "SPREAD — investigate"}</span>
+      <div class="who" style="margin-top:3px">${
+        b.cohesive
+          ? "all one repository or scope"
+          : `${b.scopes} scope(s), ${b.repositories || "unknown"} repo(s)`}</div>
+    </div>`).join("");
+}
+
+async function refreshBursts() {
+  try {
+    const r = await fetch("/api/live/bursts");
+    if (r.ok) applyBursts((await r.json()).bursts);
+  } catch (_) { /* the feed is the primary surface */ }
+}
+
+function applyJob(job) {
+  const box = el("stages");
+  box.innerHTML = (job.stages || []).map((s) =>
+    `<div class="stage ${esc(s.status)}"><i class="pip"></i>
+       <span>${esc(s.name)}</span><span class="secs">${s.seconds ? s.seconds + "s" : ""}</span></div>`
+  ).join("");
+  if (job.status === "done") {
+    el("btnIngest").disabled = false;
+    note("repoNote",
+      `Built in ${job.elapsed_s}s — ${(job.services || []).length} service(s), ` +
+      `${job.advisories} advisory link(s).`, "good");
+    loadGraph();
+  } else if (job.status === "failed") {
+    el("btnIngest").disabled = false;
+    note("repoNote", esc(job.error || "pipeline failed"), "bad");
+  }
+}
+
+function applySim(sim) {
+  if (!sim) { S.marked.clear(); return; }
+  if (sim.status === "running") {
+    note("simNote", `${esc(sim.stage || "working")}…`);
+    return;
+  }
+  if (sim.status === "failed") return note("simNote", esc(sim.error || "failed"), "bad");
+
+  const r = sim.result || {};
+  note("simNote",
+    `<b>${esc(sim.spec)}</b> marked compromised.<br>` +
+    `<b>${(r.exposed_services || []).length}</b> service(s) exposed · ` +
+    `<b>${r.frontier_packages || 0}</b> package(s) on the frontier · ` +
+    `<b>${(r.advisories || []).length}</b> advisory(ies).` +
+    ((r.exposed_services || []).length
+      ? `<br>exposed: ${esc(r.exposed_services.join(", "))}` : ""),
+    (r.exposed_services || []).length ? "bad" : "good");
+
+  S.marked = new Set(r.hot_nodes || []);
+  S.alpha = Math.max(S.alpha, 0.25);
+  // Frame the result: a blast radius nobody can find on a 2,600-node canvas
+  // has not really been shown to anyone.
+  if (S.marked.size) focusOn([...S.marked]);
+}
+
+function connect() {
+  const es = new EventSource("/api/live/stream");
+  es.onmessage = (ev) => {
+    let d; try { d = JSON.parse(ev.data); } catch { return; }
+    if (d.type === "snapshot") {
+      applyWatcher(d.watcher || {});
+      if (d.job) applyJob(d.job);
+      (d.alerts || []).slice(-25).forEach(addAlert);
+      applyBursts(d.bursts);
+      if (d.simulation) applySim(d.simulation);
+    } else if (d.type === "alert") { addAlert(d.alert); }
+    // The burst view is a rolling window over everything seen so far, not a
+    // per-event fact, so it is recomputed on the poll tick rather than pushed.
+    else if (d.type === "status") { applyWatcher(d.status || {}); refreshBursts(); }
+    else if (d.type === "ingest") { applyJob(d.job || {}); }
+    // No `|| d` fallback: a retraction sends `simulation: null`, and falling
+    // back to the envelope hands applySim a truthy object with no result,
+    // which renders "0 services exposed" as though a simulation had just run
+    // and found nothing.
+    else if (d.type === "simulation") { applySim(d.simulation); }
+  };
+  // EventSource reconnects on its own; this only surfaces the gap.
+  es.onerror = () => { el("hud").textContent = "stream reconnecting…"; };
+}
+
+/* A canvas has no DOM to inspect, so nothing about the layout, the camera or
+   which nodes are lit is reachable from devtools or a test harness. This
+   handle is the whole introspection surface -- read-only in spirit, and the
+   only reason the rendering can be checked at all without eyeballing pixels. */
+window.__blastRadius = {
+  state: S,
+  fit: fitToView,
+  hotNodes: () => [...S.hot.entries()].map(([id, heat]) => ({
+    id, heat: +heat.toFixed(2),
+    name: S.byId.get(id)?.name, label: S.byId.get(id)?.label,
+  })),
+  markedNodes: () => [...S.marked].map((id) => ({
+    id, name: S.byId.get(id)?.name, label: S.byId.get(id)?.label,
+  })),
+};
+
+resize();
+loop();
+connect();
+loadGraph();
+</script>
+</body>
+</html>
