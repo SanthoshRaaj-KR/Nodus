@@ -323,19 +323,41 @@ def pkg_unmark(spec: str):
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+def _console_file() -> Path:
+    """The console, preferring the built bundle over the standalone build.
+
+    Built from ui/web (React + Vite) into static/app, which the /static mount
+    above already serves -- so there is no second runtime in production, only
+    a build step. Falls back to the standalone vanilla console when nobody has
+    run `npm run build`, because a 404 looks like a broken route rather than a
+    missing build.
+    """
+    bundled = STATIC / "app" / "index.html"
+    return bundled if bundled.exists() else STATIC / "console.html"
+
+
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC / "index.html")
+    """The console is the front door.
+
+    There used to be two UIs on this server answering the same questions
+    differently -- the original Explorer at / and the redesigned console at
+    /console -- which meant whichever one you happened to open decided what
+    you learned. The console supersedes it, so it gets the root, and the
+    Explorer stays reachable at /explorer rather than being deleted: it is
+    still the only view of the micro/code graph that does not depend on the
+    bundle being built.
+    """
+    return FileResponse(_console_file())
 
 
-#: The redesigned console. Built from ui/web (React + Vite) into static/app,
-#: which the /static mount above already serves -- so there is no second
-#: runtime in production, only a build step. Falls back to the standalone
-#: vanilla build when the bundle has not been built yet, because a 404 here
-#: looks like a broken route rather than a missing `npm run build`.
 @app.get("/console")
 def console() -> FileResponse:
-    bundled = STATIC / "app" / "index.html"
-    if bundled.exists():
-        return FileResponse(bundled)
-    return FileResponse(STATIC / "console.html")
+    """Kept so existing links and bookmarks do not break."""
+    return FileResponse(_console_file())
+
+
+@app.get("/explorer")
+def explorer() -> FileResponse:
+    """The original Explorer, still served but no longer the default."""
+    return FileResponse(STATIC / "index.html")
