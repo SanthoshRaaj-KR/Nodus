@@ -137,15 +137,32 @@ class RegistryClient:
         digest = hashlib.sha256(f"{accept}|{url}".encode()).hexdigest()[:32]
         return self.cache_dir / f"{digest}.json.gz"
 
-    def _get_json(self, url: str, accept: str | None = None) -> Any:
+    def _get_json(
+        self, url: str, accept: str | None = None, refresh: bool = False
+    ) -> Any:
+        """Fetch a document, preferring the cache unless ``refresh`` is set.
+
+        The cache has no expiry, and for the ingest that is correct: a
+        *published version* is immutable, so a stale read cannot be wrong about
+        one. It is emphatically not correct for the live watcher, whose entire
+        job is to notice a version that did not exist when the document was
+        cached -- there, a cache hit returns the past and reports "nothing new"
+        forever. ``refresh`` skips the read and still writes, so the watcher
+        stays current while every later reader gets the fresh copy.
+        """
         path = self._cache_path(url, accept or "")
-        if path.exists():
+        if path.exists() and not refresh:
             with self._lock:
                 self.stats["hits"] += 1
             with gzip.open(path, "rt", encoding="utf-8") as handle:
                 return json.load(handle)
 
         if self.offline:
+            if path.exists():
+                # Offline plus refresh is not an error: the caller asked for
+                # fresh data and we have stale data, which beats nothing.
+                with gzip.open(path, "rt", encoding="utf-8") as handle:
+                    return json.load(handle)
             raise RegistryError(f"offline and not cached: {url}")
 
         headers = {"User-Agent": self.user_agent, "Accept-Encoding": "gzip"}
@@ -191,16 +208,20 @@ class RegistryClient:
 
     # -- packuments --------------------------------------------------------
 
-    def packument(self, name: str, full: bool = False) -> PackumentSummary:
+    def packument(
+        self, name: str, full: bool = False, refresh: bool = False
+    ) -> PackumentSummary:
         """Fetch and reduce one package document.
 
         ``full=False`` reads the abbreviated document, which is enough for the
         dependency graph. ``full=True`` additionally yields maintainers, the
-        repository, per-version publishers and publication times.
+        repository, per-version publishers and publication times. ``refresh``
+        bypasses the cache read -- required by anything watching for versions
+        that did not exist when the document was last cached.
         """
         canonical = normalize_name(name)
         url = f"{REGISTRY}/{urllib.parse.quote(canonical, safe='@')}"
-        raw = self._get_json(url, None if full else ABBREVIATED)
+        raw = self._get_json(url, None if full else ABBREVIATED, refresh=refresh)
         return self._reduce(canonical, raw, full)
 
     def _reduce(self, name: str, raw: dict, full: bool) -> PackumentSummary:
