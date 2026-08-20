@@ -4,419 +4,311 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Blast Radius — Live Graph</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/base.css">
+<script src="/static/chrome.js"></script>
 <style>
 /* ------------------------------------------------------------------
-   Colour is assigned by the job it does, not by taste.
+   Live-graph-only layout. Tokens, the validated palette, the app bar,
+   buttons, cards, chips and the legend component all come from
+   base.css -- see the long note at the top of that file for why these
+   four hues and no others.
 
-   THREE categorical hues, and three is not an arbitrary stop: this is a
-   node-link diagram, so every pair of classes can end up adjacent on
-   screen. Under all-pairs validation the reference palette's first three
-   slots are the documented-safe set in BOTH modes; a fourth hue fails
-   (violet collapses into blue in dark at CVD dE 1.9, magenta into orange
-   at normal-vision dE 11.6). So the classes are:
+   Four families here, because this page is the only one that draws
+   provenance:
 
-       blue    your fleet -- services and their lockfiles
-       aqua    the dependency mass -- packages and versions
-       orange  provenance -- who publishes, and from where
+       violet   your fleet -- services and their lockfiles
+       cyan     the dependency mass -- packages and versions
+       amber    provenance -- who publishes, and from where
+       red      RESERVED. Only ever "known to be wrong".
 
-   Everything finer than that is carried by SIZE and by FILLED vs RING,
-   never by a generated hue. Status colours (advisory, incident, live
-   alert) are reserved and sit outside the categorical set entirely.
-
-   Aqua is below 3:1 on the light surface, so the relief rule applies:
-   the legend is always present, hover always labels the node, and the
-   node panel names the exact type in text.
+   Measured all-pairs in both modes: CVD dE 9.7 light / 9.3 dark,
+   normal-vision 17.5 / 18.4, every mark clearing 3:1 against its
+   surface. Everything finer than the family is SIZE or FILLED-vs-RING,
+   never a generated hue.
    ------------------------------------------------------------------ */
-:root {
-  color-scheme: light dark;
-  --surface-0: #ffffff;
-  --surface-1: #fcfcfb;
-  --surface-2: #f3f3f1;
-  --border:    #dcdcd6;
-  --text-1:    #0b0b0b;
-  --text-2:    #52514e;
-  --text-3:    #85847e;
-
-  /* Family anchors -- the three that survive ALL-PAIRS validation in both
-     modes. A fourth was tried and does not exist: violet collapses into blue
-     (CVD dE 2.2), magenta and amber and brown all collapse into the reserved
-     red. Within a family the step is LIGHTNESS, which colour-vision
-     deficiency preserves, so ten node types come out of three hues. */
-  --fleet:     #2a78d6;
-  --deps:      #1baf7a;
-  --identity:  #eb6834;
-
-  /* what you own and could lose */
-  --fleet-1:   #17539e;
-  --fleet-2:   #2a78d6;
-  --fleet-3:   #74b0ee;
-  /* the dependency mass a compromise travels through */
-  --deps-1:    #0f7550;
-  --deps-2:    #1baf7a;
-  --deps-3:    #6bcaa4;
-  /* who could publish the next bad version */
-  --ident-1:   #9c3a16;
-  --ident-2:   #eb6834;
-  --ident-3:   #f29a76;
-
-  --ok:        #008300;
-  --warn:      #eda100;
-  --serious:   #eb6834;
-  --critical:  #e34948;
-  /* Threat is a STATUS, never a categorical family -- see the note above.
-     It is the only red on the canvas and it always means "something is
-     known to be wrong here". */
-  --threat-1:  #a81f1b;
-  --threat-2:  #e34948;
-
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) {
-    --surface-0: #121211;
-    --surface-1: #1a1a19;
-    --surface-2: #232322;
-    --border:    #33332f;
-    --text-1:    #ffffff;
-    --text-2:    #c3c2b7;
-    --text-3:    #8d8c84;
-
-    --fleet:     #3987e5;
-    --deps:      #199e70;
-    --identity:  #d95926;
-
-    /* Steps run the other way in dark: the "deep" end of a family has to
-       stay bright enough to clear the surface, so it is the *saturated*
-       step that darkens, not the lightness that drops toward black. */
-    --fleet-1:   #2b6cbb;
-    --fleet-2:   #3987e5;
-    --fleet-3:   #86bcf5;
-    --deps-1:    #147a58;
-    --deps-2:    #199e70;
-    --deps-3:    #57c69f;
-    --ident-1:   #ac4319;
-    --ident-2:   #d95926;
-    --ident-3:   #ea9270;
-
-    --warn:      #c98500;
-    --serious:   #d95926;
-    --critical:  #e66767;
-    --threat-1:  #c0403f;
-    --threat-2:  #e66767;
-  }
-}
-/* The media query alone only follows the OS. An explicit theme has to win in
-   BOTH directions, or the toggle appears to do nothing on a machine whose OS
-   already disagrees with it -- which is exactly how this page behaved. */
-:root[data-theme="dark"] {
-  --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #232322;
-  --border: #33332f; --text-1: #ffffff; --text-2: #c3c2b7; --text-3: #8d8c84;
-  --fleet: #3987e5; --deps: #199e70; --identity: #d95926;
-  --fleet-1: #2b6cbb; --fleet-2: #3987e5; --fleet-3: #86bcf5;
-  --deps-1: #147a58;  --deps-2: #199e70;  --deps-3: #57c69f;
-  --ident-1: #ac4319; --ident-2: #d95926; --ident-3: #ea9270;
-  --warn: #c98500; --serious: #d95926; --critical: #e66767;
-  --threat-1: #c0403f; --threat-2: #e66767;
-}
-:root[data-theme="light"] {
-  --surface-0: #ffffff; --surface-1: #fcfcfb; --surface-2: #f3f3f1;
-  --border: #dcdcd6; --text-1: #0b0b0b; --text-2: #52514e; --text-3: #85847e;
-  --fleet: #2a78d6; --deps: #1baf7a; --identity: #eb6834;
-  --fleet-1: #17539e; --fleet-2: #2a78d6; --fleet-3: #74b0ee;
-  --deps-1: #0f7550;  --deps-2: #1baf7a;  --deps-3: #6bcaa4;
-  --ident-1: #9c3a16; --ident-2: #eb6834; --ident-3: #f29a76;
-  --warn: #eda100; --serious: #eb6834; --critical: #e34948;
-  --threat-1: #a81f1b; --threat-2: #e34948;
-}
-
-* { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
 body {
-  font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  background: var(--surface-1);
-  color: var(--text-1);
   display: grid;
-  grid-template-columns: 300px 1fr 340px;
-  grid-template-rows: auto 1fr;
+  grid-template-columns: 312px minmax(0, 1fr) 344px;
+  grid-template-rows: var(--bar-h) 1fr;
   overflow: hidden;
 }
 
-header {
-  grid-column: 1 / -1;
-  display: flex; align-items: center; gap: 16px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-0);
-}
-header h1 { font-size: 14px; margin: 0; letter-spacing: -0.01em; }
-header .sub { color: var(--text-3); font-size: 12px; }
-header nav { margin-left: auto; display: flex; gap: 4px; }
-header nav a {
-  color: var(--text-2); text-decoration: none; font-size: 12px;
-  padding: 5px 10px; border-radius: 6px;
-}
-header nav a:hover { background: var(--surface-2); color: var(--text-1); }
-
 aside, section.right {
-  overflow-y: auto;
+  overflow-y: auto; min-height: 0;
   background: var(--surface-0);
   padding: 14px;
 }
-aside { border-right: 1px solid var(--border); }
-section.right { border-left: 1px solid var(--border); }
+aside { border-right: 1px solid var(--line); }
+section.right { border-left: 1px solid var(--line); padding: 0; }
+section.right .pad { padding: 14px; }
 
-.panel { margin-bottom: 20px; }
-.panel h2 {
-  font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em;
-  color: var(--text-3); margin: 0 0 8px; font-weight: 600;
+/* ---- the drawing --------------------------------------------------- */
+main { position: relative; overflow: hidden; display: flex; flex-direction: column; }
+#surface {
+  flex: 1; position: relative; min-height: 0;
+  /* A very faint grid, only enough to make panning legible as motion.
+     Anything stronger competes with 800 circles for the same pixels. */
+  background:
+    radial-gradient(circle at 1px 1px,
+      color-mix(in srgb, var(--ink-3) 11%, transparent) 1px, transparent 0)
+    0 0 / 30px 30px,
+    var(--surface-1);
 }
-
-label.field { display: block; margin-bottom: 8px; }
-label.field span { display: block; color: var(--text-2); margin-bottom: 4px; font-size: 12px; }
-input[type=text] {
-  width: 100%; padding: 7px 9px; font: 12px var(--mono);
-  border: 1px solid var(--border); border-radius: 6px;
-  background: var(--surface-1); color: var(--text-1);
-}
-input[type=text]:focus { outline: 2px solid var(--fleet); outline-offset: -1px; }
-
-button {
-  font: 500 12px/1 ui-sans-serif, system-ui, sans-serif;
-  padding: 8px 12px; border-radius: 6px; cursor: pointer;
-  border: 1px solid var(--border); background: var(--surface-2);
-  color: var(--text-1);
-}
-button:hover:not(:disabled) { background: var(--surface-1); border-color: var(--text-3); }
-button:disabled { opacity: 0.45; cursor: not-allowed; }
-button.primary { background: var(--fleet); border-color: var(--fleet); color: #fff; }
-button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--fleet); }
-button.danger { background: var(--critical); border-color: var(--critical); color: #fff; }
-button.danger:hover:not(:disabled) { filter: brightness(1.08); background: var(--critical); }
-.row { display: flex; gap: 6px; flex-wrap: wrap; }
-
-.note {
-  font-size: 11.5px; color: var(--text-2); line-height: 1.45;
-  background: var(--surface-2); border-radius: 6px; padding: 8px 9px;
-  border-left: 2px solid var(--border);
-}
-.note.bad { border-left-color: var(--critical); }
-.note.good { border-left-color: var(--ok); }
-
-main { position: relative; overflow: hidden; background: var(--surface-1); }
 canvas { display: block; width: 100%; height: 100%; cursor: grab; }
 canvas.dragging { cursor: grabbing; }
 
+/* A four-item family key, docked UNDER the canvas rather than floating
+   over a corner of it. The full twelve-row key lives in the right rail,
+   where it can be as tall as it needs to be and hides nothing. */
+.famkey {
+  flex: none; border-top: 1px solid var(--line); background: var(--surface-0);
+  padding: 8px 14px; display: flex; align-items: center; gap: 18px;
+  flex-wrap: wrap; font-size: 11px; color: var(--ink-3);
+}
+.famkey .item { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.famkey .item b { color: var(--ink-1); font-weight: 600; }
+.famkey .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.famkey .dot.f { background: var(--fleet-2); }
+.famkey .dot.d { background: var(--deps-2); }
+.famkey .dot.i { background: var(--ident-2); }
+.famkey .dot.t { background: var(--threat-2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--threat-glow) 30%, transparent); }
+
 #tooltip {
   position: absolute; pointer-events: none; z-index: 20;
-  background: var(--surface-0); color: var(--text-1);
-  border: 1px solid var(--border); border-radius: 6px;
-  padding: 6px 9px; font: 12px var(--mono);
-  box-shadow: 0 4px 14px rgba(0,0,0,0.16);
+  background: var(--surface-0); color: var(--ink-1);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 7px 10px; font: 12px var(--mono);
+  box-shadow: var(--shadow-2);
   max-width: 340px; opacity: 0; transition: opacity 90ms;
 }
-#tooltip .t { color: var(--text-3); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; }
-
-#overlay {
-  position: absolute; inset: 0; display: grid; place-items: center;
-  background: color-mix(in srgb, var(--surface-1) 88%, transparent);
-  z-index: 30; text-align: center; padding: 24px;
+#tooltip .t {
+  color: var(--ink-3); font: 600 9.5px var(--sans);
+  text-transform: uppercase; letter-spacing: .1em; margin-bottom: 3px;
 }
-#overlay[hidden] { display: none; }
-#overlay .box { max-width: 420px; }
-#overlay h3 { margin: 0 0 6px; font-size: 15px; }
-#overlay p { margin: 0 0 14px; color: var(--text-2); }
-
-.legend {
-  position: absolute; left: 12px; bottom: 12px; z-index: 10;
-  background: var(--surface-0); border: 1px solid var(--border);
-  border-radius: 8px; padding: 9px 11px; font-size: 11.5px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-}
-/* Collapsible, because a ten-row key is exactly what you want on the first
-   look and exactly what you do not want covering a corner of the graph on
-   every look after that. */
-.legend { max-height: 62%; overflow-y: auto; padding-top: 4px; }
-.legend.shut { max-height: none; overflow: visible; }
-.legend.shut .grp, .legend.shut .row { display: none; }
-.legend .toggle {
-  display: block; width: 100%; text-align: left; cursor: pointer;
-  background: none; border: 0; padding: 2px 0; color: var(--text-3);
-  font: 9.5px ui-sans-serif, system-ui, sans-serif; text-transform: uppercase;
-  letter-spacing: 0.07em;
-}
-.legend .toggle:hover { color: var(--text-1); }
-.legend .grp {
-  font: 9.5px ui-sans-serif, system-ui, sans-serif; text-transform: uppercase;
-  letter-spacing: 0.07em; color: var(--text-3);
-  margin: 8px 0 3px; display: block;
-}
-.legend .grp:first-child { margin-top: 0; }
-.legend .row {
-  display: flex; align-items: center; gap: 7px; margin: 2.5px 0;
-  color: var(--text-2); line-height: 1.35;
-}
-/* The swatch carries the same three channels the canvas does -- hue, size
-   and filled-vs-ring -- so a circle on screen can be matched to a row here
-   without reading the label first. */
-.legend .dot { border-radius: 50%; flex: none; }
-.legend .row b { font: 600 11px var(--mono); color: var(--text-1); }
-.legend .row span { color: var(--text-3); }
-.legend .swatch { width: 22px; display: flex; justify-content: center; flex: none; }
 
 .hud {
   position: absolute; right: 12px; top: 12px; z-index: 10;
-  background: var(--surface-0); border: 1px solid var(--border);
-  border-radius: 8px; padding: 7px 10px;
-  font: 11.5px var(--mono); color: var(--text-2);
-  box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+  background: color-mix(in srgb, var(--surface-0) 92%, transparent);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 7px 11px; font: 11.5px var(--mono); color: var(--ink-2);
+  box-shadow: var(--shadow-1); backdrop-filter: blur(6px);
 }
 
-.stat { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font-size: 12px; }
-.stat b { font: 600 12px var(--mono); color: var(--text-1); }
-.stat span { color: var(--text-2); }
+#overlay {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--surface-1) 90%, transparent);
+  z-index: 30; text-align: center; padding: 24px;
+}
+#overlay[hidden] { display: none; }
+#overlay .box { max-width: 440px; }
+#overlay h3 { margin: 0 0 8px; font-size: 16px; }
+#overlay p { margin: 0 0 16px; color: var(--ink-2); line-height: 1.55; }
 
+/* ---- the jump list of things known to be wrong ---------------------- */
+.wrongrow {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  border: 1px solid var(--line); border-left: 3px solid var(--threat);
+  border-radius: var(--r-sm); background: var(--surface-0);
+  padding: 7px 9px; cursor: pointer; text-align: left;
+  font: 11.5px var(--mono); color: var(--ink-1);
+}
+.wrongrow:hover { background: var(--tint-threat); }
+.wrongrow .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wrongrow .cnt { font: 600 10px var(--mono); color: var(--ink-3); flex: none; }
+
+/* ---- feeds ---------------------------------------------------------- */
 .feed { display: flex; flex-direction: column; gap: 6px; }
 .alert {
-  border: 1px solid var(--border); border-left-width: 3px;
-  border-radius: 6px; padding: 7px 9px; background: var(--surface-1);
-  font-size: 11.5px; animation: slide 220ms ease-out;
+  border: 1px solid var(--line); border-left-width: 3px;
+  border-radius: var(--r-md); padding: 8px 10px; background: var(--surface-0);
+  font-size: 11.5px; animation: riseIn 220ms ease-out;
 }
-@keyframes slide { from { opacity: 0; transform: translateX(8px); } }
-.alert.publish  { border-left-color: var(--text-3); }
-.alert.anomaly  { border-left-color: var(--warn); }
-.alert.fleet    { border-left-color: var(--critical); background: color-mix(in srgb, var(--critical) 7%, var(--surface-1)); }
-.alert .name { font: 600 11.5px var(--mono); word-break: break-all; color: var(--text-1); }
-.alert .who  { color: var(--text-3); font-size: 11px; }
-.alert .sig  {
-  display: inline-block; margin: 3px 3px 0 0; padding: 1px 5px;
-  border-radius: 4px; background: var(--surface-2);
-  font: 10px var(--mono); color: var(--text-2);
+.alert.publish { border-left-color: var(--ink-3); }
+.alert.anomaly { border-left-color: var(--warn); }
+.alert.fleet   { border-left-color: var(--threat); background: var(--tint-threat); }
+.alert .name { font: 600 11.5px var(--mono); word-break: break-all; color: var(--ink-1); }
+.alert .who  { color: var(--ink-3); font-size: 11px; margin-top: 2px; }
+.alert .sig {
+  display: inline-block; margin: 4px 3px 0 0; padding: 2px 6px;
+  border-radius: var(--r-sm); background: var(--surface-2);
+  font: 10px var(--mono); color: var(--ink-2);
 }
-.alert.fleet .sig { background: color-mix(in srgb, var(--critical) 18%, var(--surface-2)); }
+.alert.fleet .sig {
+  background: color-mix(in srgb, var(--threat) 16%, var(--surface-2));
+  color: var(--threat);
+}
+/* Also used outside an alert, by the node panel's edge-type tally. */
+.sig {
+  display: inline-block; margin: 3px 3px 0 0; padding: 2px 6px;
+  border-radius: var(--r-sm); background: var(--surface-2);
+  font: 10px var(--mono); color: var(--ink-2);
+}
 
-.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 11.5px; }
-.kv dt { color: var(--text-3); }
-.kv dd { margin: 0; font-family: var(--mono); word-break: break-all; color: var(--text-1); }
+dl.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 11.5px; margin: 0; }
+dl.kv dt { color: var(--ink-3); }
+dl.kv dd { margin: 0; font-family: var(--mono); word-break: break-all; color: var(--ink-1); }
 
-.stages { display: flex; flex-direction: column; gap: 4px; }
-.stage { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-2); }
-.stage .pip { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); flex: none; }
+/* ---- the pipeline stepper ------------------------------------------- */
+.stages { display: flex; flex-direction: column; gap: 5px; }
+.stage { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--ink-2); }
+.stage .pip { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); flex: none; }
 .stage.ok .pip { background: var(--ok); }
-.stage.running .pip { background: var(--warn); animation: pulse 1s infinite; }
+.stage.running .pip { background: var(--warn); animation: blip 1s infinite; }
 .stage.failed .pip { background: var(--critical); }
-@keyframes pulse { 50% { opacity: 0.25; } }
-.stage .secs { margin-left: auto; font: 10.5px var(--mono); color: var(--text-3); }
+@keyframes blip { 50% { opacity: .2; } }
+.stage .secs { margin-left: auto; font: 10.5px var(--mono); color: var(--ink-3); }
 
-.muted { color: var(--text-3); font-size: 11.5px; }
-.dim { opacity: 0.55; }
+/* ---- the legend panel ----------------------------------------------- */
+details.keybox { border-bottom: 1px solid var(--line); }
+details.keybox > summary {
+  list-style: none; cursor: pointer; padding: 12px 14px;
+  font: 600 10px/1.4 var(--sans); text-transform: uppercase; letter-spacing: .11em;
+  color: var(--ink-3); display: flex; align-items: center; gap: 8px;
+}
+details.keybox > summary::-webkit-details-marker { display: none; }
+details.keybox > summary::after { content: "▾"; margin-left: auto; font-size: 10px; }
+details.keybox:not([open]) > summary::after { content: "▸"; }
+details.keybox > summary:hover { color: var(--ink-1); background: var(--surface-2); }
+details.keybox .body { padding: 0 14px 14px; }
 </style>
 </head>
 <body>
 
-<header>
-  <h1>Blast Radius</h1>
-  <span class="sub">live graph</span>
-  <nav>
-    <a href="/">Console</a>
-    <a href="/explorer">Explorer</a>
-    <a href="/graph">Graph</a>
-  </nav>
+<header class="appbar">
+  <div class="bar-spacer"></div>
+  <div class="barstats">
+    <div class="barstat alarm"><b id="sWrong">0</b><span>known bad</span></div>
+    <div class="barstat"><b id="gNodes">0</b><span>nodes</span></div>
+    <div class="barstat"><b id="gEdges">0</b><span>edges</span></div>
+    <div class="barstat alarm"><b id="wFleet">0</b><span>fleet hits</span></div>
+  </div>
 </header>
 
 <aside>
   <div class="panel">
-    <h2>1 · Point at a repo</h2>
+    <h2 class="panel-title"><span class="step">1</span> Point at a repo</h2>
     <label class="field">
-      <span>Any checkout with a package-lock.json</span>
+      <span>Any checkout with a package-lock.json or requirements.txt</span>
       <input type="text" id="repoPath" placeholder="/path/to/your/repo" spellcheck="false">
     </label>
-    <div class="row">
-      <button id="btnInspect">Inspect</button>
-      <button id="btnIngest" class="primary">Scan &amp; build</button>
+    <div class="btn-row">
+      <button class="btn" id="btnInspect">Inspect</button>
+      <button class="btn primary" id="btnIngest">Scan &amp; build</button>
     </div>
-    <div id="repoNote" class="note" style="margin-top:8px; display:none"></div>
-    <div id="stages" class="stages" style="margin-top:10px"></div>
+    <div id="repoNote" class="note" style="margin-top:9px; display:none"></div>
+    <div id="stages" class="stages" style="margin-top:11px"></div>
+  </div>
+
+  <!-- Everything the graph already knows is wrong, as a list you can jump
+       to. A pulsing circle on a 2,600-node canvas is findable only if you
+       happen to be looking at that part of the canvas. -->
+  <div class="panel">
+    <h2 class="panel-title">Known to be wrong <span class="n" id="wrongN">0</span></h2>
+    <div class="stack" id="wrongList">
+      <div class="muted">Nothing on record yet.</div>
+    </div>
   </div>
 
   <div class="panel">
-    <h2>2 · Watch npm live</h2>
-    <div class="row">
-      <button id="btnWatch" class="primary">Start watching</button>
+    <h2 class="panel-title"><span class="step">2</span> Watch npm live</h2>
+    <div class="btn-row">
+      <button class="btn primary" id="btnWatch">Start watching</button>
     </div>
-    <div style="margin-top:9px">
+    <div style="margin-top:10px">
       <div class="stat"><span>feed cursor</span><b id="wSeq">—</b></div>
       <div class="stat"><span>changes seen</span><b id="wChanges">0</b></div>
       <div class="stat"><span>real publishes</span><b id="wPublishes">0</b></div>
       <div class="stat"><span>anomalies</span><b id="wAnoms">0</b></div>
-      <div class="stat"><span>fleet hits</span><b id="wFleet">0</b></div>
     </div>
-    <div id="watchNote" class="note" style="margin-top:8px">
+    <div id="watchNote" class="note" style="margin-top:9px">
       Idle. Tails <code>replicate.npmjs.com</code> — roughly one publish per
       second across all of npm.
     </div>
   </div>
 
   <div class="panel">
-    <h2>3 · Simulate a compromise</h2>
+    <h2 class="panel-title"><span class="step">3</span> Simulate a compromise</h2>
     <label class="field">
       <span>Package to treat as hacked</span>
       <input type="text" id="simSpec" placeholder="name@version" spellcheck="false">
     </label>
-    <div class="row">
-      <button id="btnPick">Pick one for me</button>
-      <button id="btnSim" class="danger">Simulate</button>
-      <button id="btnClear">Reset</button>
+    <div class="btn-row">
+      <button class="btn sm" id="btnPick">Pick one for me</button>
+      <button class="btn sm danger" id="btnSim">Simulate</button>
+      <button class="btn sm" id="btnClear">Reset</button>
     </div>
-    <div id="simNote" class="note" style="margin-top:8px; display:none"></div>
+    <div id="simNote" class="note" style="margin-top:9px; display:none"></div>
   </div>
 
   <div class="panel">
-    <h2>Graph</h2>
-    <div class="stat"><span>nodes</span><b id="gNodes">0</b></div>
-    <div class="stat"><span>edges</span><b id="gEdges">0</b></div>
-    <div class="row" style="margin-top:8px">
-      <button id="btnFit">Fit</button>
-      <button id="btnReload">Reload</button>
-      <button id="btnFreeze">Freeze</button>
+    <h2 class="panel-title">View</h2>
+    <div class="btn-row">
+      <button class="btn sm" id="btnFit">Fit all</button>
+      <button class="btn sm" id="btnFitThreats">Frame threats</button>
+      <button class="btn sm" id="btnReload">Reload</button>
+      <button class="btn sm" id="btnFreeze">Freeze</button>
     </div>
-    <div id="omitted" class="muted" style="margin-top:8px"></div>
+    <div id="omitted" class="muted" style="margin-top:9px"></div>
   </div>
 </aside>
 
 <main>
-  <canvas id="cv"></canvas>
-  <div id="tooltip"></div>
-  <div class="hud" id="hud">—</div>
-  <!-- Built from STYLE at load, so the key cannot drift from the canvas.
-       Grouped by the question each family answers rather than by node
-       label, because "Organization" is not what anybody is looking for --
-       "who could publish the next bad version" is. -->
-  <div class="legend" id="legend"></div>
-  <div id="overlay">
-    <div class="box">
-      <h3>No graph yet</h3>
-      <p>Point the console at a repository on the left, then press
-         <b>Scan &amp; build</b>. Everything here is drawn from that repo's
-         resolved lockfiles.</p>
-      <button id="btnOverlayLoad">Load what's already in the graph</button>
+  <div id="surface">
+    <canvas id="cv"></canvas>
+    <div id="tooltip"></div>
+    <div class="hud" id="hud">—</div>
+    <div id="overlay">
+      <div class="box">
+        <span class="glyph" style="font-size:26px;opacity:.5;display:block;margin-bottom:10px">⬡</span>
+        <h3>No graph yet</h3>
+        <p>Point at a repository on the left, then press <b>Scan &amp; build</b>.
+           Everything drawn here comes from that repo's resolved lockfiles —
+           nothing else.</p>
+        <button class="btn" id="btnOverlayLoad">Load what's already in the graph</button>
+      </div>
     </div>
+  </div>
+
+  <!-- The four families, always visible, never over the drawing. -->
+  <div class="famkey">
+    <span class="item"><i class="dot t"></i><b>red</b> known to be wrong</span>
+    <span class="item"><i class="dot f"></i><b>violet</b> what you own</span>
+    <span class="item"><i class="dot d"></i><b>cyan</b> what it travels through</span>
+    <span class="item"><i class="dot i"></i><b>amber</b> who could publish the next one</span>
+    <span class="grow"></span>
+    <span class="muted">drag to pan · scroll to zoom · click a circle to pin it</span>
   </div>
 </main>
 
 <section class="right">
-  <div class="panel">
-    <h2>Selected node</h2>
-    <div id="nodeDetail" class="muted">Hover a circle to identify it; click to pin its metadata here.</div>
-  </div>
-  <div class="panel">
-    <h2>Correlated bursts</h2>
-    <div id="bursts" class="feed"><div class="muted">
-      One account, many packages, one window — the shape the TanStack worm had.
-    </div></div>
-  </div>
-  <div class="panel">
-    <h2>Live feed</h2>
-    <div id="feed" class="feed"><div class="muted">Nothing yet.</div></div>
+  <!-- The full key. It used to float over the bottom-left of the canvas,
+       which is exactly what you want on the first look and exactly what you
+       do not want covering the graph on every look after that. Docked here
+       it can be twelve rows tall and hide nothing. -->
+  <details class="keybox" id="keybox" open>
+    <summary>What the circles mean</summary>
+    <div class="body"><div class="legend" id="legend"></div></div>
+  </details>
+
+  <div class="pad">
+    <div class="panel">
+      <h2 class="panel-title">Selected node</h2>
+      <div id="nodeDetail" class="muted">Hover a circle to identify it; click to pin its metadata here.</div>
+    </div>
+    <div class="panel">
+      <h2 class="panel-title">Correlated bursts</h2>
+      <div id="bursts" class="feed"><div class="muted">
+        One account, many packages, one window — the shape the TanStack worm had.
+      </div></div>
+    </div>
+    <div class="panel">
+      <h2 class="panel-title">Live feed</h2>
+      <div id="feed" class="feed"><div class="muted">Nothing yet.</div></div>
+    </div>
   </div>
 </section>
 
@@ -428,17 +320,26 @@ canvas.dragging { cursor: grabbing; }
    ================================================================== */
 const S = {
   nodes: [], edges: [], byId: new Map(),
-  /* Two kinds of highlight, and they are not the same thing.
+  /* THREE kinds of highlight, and they are not the same thing.
 
-     `hot` is a live alert: something just happened on npm, it should catch
-     the eye and then get out of the way, so it decays. `marked` is the
-     answer to a question the user asked -- the blast radius of a simulated
-     compromise -- and it must persist until they clear it. Running both
-     through one decaying map meant a simulation lit up and then quietly
-     erased itself a couple of seconds later, which read as "nothing was
-     affected". */
+     `wrong` is a standing fact: an advisory names this version, an
+     incident compromises it, a worm wrote this file. It is true before
+     anybody opens the page and it is still true after they close it, so
+     it never decays and is never cleared. It is what the user meant by
+     "the vulnerable nodes must be obvious".
+
+     `hot` is a live alert: something just happened on npm, it should
+     catch the eye and then get out of the way, so it decays.
+
+     `marked` is the answer to a question the user asked -- the blast
+     radius of a simulated compromise -- and must persist until they
+     clear it. Running `hot` and `marked` through one decaying map meant
+     a simulation lit up and then quietly erased itself a couple of
+     seconds later, which read as "nothing was affected". */
+  wrong: new Set(),        // node ids the graph already knows are bad
   hot: new Map(),          // node id -> heat 0..1, decays
   marked: new Set(),       // node ids from a simulation; cleared explicitly
+  animateWrong: true,      // dropped when there are too many to animate
   selected: null, hovered: null,
   frozen: false, alpha: 1,
   cam: { x: 0, y: 0, k: 1 },
@@ -449,17 +350,18 @@ const el = (id) => document.getElementById(id);
 const cv = el("cv"), ctx = cv.getContext("2d");
 const tooltip = el("tooltip");
 
-/* Colour + geometry per node label. Three hues; everything finer is
-   size or fill-vs-ring, never a generated colour. */
-/* One row per node label, and every row states all three channels, because
-   colour alone cannot carry ten classes and pretending otherwise is what
-   made the old five-entry legend unreadable.
+/* Colour + geometry per node label. Four hues; everything finer is size
+   or fill-vs-ring, never a generated colour.
+
+   One row per node label, and every row states all three channels,
+   because colour alone cannot carry twelve classes and pretending
+   otherwise is what made the old five-entry legend unreadable.
 
      hue    which of the four families -- the question the node answers
      ring   FILLED is a thing; a RING is a container of things. Applied
             consistently, so a ring always means "this groups others"
-            (Organization owns packages, Repository builds them, a Lockfile
-            holds entries) rather than being decoration.
+            (Organization owns packages, Repository builds them, a
+            Lockfile holds entries) rather than being decoration.
      r      rank inside the family, and the steps are wide enough to read
             at a glance rather than the 0.4px differences they replaced.
 
@@ -469,16 +371,16 @@ const tooltip = el("tooltip");
      deps    what it travels through            (the closure)
      ident   who could publish the next one     ("shared maintainer?") */
 const STYLE = {
-  Incident:          { hue: "threat-1", r: 11,  ring: false, group: "threat",
+  Incident:          { hue: "threat-1", r: 12,  ring: false, group: "threat",
                        what: "a recorded compromise" },
-  Advisory:          { hue: "threat-2", r: 8,   ring: false, group: "threat",
+  Advisory:          { hue: "threat-2", r: 9,   ring: false, group: "threat",
                        what: "a published vulnerability" },
   // Ringed, unlike the other two, because it is not a claim about a package
   // -- it is a file on disk that outlives one.
-  PersistenceArtifact: { hue: "threat-2", r: 6, ring: true, group: "threat",
+  PersistenceArtifact: { hue: "threat-2", r: 7, ring: true, group: "threat",
                        what: "survives npm uninstall" },
 
-  Service:           { hue: "fleet-1",  r: 10,  ring: false, group: "fleet",
+  Service:           { hue: "fleet-1",  r: 11,  ring: false, group: "fleet",
                        what: "a service you deploy" },
   Lockfile:          { hue: "fleet-3",  r: 5.5, ring: true,  group: "fleet",
                        what: "its resolved manifest" },
@@ -499,6 +401,7 @@ const STYLE = {
   PublisherIdentity: { hue: "ident-3",  r: 3.8, ring: false, group: "ident",
                        what: "did publish a version" },
 };
+
 const cssVar = (n) => getComputedStyle(document.documentElement)
   .getPropertyValue("--" + n).trim() || "#888";
 let PALETTE = {};
@@ -508,9 +411,9 @@ function refreshPalette() {
     "fleet-1","fleet-2","fleet-3",
     "deps-1","deps-2","deps-3",
     "ident-1","ident-2","ident-3",
-    "threat-1","threat-2",
-    "fleet","deps","identity","critical","warn","ok",
-    "border","text-3","surface-1",
+    "threat-1","threat-2","threat-glow",
+    "accent","deps","ident","critical","warn","ok",
+    "line","ink-1","ink-2","ink-3","surface-0","surface-1",
   ]) PALETTE[k] = cssVar(k);
 }
 refreshPalette();
@@ -518,15 +421,16 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   refreshPalette(); buildLegend(); draw();
 });
 /* Canvas colours are resolved once and cached, so a theme change has to
-   invalidate them explicitly. The media query covers the OS flipping; this
-   covers `data-theme` being stamped on the root, which fires no event of its
-   own and would otherwise leave the graph painted in the old palette on a
-   correctly-restyled page. */
+   invalidate them explicitly. The media query covers the OS flipping;
+   these two cover `data-theme` being stamped on the root by the shared
+   chrome, which fires no DOM event of its own and would otherwise leave
+   the graph painted in the old palette on a correctly-restyled page. */
 new MutationObserver(() => { refreshPalette(); buildLegend(); draw(); })
   .observe(document.documentElement, { attributeFilter: ["data-theme"] });
+window.addEventListener("themechange", () => { refreshPalette(); buildLegend(); draw(); });
 
-/* The families, in the order an incident is actually worked: what is wrong,
-   what it costs you, how it travels, who could do it again. */
+/* The families, in the order an incident is actually worked: what is
+   wrong, what it costs you, how it travels, who could do it again. */
 const GROUPS = [
   ["threat", "what is known to be wrong"],
   ["fleet",  "what you own and could lose"],
@@ -541,45 +445,51 @@ function buildLegend() {
     const rows = Object.entries(STYLE)
       .filter(([, st]) => st.group === group)
       .map(([label, st]) => {
-        // Swatch radius is the canvas radius, clamped so an 11px Incident
+        // Swatch radius is the canvas radius, clamped so a 12px Incident
         // and a 2.6px LockfileEntry both stay legible in a 13px row.
         const d = Math.max(7, Math.min(14, st.r * 1.35));
         const colour = `var(--${st.hue})`;
         const style = st.ring
           ? `width:${d}px;height:${d}px;background:transparent;border:2px solid ${colour}`
           : `width:${d}px;height:${d}px;background:${colour}`;
-        return `<div class="row">
+        return `<div class="lrow">
           <span class="swatch"><i class="dot" style="${style}"></i></span>
           <b>${label}</b><span>${st.what}</span></div>`;
       }).join("");
     return `<span class="grp">${caption}</span>${rows}`;
   }).join("") +
-  `<span class="grp">shape</span>
-   <div class="row"><span class="swatch"><i class="dot"
-     style="width:10px;height:10px;background:var(--text-3)"></i></span>
+  `<span class="grp">three overlays, three different claims</span>
+   <div class="lrow"><span class="swatch"><i class="dot"
+     style="width:11px;height:11px;background:var(--threat-2);
+            box-shadow:0 0 0 3px color-mix(in srgb,var(--threat-glow) 35%,transparent)"></i></span>
+     <span><b style="color:var(--threat-2)">red + halo</b> — an advisory or
+     incident names <em>this</em> node. It is repainted, enlarged, labelled
+     and it breathes, so it is findable without reading anything.</span></div>
+   <div class="lrow"><span class="swatch"><i class="dot"
+     style="width:11px;height:11px;background:var(--deps-2);
+            box-shadow:0 0 0 2px var(--threat-2)"></i></span>
+     <span><b>red collar</b> — inside the blast radius of the simulation.
+     The node keeps its own colour: the point is <em>which</em> of your
+     services, and repainting them all red would destroy that.</span></div>
+   <div class="lrow"><span class="swatch"><i class="dot"
+     style="width:11px;height:11px;background:transparent;border:2px solid var(--warn)"></i></span>
+     <span><b>amber ring</b> — a version was just published to it. News,
+     not a verdict; it fades over ~14s.</span></div>
+   <span class="grp">shape</span>
+   <div class="lrow"><span class="swatch"><i class="dot"
+     style="width:10px;height:10px;background:var(--ink-3)"></i></span>
      <span>filled — a thing</span></div>
-   <div class="row"><span class="swatch"><i class="dot"
-     style="width:10px;height:10px;background:transparent;border:2px solid var(--text-3)"></i></span>
+   <div class="lrow"><span class="swatch"><i class="dot"
+     style="width:10px;height:10px;background:transparent;border:2px solid var(--ink-3)"></i></span>
      <span>ring — groups other things</span></div>
    <span class="grp">edges</span>
-   <div class="row"><span class="swatch"><i
-     style="width:16px;height:0;border-top:1.5px solid var(--text-3)"></i></span>
+   <div class="lrow"><span class="swatch"><i
+     style="width:16px;height:0;border-top:1.5px solid var(--ink-3)"></i></span>
      <span>depends on / published by</span></div>
-   <div class="row"><span class="swatch"><i
+   <div class="lrow"><span class="swatch"><i
      style="width:16px;height:0;border-top:2px dashed var(--threat-2)"></i></span>
      <span>a name close enough to be a typosquat</span></div>`;
-
-  box.prepend(toggle);
 }
-
-const toggle = document.createElement("button");
-toggle.className = "toggle";
-toggle.textContent = "key ▾";
-toggle.onclick = () => {
-  const box = el("legend");
-  const shut = box.classList.toggle("shut");
-  toggle.textContent = shut ? "key ▸" : "key ▾";
-};
 
 /* ==================================================================
    Layout — force-directed, with a spatial grid so repulsion is O(n)
@@ -740,7 +650,7 @@ function draw() {
     // density. Edges here are structure, so they get the muted *text* step
     // and carry their weight through opacity instead.
     ctx.lineWidth = Math.min(1.1, 0.6 * k);
-    ctx.strokeStyle = PALETTE["text-3"];
+    ctx.strokeStyle = PALETTE["ink-3"];
     ctx.globalAlpha = focus ? 0.1 : 0.22;
     ctx.beginPath();
     for (const e of S.edges) {
@@ -781,7 +691,7 @@ function draw() {
 
     if (focus) {
       ctx.globalAlpha = 0.95;
-      ctx.strokeStyle = PALETTE["fleet"];
+      ctx.strokeStyle = PALETTE["accent"];
       ctx.lineWidth = 1.4;
       ctx.beginPath();
       for (const e of S.edges) {
@@ -796,22 +706,71 @@ function draw() {
   }
   ctx.globalAlpha = 1;
 
+  const now = performance.now();
   for (const n of S.nodes) {
     const p = worldToScreen(n);
     const st = STYLE[n.label] || { hue: "deps-2", r: 3, ring: false };
-    const r = Math.max(1.2, st.r * Math.sqrt(k));
-    if (p.x < -30 || p.x > S.w + 30 || p.y < -30 || p.y > S.h + 30) continue;
-
+    const wrong = S.wrong.has(n.id);
     const marked = S.marked.has(n.id);
-    const heat = marked ? 1 : (S.hot.get(n.id) || 0);
-    const dimmed = focus && !near.has(n.id);
-    ctx.globalAlpha = dimmed ? 0.14 : 1;
+    const heat = S.hot.get(n.id) || 0;
 
-    let fill = PALETTE[st.hue] || PALETTE["deps-2"];
-    // Heat overrides the family hue, which is the one place a node changes
-    // colour: it means "an alert just landed on this", and it has to beat
-    // whatever the node normally is.
-    if (heat > 0) fill = PALETTE["critical"];
+    /* A vulnerable PackageVersion is a 3.4px dot among four hundred
+       identical 3.4px dots, so drawing it in the reserved red and calling
+       that "highlighted" was true and useless. Anything the graph knows is
+       wrong is drawn at a floor of 7.5px regardless of its class, because a
+       mark you cannot resolve is not a mark. A node merely inside a blast
+       radius gets a smaller floor -- enough to carry a 2px collar. */
+    const baseR = wrong ? Math.max(st.r, 7.5) : marked ? Math.max(st.r, 5) : st.r;
+    const r = Math.max(1.2, baseR * Math.sqrt(k));
+    if (p.x < -60 || p.x > S.w + 60 || p.y < -60 || p.y > S.h + 60) continue;
+
+    /* Hovering a node dims everything not adjacent to it, so a single
+       circle's neighbourhood can be read out of two thousand. A finding
+       is never dimmed that far: what is broken must stay visible while
+       you go looking at something else, which is the whole reason it is
+       drawn loudly in the first place. */
+    const dimmed = focus && !near.has(n.id);
+    const dim = wrong ? 0.5 : 0.16;
+    ctx.globalAlpha = dimmed ? dim : 1;
+
+    /* THE ONE override of the family hue. A node is repainted only when
+       the graph knows *that node* is bad -- an advisory names this exact
+       version, an incident compromises it, this file is on disk.
+
+       A simulated blast radius is NOT that. It is the reach of a
+       compromise, and the nodes in it are ordinary services and packages
+       that happen to be downstream. Painting them red too meant a
+       simulation repainted 25 circles in the same colour as the six real
+       findings and you could no longer tell "this is broken" from "this
+       is who would be affected" -- while also destroying the one thing
+       the radius is meant to show, which is WHICH of your services. So
+       reach is drawn as a red RING around the node's own colour: the
+       identity survives, the membership is unmistakable. */
+    const fill = wrong ? PALETTE["threat-2"] : (PALETTE[st.hue] || PALETTE["deps-2"]);
+
+    /* THE STANDING HALO. Red alone is one of four hues under
+       colour-vision deficiency and this is an all-pairs surface, so the
+       reserved colour is not by itself enough to make a finding jump out
+       of two thousand circles. It also MOVES: a ring that breathes on a
+       ~2.9s cycle, phase-offset per node so a cluster shimmers rather
+       than strobing in lockstep. Motion is a channel no CVD touches, and
+       nothing else on the canvas loops.
+
+       Dropped above 60 wrong nodes -- see loadGraph. At that point the
+       animation is the noise rather than the signal, and a static ring
+       still carries colour plus size plus the jump list in the rail. */
+    if (wrong) {
+      const breathe = S.animateWrong
+        ? 0.5 + 0.5 * Math.sin(now / 460 + (n.id % 17) * 0.37)
+        : 0.62;
+      ctx.globalAlpha = dimmed ? dim : 0.25 + breathe * 0.55;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 3 + breathe * 7, 0, Math.PI * 2);
+      ctx.strokeStyle = PALETTE["threat-glow"];
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.globalAlpha = dimmed ? dim : 1;
+    }
 
     ctx.beginPath();
     ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
@@ -824,27 +783,45 @@ function draw() {
       ctx.fill();
     }
 
-    // A halo, in motion rather than a fourth hue, so it reads on top of
-    // whatever class colour the node already carries. A live alert's halo
-    // shrinks as it decays; a simulated blast radius breathes instead, so it
-    // stays findable while the reader looks at the panel and back.
-    if (heat > 0) {
-      const pulse = marked
-        ? 0.55 + 0.45 * Math.sin(performance.now() / 430 + n.id * 0.7)
-        : heat;
-      ctx.globalAlpha = dimmed ? 0.1 : pulse * 0.6;
+    /* Inside the blast radius of a simulation: a solid red collar, tight
+       to the node, plus a slow breath. Tight rather than a wide halo so
+       it survives a dense cluster, and the fill underneath is untouched
+       so the node is still legibly a Service or a Package. */
+    if (marked && !wrong) {
+      const breathe = 0.55 + 0.45 * Math.sin(now / 430 + (n.id % 13) * 0.5);
+      ctx.globalAlpha = dimmed ? dim : 1;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, r + 5 + pulse * 12, 0, Math.PI * 2);
-      ctx.strokeStyle = PALETTE["critical"];
+      ctx.arc(p.x, p.y, r + 2.5, 0, Math.PI * 2);
+      ctx.strokeStyle = PALETTE["threat-2"];
+      ctx.lineWidth = 2.2;
+      ctx.stroke();
+      ctx.globalAlpha = dimmed ? dim : breathe * 0.5;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 6 + breathe * 6, 0, Math.PI * 2);
+      ctx.strokeStyle = PALETTE["threat-glow"];
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      ctx.globalAlpha = dimmed ? dim : 1;
+    }
+
+    /* A live publish that just landed. Amber, not red: something was
+       published, which is news, not a verdict. Calling it critical was
+       the same overstatement the anomaly model is careful to avoid
+       everywhere else. It shrinks as it decays. */
+    if (heat > 0) {
+      ctx.globalAlpha = dimmed ? dim : heat * 0.75;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 4 + heat * 11, 0, Math.PI * 2);
+      ctx.strokeStyle = PALETTE["warn"];
       ctx.lineWidth = 2;
       ctx.stroke();
-      ctx.globalAlpha = dimmed ? 0.14 : 1;
+      ctx.globalAlpha = dimmed ? dim : 1;
     }
 
     if (focus && n.id === focus.id) {
       ctx.beginPath();
       ctx.arc(p.x, p.y, r + 4, 0, Math.PI * 2);
-      ctx.strokeStyle = PALETTE["text-3"];
+      ctx.strokeStyle = PALETTE["ink-3"];
       ctx.lineWidth = 1.6;
       ctx.stroke();
     }
@@ -854,20 +831,75 @@ function draw() {
   // Labels only when zoomed in enough to read them, and only for the
   // structurally important classes -- 1,300 version labels at any zoom is
   // an unreadable mat of text.
+  ctx.textAlign = "center";
   if (k > 1.5) {
-    ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
-    ctx.fillStyle = PALETTE["text-3"];
-    ctx.textAlign = "center";
+    ctx.font = "10px " + LABEL_FONT;
+    ctx.fillStyle = PALETTE["ink-3"];
     for (const n of S.nodes) {
-      if (!(n.label === "Service" || n.label === "Advisory" ||
-            n.label === "Incident" || (k > 2.6 && n.label === "Package"))) continue;
+      if (S.wrong.has(n.id)) continue;              // labelled below, always
+      if (!(n.label === "Service" || (k > 2.6 && n.label === "Package"))) continue;
       const p = worldToScreen(n);
       if (p.x < 0 || p.x > S.w || p.y < 0 || p.y > S.h) continue;
       const st = STYLE[n.label] || { r: 3 };
       ctx.fillText(n.name.slice(0, 30), p.x, p.y - st.r * Math.sqrt(k) - 5);
     }
   }
+
+  /* Findings are labelled at EVERY zoom, not just when the camera happens
+     to be close. Colour plus motion says "look here"; the name is what
+     turns looking into knowing, and a reader should not have to zoom in
+     and hover to learn that the red thing is GHSA-xxxx. */
+  if (S.wrong.size && S.wrong.size <= 80) {
+    ctx.font = "600 10.5px " + LABEL_FONT;
+    /* Greedy de-collision. Findings cluster -- eight of them sit on one
+       compromised package -- so eight pills land on the same forty
+       pixels and the result is unreadable in exactly the region that
+       matters most. Each label is tried above the node, then below, then
+       to either side; if all four overlap something already placed it is
+       dropped for this frame. Dropped rather than drawn on top, because
+       an illegible label is worse than none: the circle is still red,
+       still enlarged, still breathing, and still in the rail's list. */
+    const placed = [];
+    const free = (b) => !placed.some((o) =>
+      b.x < o.x + o.w && b.x + b.w > o.x && b.y < o.y + o.h && b.y + b.h > o.y);
+
+    // Nearest the camera centre first, so when labels have to be dropped
+    // the ones kept are the ones being looked at.
+    const cx = S.w / 2, cy = S.h / 2;
+    const targets = S.nodes.filter((n) => S.wrong.has(n.id))
+      .map((n) => ({ n, p: worldToScreen(n) }))
+      .filter(({ p }) => p.x >= 0 && p.x <= S.w && p.y >= 0 && p.y <= S.h)
+      .sort((a, b) => Math.hypot(a.p.x - cx, a.p.y - cy) - Math.hypot(b.p.x - cx, b.p.y - cy));
+
+    for (const { n, p } of targets) {
+      const r = Math.max(1.2, Math.max((STYLE[n.label] || { r: 3 }).r, 7.5) * Math.sqrt(k));
+      const text = n.name.slice(0, 34);
+      const w = ctx.measureText(text).width + 10, h = 15;
+      const spots = [
+        { x: p.x - w / 2,    y: p.y - r - 19 },   // above
+        { x: p.x - w / 2,    y: p.y + r + 4  },   // below
+        { x: p.x + r + 6,    y: p.y - h / 2  },   // right
+        { x: p.x - r - 6 - w, y: p.y - h / 2 },   // left
+      ].map((s) => ({ ...s, w, h }));
+      const spot = spots.find(free);
+      if (!spot) continue;
+      placed.push(spot);
+
+      // A pill behind it, because this text lands on top of whatever the
+      // graph happens to be dense with and unbacked labels vanish there.
+      ctx.globalAlpha = 0.92;
+      ctx.fillStyle = PALETTE["surface-0"];
+      ctx.beginPath();
+      ctx.roundRect(spot.x, spot.y, w, h, 4);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = PALETTE["threat-2"];
+      ctx.fillText(text, spot.x + w / 2, spot.y + 11);
+    }
+  }
 }
+
+const LABEL_FONT = "'Space Grotesk', ui-sans-serif, system-ui, sans-serif";
 
 function loop() {
   tick();
@@ -895,7 +927,10 @@ function nodeAt(sx, sy) {
     const p = worldToScreen(n);
     const d = Math.hypot(p.x - sx, p.y - sy);
     const st = STYLE[n.label] || { r: 3 };
-    const rr = Math.max(4, st.r * Math.sqrt(S.cam.k));
+    // Matches the drawn radius, including the floor a finding is drawn at.
+    const base = S.wrong.has(n.id) ? Math.max(st.r, 7.5)
+               : S.marked.has(n.id) ? Math.max(st.r, 5) : st.r;
+    const rr = Math.max(4, base * Math.sqrt(S.cam.k));
     if (d < Math.max(bestD, rr)) { best = n; bestD = d; }
   }
   return best;
@@ -1018,7 +1053,7 @@ function renderDetail(n, detail) {
      <div class="muted" style="margin-top:9px">${linked.length} connection(s)</div>
      <div style="margin-top:3px">${
        Object.entries(kinds).map(([t, c]) =>
-         `<span class="sig" style="display:inline-block;margin:2px 3px 0 0;padding:1px 5px;border-radius:4px;background:var(--surface-2);font:10px var(--mono)">${esc(t)} ${c}</span>`
+         `<span class="sig">${esc(t)} ${c}</span>`
        ).join("")}</div>`;
 }
 
@@ -1041,6 +1076,7 @@ async function loadGraph() {
     S.edges = g.edges;
     S.byId = new Map(S.nodes.map((n) => [n.id, n]));
     S.loaded = true;
+    markWhatIsWrong();
     seedLayout();
     S.alpha = 1;
     S.cam = { x: 0, y: 0, k: 0.6 };
@@ -1064,6 +1100,78 @@ async function loadGraph() {
     el("overlay").hidden = false;
     el("overlay").querySelector("h3").textContent = "Could not load the graph";
     el("overlay").querySelector("p").textContent = String(err);
+  }
+}
+
+/* ------------------------------------------------------------------
+   What the graph already knows is wrong.
+
+   Not a live signal and not a simulation -- a standing fact, computed
+   from the edges the ingest wrote. A vulnerable version is not a class
+   of node, it is a PackageVersion that an Advisory happens to point at,
+   so it can only be found by walking edges rather than by reading a
+   label. That is why nothing was drawing it: every previous highlight
+   on this canvas came from an event, and a finding that was already in
+   the database when the page opened generated no event.
+   ------------------------------------------------------------------ */
+const WRONG_LABELS = new Set(["Advisory", "Incident", "PersistenceArtifact"]);
+const WRONG_EDGES = new Set(["AFFECTS", "COMPROMISES"]);
+/* Above this many, the breathing ring is the noise rather than the
+   signal, so it goes static. Colour, size and the jump list still carry
+   it -- and the count in the bar never lies about how many there are. */
+const ANIMATE_CEILING = 60;
+
+function markWhatIsWrong() {
+  S.wrong = new Set();
+  for (const n of S.nodes) if (WRONG_LABELS.has(n.label)) S.wrong.add(n.id);
+  for (const e of S.edges) {
+    if (!WRONG_EDGES.has(e.type)) continue;
+    // Both ends: the advisory itself, and the exact version it names.
+    if (S.byId.has(e.source)) S.wrong.add(e.source);
+    if (S.byId.has(e.target)) S.wrong.add(e.target);
+  }
+  S.animateWrong = S.wrong.size <= ANIMATE_CEILING;
+  setStat("sWrong", S.wrong.size.toLocaleString());
+  el("wrongN").textContent = S.wrong.size.toLocaleString();
+  renderWrongList();
+}
+
+function renderWrongList() {
+  const box = el("wrongList");
+  if (!S.wrong.size) {
+    box.innerHTML = `<div class="note good">No advisory, incident or
+      persistence artifact is on record against anything in this graph.
+      <span class="muted">That is a result, not an absence — the scan ran
+      and found nothing.</span></div>`;
+    return;
+  }
+  /* Ordered so the seed comes before what it landed on: an incident is
+     something that happened, an advisory is something published, and the
+     affected versions are the consequence. */
+  const rank = { Incident: 0, PersistenceArtifact: 1, Advisory: 2 };
+  const rows = [...S.wrong]
+    .map((id) => S.byId.get(id)).filter(Boolean)
+    .sort((a, b) => (rank[a.label] ?? 3) - (rank[b.label] ?? 3) ||
+                    a.name.localeCompare(b.name));
+
+  box.innerHTML = rows.slice(0, 24).map((n) => `
+    <button class="wrongrow" data-id="${n.id}" title="${esc(n.label)} — click to frame it">
+      <span class="lbl">${esc(n.name)}</span>
+      <span class="cnt">${esc(n.label.replace("PersistenceArtifact", "file"))}</span>
+    </button>`).join("") +
+    (rows.length > 24
+      ? `<div class="muted">…and ${rows.length - 24} more, all drawn on the canvas</div>`
+      : "");
+
+  for (const b of box.querySelectorAll(".wrongrow")) {
+    b.onclick = () => {
+      const n = S.byId.get(+b.dataset.id);
+      if (!n) return;
+      focusOn([n.id, ...S.edges
+        .filter((e) => e.source === n.id || e.target === n.id)
+        .map((e) => (e.source === n.id ? e.target : e.source))]);
+      selectNode(n);
+    };
   }
 }
 
@@ -1107,6 +1215,12 @@ function focusOn(ids) {
 }
 
 el("btnFit").onclick = fitToView;
+/* The whole point of drawing findings loudly is being able to get to them.
+   On a 2,600-node canvas at fit-all zoom, "loud" is still four pixels. */
+el("btnFitThreats").onclick = () => {
+  if (!S.wrong.size) return note("simNote", "Nothing on record to frame.", "good");
+  focusOn([...S.wrong]);
+};
 el("btnOverlayLoad").onclick = loadGraph;
 el("btnReload").onclick = loadGraph;
 el("btnFreeze").onclick = () => {
@@ -1162,12 +1276,12 @@ el("btnWatch").onclick = async () => {
 function applyWatcher(w) {
   watching = !!w.running;
   el("btnWatch").textContent = watching ? "Stop watching" : "Start watching";
-  el("btnWatch").className = watching ? "danger" : "primary";
+  el("btnWatch").className = "btn " + (watching ? "danger" : "primary");
   el("wSeq").textContent = w.seq ? String(w.seq) : "—";
   const c = w.counters || {};
   el("wChanges").textContent = (c.changes || 0).toLocaleString();
   el("wPublishes").textContent = (c.publishes || 0).toLocaleString();
-  el("wFleet").textContent = (c.fleet_hits || 0).toLocaleString();
+  setStat("wFleet", (c.fleet_hits || 0).toLocaleString());
   if (watching) {
     note("watchNote",
       `Live. Every publish on npm is fetched, checked for anomalies, and

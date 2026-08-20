@@ -1,0 +1,546 @@
+/* =====================================================================
+   Blast Radius — the one stylesheet.
+
+   The three pages used to be three different products: the console was
+   dark-only violet with remote webfonts, the Explorer was a light
+   red/green/blue node diagram, and the live graph was a third palette
+   again. Nothing carried across, so a colour meant one thing on one
+   screen and nothing on the next -- which is the opposite of what a tool
+   whose entire job is explaining a graph should do.
+
+   Everything below is shared. A page adds only what is genuinely unique
+   to it.
+
+   ---------------------------------------------------------------------
+   THE PALETTE, AND WHY THESE HUES
+
+   Colour is assigned by the job it does, and the assignment is the output
+   of the dataviz validator, not of taste. These are node-link diagrams,
+   so ANY two classes can end up touching: the rule is ALL-PAIRS, not
+   adjacent-pairs, which is much harder to satisfy and rules out most
+   palettes that look fine in a bar chart.
+
+   Four families, and four is where it stops:
+
+       violet   your fleet -- what you own and could lose
+       cyan     the dependency mass -- what a compromise travels through
+       amber    provenance -- who could publish the next bad version
+       red      RESERVED STATUS. Only ever means "known to be wrong".
+
+   Measured, all-pairs, both modes (OKLab dE x100):
+
+       light  #7358e8 #0f8fa6 #c2850f #cf332e
+              CVD    9.7 (deutan)   normal 17.5   contrast all >= 3:1
+       dark   #8b7cff #1f9fb5 #bd8a22 #d2332e
+              CVD    9.3 (deutan)   normal 18.4   contrast all >= 3:1
+
+   Every check passes outright in both modes -- lightness band, chroma
+   floor, CVD separation, the normal-vision floor and contrast against
+   the surface. The palette this replaced needed two documented reliefs:
+   red-vs-aqua sat at CVD dE 6.9, inside the 6-8 band that is legal only
+   with secondary encoding, and aqua fell under 3:1 on the light surface.
+
+   Within a family the step is LIGHTNESS, which colour-vision deficiency
+   preserves, so eleven node types come out of four hues. Each family was
+   validated as an ordinal ramp (monotone L, visible step gaps, the pale
+   end still clearing the surface) rather than as more categorical slots,
+   because that is what it is.
+
+   Red never enters the categorical set. It is not "series four"; it is a
+   state, and it always ships with a word and -- on the canvas -- a
+   pulsing halo, so it is never colour alone.
+   ===================================================================== */
+
+/* ------------------------------------------------------------------ */
+/* Tokens                                                              */
+/* ------------------------------------------------------------------ */
+:root {
+  color-scheme: light dark;
+
+  /* surfaces, back to front */
+  --surface-0: #ffffff;   /* raised: bars, cards, panels */
+  --surface-1: #fbfbfa;   /* the page */
+  --surface-2: #f2f2ef;   /* inset: inputs, wells, hover */
+  --surface-3: #e9e9e4;   /* pressed / selected */
+
+  --line:      #dedcd5;
+  --line-soft: #e9e7e0;
+
+  --ink-1:     #101010;   /* primary text */
+  --ink-2:     #4e4d49;   /* secondary */
+  --ink-3:     #7d7c75;   /* muted / labels */
+  --ink-on:    #ffffff;   /* text on a filled accent */
+
+  /* the four families -- deep / base / pale */
+  --fleet-1: #4a34b8;  --fleet-2: #7358e8;  --fleet-3: #a894f2;
+  --deps-1:  #0a6b7c;  --deps-2:  #0f8fa6;  --deps-3:  #4fbdd1;
+  --ident-1: #8f6108;  --ident-2: #c2850f;  --ident-3: #d9a83c;
+  --threat-1:#a3241f;  --threat-2:#cf332e;
+
+  /* family anchors, for chrome that is not a data mark */
+  --accent:  var(--fleet-2);
+  --deps:    var(--deps-2);
+  --ident:   var(--ident-2);
+  --threat:  var(--threat-2);
+
+  /* The halo colour, used ONLY for the pulse ring and the tinted panel
+     wash. Deliberately outside the categorical set: it is motion and
+     glow, not a mark fill, so it is not competing for separation. */
+  --threat-glow: #ff4d45;
+
+  /* status -- reserved, never reused as a series */
+  --ok:      #10794f;
+  --warn:    #a8760a;
+  --serious: #c2540f;
+  --critical:var(--threat-2);
+
+  /* tints, for washes that must survive both themes */
+  --tint-threat: color-mix(in srgb, var(--threat-2) 8%, var(--surface-0));
+  --tint-accent: color-mix(in srgb, var(--accent) 10%, var(--surface-0));
+  --tint-ok:     color-mix(in srgb, var(--ok) 9%, var(--surface-0));
+
+  --r-sm: 6px; --r-md: 9px; --r-lg: 13px; --r-pill: 999px;
+  --shadow-1: 0 1px 2px rgba(16,16,16,.06), 0 1px 1px rgba(16,16,16,.04);
+  --shadow-2: 0 6px 22px rgba(16,16,16,.10), 0 2px 6px rgba(16,16,16,.06);
+  --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 34%, transparent);
+
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --sans: 'Space Grotesk', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --bar-h: 52px;
+}
+
+/* The media query alone only follows the OS. An explicit theme has to win
+   in BOTH directions, or the toggle appears to do nothing on a machine
+   whose OS already disagrees with it. */
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) { --dark: 1; }
+}
+:root[data-theme="dark"] { --dark: 1; }
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    --surface-0: #16161b;
+    --surface-1: #101014;
+    --surface-2: #1e1e25;
+    --surface-3: #282830;
+    --line:      #2e2e38;
+    --line-soft: #24242c;
+    --ink-1:     #f2f2f6;
+    --ink-2:     #c2c2cf;
+    --ink-3:     #8b8b9b;
+
+    --fleet-1: #6b52c9;  --fleet-2: #8b7cff;  --fleet-3: #ada0f5;
+    --deps-1:  #157f92;  --deps-2:  #1f9fb5;  --deps-3:  #57c0d2;
+    --ident-1: #9a7020;  --ident-2: #bd8a22;  --ident-3: #d8b055;
+    --threat-1:#b02b26;  --threat-2:#d2332e;
+    --threat-glow: #ff6b63;
+
+    --ok:      #3fca8e;
+    --warn:    #d9a83c;
+    --serious: #e07a3a;
+
+    --shadow-1: 0 1px 2px rgba(0,0,0,.5);
+    --shadow-2: 0 10px 30px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="dark"] {
+  --surface-0: #16161b; --surface-1: #101014; --surface-2: #1e1e25;
+  --surface-3: #282830; --line: #2e2e38; --line-soft: #24242c;
+  --ink-1: #f2f2f6; --ink-2: #c2c2cf; --ink-3: #8b8b9b;
+  --fleet-1: #6b52c9;  --fleet-2: #8b7cff;  --fleet-3: #ada0f5;
+  --deps-1:  #157f92;  --deps-2:  #1f9fb5;  --deps-3:  #57c0d2;
+  --ident-1: #9a7020;  --ident-2: #bd8a22;  --ident-3: #d8b055;
+  --threat-1:#b02b26;  --threat-2:#d2332e;  --threat-glow: #ff6b63;
+  --ok: #3fca8e; --warn: #d9a83c; --serious: #e07a3a;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.5);
+  --shadow-2: 0 10px 30px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+}
+:root[data-theme="light"] {
+  --surface-0: #ffffff; --surface-1: #fbfbfa; --surface-2: #f2f2ef;
+  --surface-3: #e9e9e4; --line: #dedcd5; --line-soft: #e9e7e0;
+  --ink-1: #101010; --ink-2: #4e4d49; --ink-3: #7d7c75;
+  --fleet-1: #4a34b8;  --fleet-2: #7358e8;  --fleet-3: #a894f2;
+  --deps-1:  #0a6b7c;  --deps-2:  #0f8fa6;  --deps-3:  #4fbdd1;
+  --ident-1: #8f6108;  --ident-2: #c2850f;  --ident-3: #d9a83c;
+  --threat-1:#a3241f;  --threat-2:#cf332e;  --threat-glow: #ff4d45;
+  --ok: #10794f; --warn: #a8760a; --serious: #c2540f;
+}
+
+/* ------------------------------------------------------------------ */
+/* Reset & base                                                        */
+/* ------------------------------------------------------------------ */
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font: 13px/1.5 var(--sans);
+  background: var(--surface-1);
+  color: var(--ink-1);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, .mono { font-family: var(--mono); }
+h1, h2, h3, h4 { margin: 0; font-weight: 600; letter-spacing: -.012em; }
+
+:where(a, button, input, select, [tabindex]):focus-visible {
+  outline: none; box-shadow: var(--ring); border-radius: var(--r-sm);
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink-3) 34%, transparent);
+  border-radius: var(--r-pill);
+  border: 2px solid transparent; background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--ink-3) 60%, transparent); background-clip: padding-box; }
+
+/* ------------------------------------------------------------------ */
+/* The app bar — identical on every page                               */
+/*                                                                     */
+/* Navigation used to be three text links on two pages and a sidebar   */
+/* list on the third, so moving between them was a different gesture   */
+/* every time. It is now one segmented control of real buttons, in the */
+/* same place, with the current page held down.                        */
+/* ------------------------------------------------------------------ */
+.appbar {
+  grid-column: 1 / -1;
+  height: var(--bar-h);
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 14px;
+  background: var(--surface-0);
+  border-bottom: 1px solid var(--line);
+  position: relative; z-index: 40;
+}
+.brand { display: flex; align-items: center; gap: 9px; flex: none; }
+.brand .mark {
+  width: 22px; height: 22px; flex: none; border-radius: 7px;
+  background: linear-gradient(145deg, var(--fleet-2), var(--deps-2) 118%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink-1) 12%, transparent);
+  position: relative;
+}
+/* A dot inside the tile — a package inside a service. Small, but it means
+   the brand is the same picture the product draws. */
+.brand .mark::after {
+  content: ""; position: absolute; inset: 7px;
+  border-radius: 50%; background: var(--surface-0); opacity: .9;
+}
+.brand .name { font-size: 14px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
+.brand .name em { font-style: normal; color: var(--ink-3); font-weight: 500; }
+
+.tabs {
+  display: flex; gap: 2px; padding: 3px; flex: none;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-pill);
+}
+.tabs a {
+  display: inline-flex; align-items: center; gap: 7px;
+  font: 500 12.5px/1 var(--sans); color: var(--ink-2);
+  padding: 7px 13px; border-radius: var(--r-pill);
+  text-decoration: none; white-space: nowrap;
+  transition: background .13s, color .13s;
+}
+.tabs a:hover { background: var(--surface-0); color: var(--ink-1); text-decoration: none; }
+.tabs a[aria-current="page"] {
+  background: var(--surface-0); color: var(--ink-1);
+  box-shadow: var(--shadow-1);
+  border: 1px solid var(--line);
+  padding: 6px 12px;
+}
+.tabs a .gl { font-size: 11px; opacity: .8; }
+.tabs a[aria-current="page"] .gl { color: var(--accent); opacity: 1; }
+
+.bar-spacer { flex: 1; }
+
+/* Headline numbers in the bar. Right-aligned so they sit against the
+   edge and read as a status strip rather than as more navigation. */
+.barstats { display: flex; align-items: stretch; gap: 0; flex: none; }
+.barstat {
+  padding: 0 13px; text-align: right; border-left: 1px solid var(--line-soft);
+  display: flex; flex-direction: column; justify-content: center;
+}
+.barstat:first-child { border-left: 0; }
+.barstat b { font: 600 15px/1.1 var(--mono); letter-spacing: -.02em; }
+.barstat span {
+  font: 500 9.5px/1.4 var(--sans); color: var(--ink-3);
+  text-transform: uppercase; letter-spacing: .09em; white-space: nowrap;
+}
+/* Red only when the count is not zero. A permanently red "0" teaches a
+   reader to ignore the colour, which costs exactly the alarm you wanted
+   when it finally becomes a 3. Set by setStat() in chrome.js. */
+.barstat.alarm b { color: var(--threat); }
+.barstat.alarm[data-zero="true"] b { color: var(--ink-1); }
+
+.icon-btn {
+  flex: none; width: 32px; height: 32px; display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface-0); color: var(--ink-2); cursor: pointer;
+  font-size: 14px; line-height: 1;
+}
+.icon-btn:hover { background: var(--surface-2); color: var(--ink-1); }
+
+/* ------------------------------------------------------------------ */
+/* Buttons                                                             */
+/* ------------------------------------------------------------------ */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  font: 500 12.5px/1 var(--sans);
+  padding: 9px 13px; border-radius: var(--r-md); cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface-0); color: var(--ink-1);
+  transition: background .13s, border-color .13s, transform .06s;
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--ink-3); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.primary {
+  background: var(--accent); border-color: var(--accent); color: var(--ink-on);
+  box-shadow: var(--shadow-1);
+}
+.btn.primary:hover:not(:disabled) { background: var(--fleet-1); border-color: var(--fleet-1); }
+.btn.danger {
+  background: color-mix(in srgb, var(--threat) 12%, var(--surface-0));
+  border-color: color-mix(in srgb, var(--threat) 45%, transparent);
+  color: var(--threat);
+}
+.btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--threat) 22%, var(--surface-0)); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--ink-2); }
+.btn.ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--ink-1); }
+.btn.sm { padding: 6px 10px; font-size: 11.5px; }
+.btn-row { display: flex; gap: 7px; flex-wrap: wrap; }
+
+/* Filter pills — a row of them above the thing they filter. */
+.pills { display: flex; gap: 5px; flex-wrap: wrap; }
+.pills button {
+  font: 500 11.5px/1 var(--sans); padding: 6px 11px; border-radius: var(--r-pill);
+  border: 1px solid var(--line); background: var(--surface-0);
+  color: var(--ink-2); cursor: pointer; transition: all .13s;
+}
+.pills button:hover { border-color: var(--ink-3); color: var(--ink-1); }
+.pills button[aria-pressed="true"] {
+  background: var(--ink-1); border-color: var(--ink-1); color: var(--surface-0);
+}
+
+/* ------------------------------------------------------------------ */
+/* Inputs                                                              */
+/* ------------------------------------------------------------------ */
+.field { display: block; margin-bottom: 9px; }
+.field > span {
+  display: block; color: var(--ink-2); margin-bottom: 5px;
+  font-size: 11.5px; font-weight: 500;
+}
+input[type=text], input[type=search] {
+  width: 100%; padding: 8px 10px; font: 12px var(--mono);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface-2); color: var(--ink-1);
+}
+input::placeholder { color: var(--ink-3); }
+input[type=text]:focus, input[type=search]:focus {
+  outline: none; border-color: var(--accent); background: var(--surface-0);
+  box-shadow: var(--ring);
+}
+
+/* ------------------------------------------------------------------ */
+/* Surfaces: panels, cards, notes                                      */
+/* ------------------------------------------------------------------ */
+.panel { margin-bottom: 18px; }
+.panel > h2, .panel-title {
+  font: 600 10px/1.4 var(--sans); text-transform: uppercase;
+  letter-spacing: .11em; color: var(--ink-3); margin: 0 0 9px;
+  display: flex; align-items: center; gap: 7px;
+}
+.panel-title .n {
+  font: 600 9.5px/1 var(--mono); color: var(--ink-3);
+  background: var(--surface-2); border-radius: var(--r-pill); padding: 3px 6px;
+}
+/* A numbered step marker, so a rail of panels reads as a sequence. */
+.step {
+  flex: none; width: 16px; height: 16px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--surface-3); color: var(--ink-2);
+  font: 700 9.5px/1 var(--mono);
+}
+
+.card {
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface-0); padding: 10px 12px;
+  transition: border-color .13s, background .13s;
+}
+.card.tappable { cursor: pointer; }
+.card.tappable:hover { border-color: var(--ink-3); }
+.card[aria-selected="true"] {
+  border-color: var(--accent); background: var(--tint-accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.card .title { font: 600 12.5px/1.35 var(--mono); overflow-wrap: anywhere; }
+.card .meta {
+  margin-top: 5px; font-size: 11px; color: var(--ink-3);
+  display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+}
+/* A card about something known to be wrong wears the reserved colour on
+   its edge, and only there — the fill stays neutral so the list is still
+   readable as a list. */
+.card.is-threat { border-left: 3px solid var(--threat); }
+.card.is-threat[aria-selected="true"] {
+  border-color: var(--threat); background: var(--tint-threat);
+  box-shadow: inset 3px 0 0 var(--threat);
+}
+.card.is-quiet { border-left: 3px solid var(--line); }
+
+.note {
+  border: 1px solid var(--line); border-left: 3px solid var(--ink-3);
+  border-radius: var(--r-md); padding: 10px 12px;
+  font-size: 12px; line-height: 1.5; color: var(--ink-2);
+  background: var(--surface-0);
+}
+.note.bad  { border-left-color: var(--threat); background: var(--tint-threat); }
+.note.good { border-left-color: var(--ok); background: var(--tint-ok); }
+.note.warn { border-left-color: var(--warn); }
+.note b { color: var(--ink-1); }
+
+/* ------------------------------------------------------------------ */
+/* Chips — status always ships with a word, never colour alone         */
+/* ------------------------------------------------------------------ */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font: 500 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .05em;
+  padding: 4px 7px; border-radius: var(--r-sm);
+  border: 1px solid var(--line); color: var(--ink-2); background: var(--surface-0);
+  white-space: nowrap;
+}
+.chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); flex: none; }
+.chip.critical i { background: var(--critical); }
+.chip.high i     { background: var(--serious); }
+.chip.moderate i, .chip.medium i { background: var(--warn); }
+.chip.low i      { background: var(--deps); }
+.chip.ok i       { background: var(--ok); }
+.chip.loud {
+  border-color: color-mix(in srgb, var(--threat) 50%, transparent);
+  color: var(--threat); background: var(--tint-threat); font-weight: 700;
+}
+.chip.quiet { color: var(--ink-3); background: var(--surface-2); border-color: transparent; }
+
+/* ------------------------------------------------------------------ */
+/* Key/value rows and stat lines                                       */
+/* ------------------------------------------------------------------ */
+.kv { display: flex; gap: 10px; font-size: 12px; padding: 3px 0; align-items: baseline; }
+.kv > b { color: var(--ink-3); font-weight: 500; min-width: 104px; flex: none; }
+.kv > span { color: var(--ink-1); overflow-wrap: anywhere; }
+.kv > span.mono { font-family: var(--mono); font-size: 11.5px; }
+
+.stat { display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; font-size: 12px; }
+.stat span { color: var(--ink-2); }
+.stat b { font: 600 12.5px var(--mono); color: var(--ink-1); }
+
+.rule { height: 1px; background: var(--line); margin: 12px 0 10px; border: 0; }
+.muted { color: var(--ink-3); font-size: 12px; }
+
+/* ------------------------------------------------------------------ */
+/* Section headers inside a rail                                       */
+/* ------------------------------------------------------------------ */
+.sechead {
+  padding: 13px 14px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-0);
+}
+.sechead h2 {
+  margin: 0 0 3px; font-size: 12.5px; font-weight: 600;
+  display: flex; align-items: center; gap: 8px;
+}
+.sechead p { margin: 0; font-size: 11.5px; color: var(--ink-3); line-height: 1.45; }
+
+/* ------------------------------------------------------------------ */
+/* Empty / loading states                                              */
+/*                                                                     */
+/* "Nothing found" and "we did not look" are different answers, and a   */
+/* blank rectangle says neither. Every empty state here has room for a  */
+/* sentence explaining which of the two it is.                         */
+/* ------------------------------------------------------------------ */
+.empty {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  padding: 30px; text-align: center; z-index: 5;
+}
+.empty[hidden] { display: none; }
+.empty .box { max-width: 460px; }
+.empty .glyph {
+  font-size: 26px; opacity: .5; margin-bottom: 10px; display: block;
+}
+.empty h3 { margin: 0 0 8px; font-size: 15.5px; }
+.empty p { margin: 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.55; }
+.empty .good { color: var(--ok); font-weight: 600; }
+
+.skel {
+  height: 42px; border-radius: var(--r-md);
+  background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2));
+  background-size: 220% 100%; animation: skel 1.3s ease-in-out infinite;
+}
+@keyframes skel { to { background-position: -220% 0; } }
+
+/* ------------------------------------------------------------------ */
+/* THE THREAT PULSE                                                    */
+/*                                                                     */
+/* The one thing on screen that has to be found without reading. Red    */
+/* alone is not enough (it is one of four hues under CVD, and this is   */
+/* an all-pairs surface), so anything known to be wrong also MOVES —    */
+/* an expanding halo on a 2s cycle. Motion is a channel no colour-      */
+/* vision deficiency touches, and nothing else on any page animates on  */
+/* a loop, so a pulse is unambiguous.                                   */
+/*                                                                     */
+/* It respects prefers-reduced-motion, where the halo becomes a static  */
+/* ring — still a second channel, just not a moving one.                */
+/* ------------------------------------------------------------------ */
+@keyframes threatPulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--threat-glow) 55%, transparent); }
+  70%  { box-shadow: 0 0 0 10px color-mix(in srgb, var(--threat-glow) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--threat-glow) 0%, transparent); }
+}
+.pulse { animation: threatPulse 2s cubic-bezier(.4,0,.6,1) infinite; }
+
+@keyframes riseIn { from { opacity: 0; transform: translateY(6px); } }
+.rise { animation: riseIn 220ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+  .pulse { box-shadow: 0 0 0 3px color-mix(in srgb, var(--threat-glow) 45%, transparent); }
+}
+
+/* ------------------------------------------------------------------ */
+/* The legend — a shared component, because both graphs need one and    */
+/* they were drifting apart.                                           */
+/*                                                                     */
+/* It does NOT float over the drawing. A ten-row key parked in the      */
+/* corner of a canvas is exactly what you want on the first look and    */
+/* exactly what you do not want on every look after that, and on a      */
+/* dense graph it hides the part you are trying to read. It is docked   */
+/* in a rail, where it can be as tall as it needs to be and covers      */
+/* nothing.                                                            */
+/* ------------------------------------------------------------------ */
+.legend { display: flex; flex-direction: column; gap: 2px; }
+.legend .grp {
+  font: 600 9.5px/1.4 var(--sans); text-transform: uppercase; letter-spacing: .1em;
+  color: var(--ink-3); margin: 11px 0 4px;
+}
+.legend .grp:first-child { margin-top: 0; }
+.legend .lrow {
+  display: flex; align-items: center; gap: 9px;
+  padding: 2.5px 0; color: var(--ink-3); font-size: 11px; line-height: 1.35;
+}
+.legend .swatch { width: 20px; display: flex; justify-content: center; flex: none; }
+.legend .dot { border-radius: 50%; flex: none; }
+.legend .lrow b { font: 600 11px var(--mono); color: var(--ink-1); flex: none; }
+.legend .lrow span { color: var(--ink-3); }
+
+/* ------------------------------------------------------------------ */
+/* Utilities                                                           */
+/* ------------------------------------------------------------------ */
+.stack { display: flex; flex-direction: column; gap: 7px; }
+.row   { display: flex; gap: 8px; align-items: center; }
+.grow  { flex: 1; }
+.nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+[hidden] { display: none !important; }

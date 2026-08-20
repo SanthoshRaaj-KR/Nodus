@@ -4,362 +4,230 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Blast Radius — Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/base.css">
+<script src="/static/chrome.js"></script>
 <style>
 /* ------------------------------------------------------------------
-   Colour is assigned by the job it does, and the assignment is the
-   output of scripts/validate_palette.js, not of taste.
+   Explorer-only layout. Everything else -- tokens, the palette, the app
+   bar, buttons, cards, chips, the legend component -- is base.css.
 
-   This is a node-link diagram, so any two classes can end up touching
-   and the palette has to survive ALL-PAIRS validation, not just
-   adjacent pairs. Under that rule the obvious four-way split -- red
-   threat, aqua package, orange import, blue function -- FAILS in both
-   modes: red vs orange lands at normal-vision dE 7.1, well under the
-   floor of 15, which means full-colour readers cannot reliably tell
-   them apart either. No amount of secondary encoding excuses that one.
+   Three hues here rather than base.css's four, because the Explorer
+   never draws provenance: red is the affected version, cyan is the
+   package route into your repo, violet is your own code. Validated
+   all-pairs in both modes:
 
-   So there are THREE hues, and the fourth distinction is carried by
-   FILLED vs RING inside a family:
+       light  #cf332e #0f8fa6 #7358e8   CVD dE 14.1   normal 20.3
+       dark   #d2332e #1f9fb5 #8b7cff   CVD dE 12.3   normal 18.6
 
-       red    the affected version -- exactly one, always leftmost
-       aqua   packages: the bridge dependency (filled), the import (ring)
-       blue   your code: the function that uses it (filled), callers (ring)
-
-   Red vs aqua sits at CVD dE 6.9 (light) / 6.5 (dark), inside the 6-8
-   floor band that is legal only with secondary encoding. It has four:
-   fixed column position, a text label on every node, different radii,
-   and a permanent legend. Aqua is under 3:1 on the light surface, so
-   the relief rule applies too -- which the same always-on labels serve.
-
-   Severity is a STATUS, not a series, so it never enters the hue scale.
-   It appears as a chip with a word in it, next to the finding.
+   Comfortably above the CVD target of 8, so no relief is being leaned
+   on. The fourth and fifth distinctions -- the import site, and the
+   callers one hop out -- are FILLED vs RING inside a family, plus a
+   fixed column, a label on every node and a permanent legend.
    ------------------------------------------------------------------ */
-:root {
-  color-scheme: light dark;
-  --surface-0: #ffffff;
-  --surface-1: #fcfcfb;
-  --surface-2: #f3f3f1;
-  --border:    #dcdcd6;
-  --text-1:    #0b0b0b;
-  --text-2:    #52514e;
-  --text-3:    #85847e;
-
-  --threat:    #e34948;
-  --deps:      #1baf7a;
-  --code:      #2a78d6;
-
-  --ok:        #008300;
-  --warn:      #eda100;
-  --serious:   #eb6834;
-  --critical:  #e34948;
-
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) {
-    --surface-0: #121211;
-    --surface-1: #1a1a19;
-    --surface-2: #232322;
-    --border:    #33332f;
-    --text-1:    #ffffff;
-    --text-2:    #c3c2b7;
-    --text-3:    #8d8c84;
-
-    --threat:    #e66767;
-    --deps:      #199e70;
-    --code:      #3987e5;
-
-    --warn:      #c98500;
-    --serious:   #d95926;
-    --critical:  #e66767;
-  }
-}
-:root[data-theme="dark"] {
-  --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #232322;
-  --border: #33332f; --text-1: #ffffff; --text-2: #c3c2b7; --text-3: #8d8c84;
-  --threat: #e66767; --deps: #199e70; --code: #3987e5;
-  --warn: #c98500; --serious: #d95926; --critical: #e66767;
-}
-:root[data-theme="light"] {
-  --surface-0: #ffffff; --surface-1: #fcfcfb; --surface-2: #f3f3f1;
-  --border: #dcdcd6; --text-1: #0b0b0b; --text-2: #52514e; --text-3: #85847e;
-  --threat: #e34948; --deps: #1baf7a; --code: #2a78d6;
-  --warn: #eda100; --serious: #eb6834; --critical: #e34948;
-}
-
-* { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
 body {
-  font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  background: var(--surface-1);
-  color: var(--text-1);
   display: grid;
-  grid-template-columns: 372px 1fr;
-  grid-template-rows: auto 1fr;
+  grid-template-columns: 384px minmax(0, 1fr);
+  grid-template-rows: var(--bar-h) 1fr;
   overflow: hidden;
 }
 
-/* -- header --------------------------------------------------------- */
-header {
-  grid-column: 1 / -1;
-  display: flex; align-items: center; gap: 18px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-0);
-}
-header h1 { font-size: 14px; margin: 0; letter-spacing: -0.01em; }
-header h1 span { color: var(--text-3); font-weight: 400; }
-nav { display: flex; gap: 4px; }
-nav a {
-  font-size: 12px; text-decoration: none; color: var(--text-2);
-  padding: 4px 10px; border-radius: 6px; border: 1px solid transparent;
-}
-nav a:hover { background: var(--surface-2); }
-nav a.here {
-  color: var(--text-1); border-color: var(--border); background: var(--surface-2);
-}
-.topstats { margin-left: auto; display: flex; gap: 16px; align-items: center; }
-.topstat { text-align: right; }
-.topstat b { display: block; font: 15px/1.2 var(--mono); }
-.topstat span { font-size: 10.5px; color: var(--text-3); text-transform: uppercase;
-  letter-spacing: 0.04em; }
-
-/* -- section 1: the threat list ------------------------------------- */
+/* -- rail ------------------------------------------------------------ */
 aside {
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--line);
   background: var(--surface-0);
   overflow-y: auto;
-  display: flex; flex-direction: column;
+  min-height: 0;
 }
-.sechead {
-  position: sticky; top: 0; z-index: 5;
-  background: var(--surface-0);
-  padding: 12px 14px 8px;
-  border-bottom: 1px solid var(--border);
-}
-.sechead h2 {
-  margin: 0 0 2px; font-size: 12px; text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--text-2);
-}
-.sechead p { margin: 0; font-size: 11.5px; color: var(--text-3); }
-.filters { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 9px; }
-.filters button {
-  font: 11.5px/1 inherit; padding: 5px 9px; border-radius: 999px;
-  border: 1px solid var(--border); background: var(--surface-1);
-  color: var(--text-2); cursor: pointer;
-}
-.filters button:hover { border-color: var(--text-3); }
-.filters button.on {
-  background: var(--text-1); color: var(--surface-0); border-color: var(--text-1);
-}
+aside .sechead { position: sticky; top: 0; z-index: 5; }
+aside .sechead.sub { position: static; border-top: 1px solid var(--line); margin-top: 6px; }
+.list { padding: 9px; display: flex; flex-direction: column; gap: 6px; }
 
-.list { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
-.card {
-  border: 1px solid var(--border); border-radius: 9px;
-  background: var(--surface-1); padding: 9px 11px; cursor: pointer;
-  border-left-width: 3px;
-}
-.card:hover { border-color: var(--text-3); }
-.card.on {
-  background: var(--surface-2);
-  border-color: var(--text-2); border-left-color: var(--threat);
-  box-shadow: inset 0 0 0 1px var(--surface-0);
-}
-.card .spec {
-  font: 12.5px/1.3 var(--mono); font-weight: 600;
-  overflow-wrap: anywhere;
-}
-.card .meta {
-  margin-top: 3px; font-size: 11px; color: var(--text-3);
-  display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
-}
-.card.reach     { border-left-color: var(--threat); }
-.card.installed { border-left-color: var(--border); }
-
-/* Severity is a status, so it ships as a word, never as colour alone. */
-.chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  font: 10px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.05em;
-  padding: 3px 6px; border-radius: 4px;
-  border: 1px solid var(--border); color: var(--text-2);
-  background: var(--surface-0);
-}
-.chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
-.chip.critical i { background: var(--critical); }
-.chip.high i     { background: var(--serious); }
-.chip.moderate i, .chip.medium i { background: var(--warn); }
-.chip.low i      { background: var(--deps); }
-.chip.reach {
-  border-color: var(--threat); color: var(--threat); font-weight: 600;
-}
-.chip.quiet { color: var(--text-3); }
-
-/* -- section 2: the reach graph ------------------------------------- */
-main { display: flex; flex-direction: column; overflow: hidden; }
+/* -- stage ----------------------------------------------------------- */
+main { display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 .mainhead {
-  padding: 12px 16px 10px; border-bottom: 1px solid var(--border);
-  background: var(--surface-0);
+  padding: 12px 18px; border-bottom: 1px solid var(--line);
+  background: var(--surface-0); flex: none;
 }
-.mainhead h2 {
-  margin: 0 0 2px; font-size: 12px; text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--text-2);
-}
-.mainhead p { margin: 0; font-size: 11.5px; color: var(--text-3); }
+.mainhead h2 { font-size: 13px; margin-bottom: 4px; }
 
-/* The diagram is sized to its content, which for a short trace is a good deal
-   less than the pane. Centring it beats pinning it to the top-left corner of
-   an otherwise empty rectangle. */
+/* The sentence that says, in words, what the picture below is claiming.
+   The diagram is the evidence; this is the finding. A reader who never
+   learns the shape encoding still gets the answer. */
+.verdict {
+  font-size: 13px; line-height: 1.5; color: var(--ink-2);
+  display: flex; align-items: flex-start; gap: 9px;
+}
+.verdict .k {
+  font: 700 10px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase;
+  padding: 5px 8px; border-radius: var(--r-sm); flex: none; margin-top: 1px;
+  background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--line);
+}
+.verdict.reached .k {
+  background: var(--tint-threat); color: var(--threat);
+  border-color: color-mix(in srgb, var(--threat) 45%, transparent);
+}
+.verdict.clear .k { background: var(--tint-ok); color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.verdict b { color: var(--ink-1); font-weight: 600; }
+
 #stage {
-  flex: 1; position: relative; overflow: auto; background: var(--surface-1);
+  flex: 1; position: relative; overflow: auto; min-height: 0;
+  background:
+    radial-gradient(circle at 1px 1px,
+      color-mix(in srgb, var(--ink-3) 22%, transparent) 1px, transparent 0)
+    0 0 / 22px 22px,
+    var(--surface-1);
   display: grid; place-items: center;
 }
 #viz { display: block; }
 
-.legend {
-  position: absolute; left: 14px; bottom: 12px;
-  background: color-mix(in srgb, var(--surface-0) 92%, transparent);
-  border: 1px solid var(--border); border-radius: 8px;
-  padding: 8px 10px; font-size: 11px; color: var(--text-2);
-  display: flex; flex-direction: column; gap: 4px; pointer-events: none;
+/* Docked under the drawing, full width, never over it. */
+.legendbar {
+  flex: none; border-top: 1px solid var(--line); background: var(--surface-0);
+  padding: 9px 18px; display: flex; align-items: center; gap: 20px;
+  flex-wrap: wrap; font-size: 11px; color: var(--ink-3);
 }
-/* `display: flex` on the class outranks the `hidden` attribute's UA rule, so
-   the key stayed on screen over an empty pane however often the attribute was
-   set. Attribute selectors are the same specificity as the class, and this
-   one comes later, so it wins. */
-.legend[hidden] { display: none; }
-.legend div { display: flex; align-items: center; gap: 7px; }
-.legend i {
-  width: 11px; height: 11px; border-radius: 50%; flex: none;
-  background: var(--text-3);
+.legendbar .k {
+  font: 600 9.5px/1 var(--sans); text-transform: uppercase; letter-spacing: .1em;
+  color: var(--ink-3);
 }
-.legend i.threat { background: var(--threat); }
-.legend i.deps   { background: var(--deps); }
-.legend i.depsr  { background: transparent; border: 2px solid var(--deps); }
-.legend i.code   { background: var(--code); }
-.legend i.coder  { background: transparent; border: 2px solid var(--code); }
+.legendbar .item { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.legendbar .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+.legendbar .dot.threat { background: var(--threat-2); }
+.legendbar .dot.bridge { background: var(--deps-1); }
+.legendbar .dot.import { background: transparent; border: 2.5px solid var(--deps-2); }
+.legendbar .dot.uses   { background: var(--fleet-2); }
+.legendbar .dot.caller { background: transparent; border: 2.5px solid var(--fleet-2); }
 
-/* -- empty / note states -------------------------------------------- */
-.empty {
-  position: absolute; inset: 0; display: grid; place-items: center;
-  padding: 30px; text-align: center;
-}
-.empty .box { max-width: 460px; }
-.empty h3 { margin: 0 0 7px; font-size: 15px; }
-.empty p { margin: 0; color: var(--text-2); font-size: 12.5px; }
-.empty .good { color: var(--deps); font-weight: 600; }
-
-/* -- detail strip ---------------------------------------------------- */
+/* -- detail ---------------------------------------------------------- */
 #detail {
-  border-top: 1px solid var(--border); background: var(--surface-0);
-  max-height: 40%; overflow-y: auto; padding: 12px 16px 16px;
+  border-top: 1px solid var(--line); background: var(--surface-0);
+  max-height: 40%; overflow-y: auto; padding: 13px 18px 18px; flex: none;
 }
-#detail h3 {
-  margin: 0 0 3px; font: 13px/1.4 var(--mono); overflow-wrap: anywhere;
+#detail h3 { margin: 0 0 4px; font: 600 13.5px/1.4 var(--mono); overflow-wrap: anywhere; }
+#detail .sub {
+  font-size: 11.5px; color: var(--ink-3); margin-bottom: 11px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
 }
-#detail .sub { font-size: 11.5px; color: var(--text-3); margin-bottom: 10px; }
 .adv {
-  border: 1px solid var(--border); border-radius: 8px;
-  padding: 8px 10px; margin-bottom: 6px; background: var(--surface-1);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 9px 11px; margin-bottom: 6px; background: var(--surface-2);
 }
-.adv .id { font: 11.5px/1.3 var(--mono); font-weight: 600; }
-.adv .sum { font-size: 12px; color: var(--text-2); margin-top: 3px; }
-.adv .cvss {
-  font: 10px/1.3 var(--mono); color: var(--text-3); margin-top: 4px;
-  overflow-wrap: anywhere;
-}
-.kv { display: flex; gap: 8px; font-size: 12px; padding: 2px 0; }
-.kv b { color: var(--text-3); font-weight: 400; min-width: 92px; flex: none; }
-.kv span { color: var(--text-1); overflow-wrap: anywhere; }
-.note {
-  border: 1px solid var(--border); border-left: 3px solid var(--deps);
-  border-radius: 7px; padding: 9px 11px; font-size: 12px; color: var(--text-2);
-  background: var(--surface-1);
-}
-.note.bad { border-left-color: var(--threat); }
-.muted { color: var(--text-3); font-size: 12px; }
-.rule { height: 1px; background: var(--border); margin: 11px 0 9px; }
+.adv .id { font: 600 11.5px/1.3 var(--mono); display: flex; align-items: center; gap: 6px; }
+.adv .sum { font-size: 12px; color: var(--ink-2); margin-top: 4px; line-height: 1.45; }
+.adv .cvss { font: 10px/1.3 var(--mono); color: var(--ink-3); margin-top: 5px; overflow-wrap: anywhere; }
+.adv .rng { font: 10.5px/1.3 var(--mono); color: var(--ink-2); margin-top: 5px; }
 
-/* -- the graph itself ------------------------------------------------ */
+/* -- the diagram ----------------------------------------------------- */
 #viz text { pointer-events: none; user-select: none; }
-.nlabel { font: 11.5px var(--mono); fill: var(--text-1); }
-.nsub   { font: 10px ui-sans-serif, system-ui, sans-serif; fill: var(--text-3); }
+.nlabel { font: 600 11.5px var(--mono); fill: var(--ink-1); }
+.nsub   { font: 10px var(--sans); fill: var(--ink-3); }
 .collabel {
-  font: 10px ui-sans-serif, system-ui, sans-serif; fill: var(--text-3);
-  text-transform: uppercase; letter-spacing: 0.07em;
+  font: 600 9.5px var(--sans); fill: var(--ink-3);
+  text-transform: uppercase; letter-spacing: .11em;
 }
 .node { cursor: pointer; }
-.node circle { transition: none; }
-#viz.dim .node:not(.lit) { opacity: 0.22; }
-#viz.dim .link:not(.lit) { opacity: 0.07; }
-.link { fill: none; stroke: var(--text-3); stroke-opacity: 0.42; stroke-width: 1.4; }
-.link.lit { stroke: var(--text-2); stroke-opacity: 0.95; stroke-width: 2.2; }
-.node.sel circle { stroke: var(--text-1); stroke-width: 3; }
+#viz.dim .node:not(.lit) { opacity: .2; }
+#viz.dim .link:not(.lit) { opacity: .06; }
+.link { fill: none; stroke: var(--ink-3); stroke-opacity: .4; stroke-width: 1.5; }
+.link.lit { stroke: var(--ink-2); stroke-opacity: .95; stroke-width: 2.4; }
+.node.sel > circle.body { stroke: var(--ink-1); stroke-width: 3.5; }
+
+/* The affected version is the one node on screen that must be found
+   without reading anything. It gets the reserved hue AND a halo that
+   expands on a 2s loop -- motion is a channel colour-vision deficiency
+   does not touch, and nothing else on the page animates. */
+.halo { fill: none; stroke: var(--threat-glow); stroke-width: 2.5; }
+@keyframes haloOut {
+  0%   { r: 26px; opacity: .75; stroke-width: 3; }
+  100% { r: 44px; opacity: 0;   stroke-width: 1; }
+}
+.halo.on { animation: haloOut 2s cubic-bezier(.35,0,.5,1) infinite; }
+.halo.on.b { animation-delay: 1s; }
+@media (prefers-reduced-motion: reduce) {
+  .halo.on { animation: none; r: 32px; opacity: .5; }
+  .halo.on.b { display: none; }
+}
 </style>
 </head>
 <body>
 
-<header>
-  <h1>Blast Radius <span>· Explorer</span></h1>
-  <nav>
-    <a href="/console">Console</a>
-    <a href="/explorer" class="here">Explorer</a>
-    <a href="/graph">Live graph</a>
-  </nav>
-  <div class="topstats">
-    <div class="topstat"><b id="sConfirmed">—</b><span>confirmed</span></div>
-    <div class="topstat"><b id="sInCode">—</b><span>reach code</span></div>
-    <div class="topstat"><b id="sScanned">—</b><span>versions scanned</span></div>
+<header class="appbar">
+  <div class="bar-spacer"></div>
+  <div class="barstats">
+    <div class="barstat alarm"><b id="sConfirmed">—</b><span>confirmed</span></div>
+    <div class="barstat alarm"><b id="sInCode">—</b><span>reach your code</span></div>
+    <div class="barstat"><b id="sScanned">—</b><span>versions scanned</span></div>
+    <div class="barstat"><b id="sFunctions">—</b><span>functions read</span></div>
   </div>
 </header>
 
-<!-- ============ SECTION 1 ============ -->
+<!-- ============ 1 · what is known to be wrong ============ -->
 <aside>
   <div class="sechead">
-    <h2>1 · Confirmed threats</h2>
+    <h2><span class="step">1</span> Confirmed threats</h2>
     <p>Published advisories, recorded incidents and registry deprecations
-       against versions this graph actually holds.</p>
-    <div class="filters" id="filters">
-      <button data-f="all" class="on">All</button>
-      <button data-f="code">Reaches code</button>
-      <button data-f="compromised">Compromised</button>
-      <button data-f="deprecated">Deprecated</button>
+       against versions this graph actually holds — not against ranges that
+       merely admit them.</p>
+    <div class="pills" id="filters" style="margin-top:10px">
+      <button data-f="all" aria-pressed="true">All</button>
+      <button data-f="code" aria-pressed="false">Reaches code</button>
+      <button data-f="compromised" aria-pressed="false">Compromised</button>
+      <button data-f="deprecated" aria-pressed="false">Deprecated</button>
     </div>
   </div>
-  <div class="list" id="list"><div class="muted" style="padding:10px">Loading…</div></div>
+  <div class="list" id="list">
+    <div class="skel"></div><div class="skel"></div><div class="skel"></div>
+  </div>
 
   <!-- Its own block, below the findings and visually separated, because it
        is a different kind of fact: everything above is resolved by removing
        the package, and nothing here is. -->
-  <div class="sechead" style="position:static; border-top:1px solid var(--border)">
+  <div class="sechead sub">
     <h2>Persistence on disk</h2>
-    <p>Files in the directories a worm uses to survive
+    <p>Files in the directories a worm writes to so it survives
        <code>npm uninstall</code>.</p>
   </div>
-  <div class="list" id="persist"><div class="muted" style="padding:10px">Checking…</div></div>
+  <div class="list" id="persist"><div class="skel"></div></div>
 </aside>
 
-<!-- ============ SECTION 2 ============ -->
+<!-- ============ 2 · what it reaches ============ -->
 <main>
   <div class="mainhead">
-    <h2>2 · Reached from your code</h2>
-    <p id="mainSub">Pick a threat on the left to trace it into this repository's source.</p>
+    <h2><span class="step">2</span> Reached from your code</h2>
+    <div class="verdict" id="verdict">
+      <span class="k" id="verdictKey">no finding</span>
+      <span id="verdictText">Pick a threat on the left and this traces it,
+        hop by hop, into the functions of this repository.</span>
+    </div>
   </div>
+
   <div id="stage">
     <svg id="viz"></svg>
-    <div class="legend" id="legend" hidden>
-      <div><i class="threat"></i> the affected version</div>
-      <div><i class="deps"></i> package that pulls it in</div>
-      <div><i class="depsr"></i> the import in your source</div>
-      <div><i class="code"></i> function that uses it</div>
-      <div><i class="coder"></i> functions that call that one</div>
-    </div>
     <div class="empty" id="empty">
       <div class="box">
-        <h3 id="emptyTitle">Nothing selected</h3>
+        <span class="glyph">◎</span>
+        <h3 id="emptyTitle">Nothing selected yet</h3>
         <p id="emptyBody">Choose a finding from the list to see which imports
-          pull it in and which functions would run its code.</p>
+          pull it in and which of your functions would run its code.</p>
       </div>
     </div>
   </div>
+
+  <div class="legendbar" id="legendbar" hidden>
+    <span class="k">read left to right</span>
+    <span class="item"><i class="dot threat"></i> the affected version</span>
+    <span class="item"><i class="dot bridge"></i> package that pulls it in</span>
+    <span class="item"><i class="dot import"></i> the import in your source</span>
+    <span class="item"><i class="dot uses"></i> function that uses it</span>
+    <span class="item"><i class="dot caller"></i> functions calling that one</span>
+    <span class="grow"></span>
+    <span class="muted">hover to isolate · click for detail</span>
+  </div>
+
   <div id="detail"><div class="muted">No finding selected.</div></div>
 </main>
 
@@ -375,7 +243,6 @@ const S = {
   selected: null,     // the threat spec currently traced
   reach: null,        // its /api/explorer/reach payload
   nodeByKey: new Map(),
-  laidOut: [],
   edges: [],
   picked: null,       // a graph node clicked for detail
 };
@@ -383,9 +250,10 @@ const S = {
 const el = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => (
   { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + "s")}`;
 
 /* ==================================================================
-   Section 1 — the threat list
+   1 — the threat list
    ================================================================== */
 async function loadThreats() {
   let data;
@@ -395,23 +263,26 @@ async function loadThreats() {
     data = await r.json();
   } catch (e) {
     el("list").innerHTML =
-      `<div class="note bad" style="margin:8px">Could not read the graph:
-       ${esc(String(e))}. Is the HydraDB node up and a repo ingested?</div>`;
+      `<div class="note bad">Could not read the graph: ${esc(String(e))}.
+       <br><br>Is the HydraDB node up, and has a repository been ingested from
+       the <a href="/graph">live graph</a> page?</div>`;
     return;
   }
 
   S.threats = data.threats || [];
   const c = data.counts || {}, sc = data.scanned || {};
-  el("sConfirmed").textContent = c.total ?? 0;
-  el("sInCode").textContent = c.in_code ?? 0;
-  el("sScanned").textContent = (sc.versions ?? 0).toLocaleString();
+  setStat("sConfirmed", c.total ?? 0);
+  setStat("sInCode", c.in_code ?? 0);
+  setStat("sScanned", (sc.versions ?? 0).toLocaleString());
+  setStat("sFunctions", (sc.functions ?? 0).toLocaleString());
 
   // The denominator is the finding. "2 of 13" is a different morning from
-  // "13 findings", and only one of those two numbers tells you where to start.
-  el("mainSub").textContent =
-    `${c.in_code ?? 0} of ${c.total ?? 0} confirmed threats are reachable from ` +
-    `the ${sc.functions ?? 0} function(s) scanned in this repository.`;
-
+  // "13 findings", and only one of those two numbers says where to start.
+  if (!S.selected) {
+    setVerdict("", `${c.in_code ?? 0} of ${c.total ?? 0} confirmed threats are
+      reachable from the ${(sc.functions ?? 0).toLocaleString()} functions
+      scanned in this repository. Pick one to trace it.`);
+  }
   renderList();
 }
 
@@ -425,23 +296,21 @@ function renderList() {
   const rows = S.threats.filter(passesFilter);
   const box = el("list");
   if (!rows.length) {
-    box.innerHTML = `<div class="muted" style="padding:10px">
-      Nothing matches this filter.</div>`;
+    box.innerHTML = `<div class="note">Nothing matches this filter.
+      ${S.threats.length ? "" : " No confirmed threat is on record for this graph yet."}</div>`;
     return;
   }
   box.innerHTML = rows.map((t) => {
     const sev = (t.severity || "unknown").toLowerCase();
     const bits = [];
     if (t.in_code) {
-      bits.push(`<span class="chip reach">reaches ${t.function_count}
-        function${t.function_count === 1 ? "" : "s"}</span>`);
+      bits.push(`<span class="chip loud">reaches ${plural(t.function_count, "function")}</span>`);
     } else {
       bits.push(`<span class="chip quiet">installed only</span>`);
     }
     if (t.kind === "compromised") {
       const sim = t.incident && t.incident.simulated;
-      bits.push(`<span class="chip ${sim ? "quiet" : "critical"}">
-        <i></i>${sim ? "drill" : "compromised"}</span>`);
+      bits.push(`<span class="chip ${sim ? "quiet" : "critical"}"><i></i>${sim ? "drill" : "compromised"}</span>`);
     }
     if (t.kind === "deprecated") bits.push(`<span class="chip quiet"><i></i>deprecated</span>`);
     if (t.live_window_services.length) {
@@ -455,9 +324,10 @@ function renderList() {
       bits.push(`<span class="muted">${esc(t.services.length === 1
         ? t.services[0] : t.services.length + " services")}</span>`);
     }
-    return `<div class="card ${t.in_code ? "reach" : "installed"}
-                 ${S.selected === t.spec ? "on" : ""}" data-spec="${esc(t.spec)}">
-      <div class="spec">${esc(t.spec)}</div>
+    const on = S.selected === t.spec;
+    return `<div class="card tappable ${t.in_code ? "is-threat" : "is-quiet"}"
+                 aria-selected="${on}" data-spec="${esc(t.spec)}">
+      <div class="title">${esc(t.spec)}</div>
       <div class="meta">
         <span class="chip ${esc(sev)}"><i></i>${esc(sev)}</span>
         ${bits.join("")}
@@ -475,19 +345,19 @@ el("filters").onclick = (e) => {
   if (!b) return;
   S.filter = b.dataset.f;
   for (const other of el("filters").querySelectorAll("button")) {
-    other.classList.toggle("on", other === b);
+    other.setAttribute("aria-pressed", String(other === b));
   }
   renderList();
 };
 
 /* ==================================================================
-   Section 2 — trace one threat into the code
+   2 — trace one threat into the code
    ================================================================== */
 async function select(spec) {
   S.selected = spec;
   S.picked = null;
   renderList();
-  showEmpty("Tracing…", `Walking the graph from ${spec} to source.`);
+  showEmpty("Tracing…", `Walking the graph from ${spec} into this repository's source.`);
 
   const threat = S.threats.find((t) => t.spec === spec);
   try {
@@ -497,6 +367,7 @@ async function select(spec) {
   } catch (e) {
     S.reach = null;
     showEmpty("Could not trace it", String(e));
+    setVerdict("", "The trace failed. The finding above is still on record.");
     return;
   }
 
@@ -505,26 +376,37 @@ async function select(spec) {
     // Not a false positive, and the wording has to say so: the package is
     // installed and the advisory does apply. Nothing here imports it, which
     // is the difference between "patch now" and "patch Tuesday".
-    showEmpty(
-      "Installed, but not reached from your source",
-      S.reach.note || "",
-      true,
-    );
+    showEmpty("Installed, but nothing here imports it",
+              S.reach.note || "", true);
+    setVerdict("clear", `<b>${esc(spec)}</b> is installed, but no file in this
+      repository imports it. The advisory stands; the exposure is the
+      dependency tree, not your source.`);
   } else {
     hideEmpty();
     drawGraph(S.reach.nodes, S.reach.edges);
+    const imports = (threat && threat.import_count) || 0;
+    const fns = (threat && threat.function_count) || 0;
+    setVerdict("reached", `<b>${esc(spec)}</b> is reached through
+      ${plural(imports, "import")} and runs inside ${plural(fns, "function")}
+      of your code. Everything below the first circle is yours.`);
   }
   renderDetail(threat);
 }
 
+function setVerdict(kind, html) {
+  const v = el("verdict");
+  v.className = "verdict" + (kind ? " " + kind : "");
+  el("verdictKey").textContent =
+    kind === "reached" ? "reaches code" : kind === "clear" ? "not imported" : "overview";
+  el("verdictText").innerHTML = html;
+}
+
 function showEmpty(title, body, good) {
   el("emptyTitle").textContent = title;
-  el("emptyBody").innerHTML = good
-    ? `<span class="good">${esc(body)}</span>`
-    : esc(body);
-  el("empty").style.display = "grid";
+  el("emptyBody").innerHTML = good ? `<span class="good">${esc(body)}</span>` : esc(body);
+  el("empty").hidden = false;
 }
-function hideEmpty() { el("empty").style.display = "none"; }
+function hideEmpty() { el("empty").hidden = true; }
 
 /* -- layout ---------------------------------------------------------
    A fixed layered layout, not a force solver. The columns ARE the
@@ -532,8 +414,8 @@ function hideEmpty() { el("empty").style.display = "none"; }
    function that uses it, who calls that -- so letting a physics
    simulation decide left-to-right order would scramble the one thing
    the picture is for. */
-const COL_W = 208, ROW_H = 74, PAD_X = 92, PAD_Y = 58;
-const RADIUS = { threat: 25, bridge: 19, import: 17, uses: 16, caller: 13 };
+const COL_W = 214, ROW_H = 78, PAD_X = 96, PAD_Y = 64;
+const RADIUS = { threat: 26, bridge: 19, import: 17, uses: 16, caller: 13 };
 const COL_TITLE = {
   threat: "affected version", bridge: "pulled in by", import: "imported in source",
   uses: "used by", caller: "called from",
@@ -543,15 +425,13 @@ function drawGraph(nodes, edges) {
   const svg = el("viz");
   S.nodeByKey = new Map(nodes.map((n) => [n.key, n]));
   S.edges = edges;
-  // A legend keyed to five node kinds, floating over a blank pane, describes
-  // nothing that is on screen.
-  el("legend").hidden = !nodes.length;
-  if (!nodes.length) { svg.innerHTML = ""; S.laidOut = []; return; }
+  // A five-row key over a blank pane describes nothing that is on screen.
+  el("legendbar").hidden = !nodes.length;
+  if (!nodes.length) { svg.innerHTML = ""; return; }
 
   // Columns arrive sparse -- a direct import has no bridge, so it jumps
   // 0 -> 2. Compact them so the picture has no empty lane.
   const used = [...new Set(nodes.map((n) => n.column))].sort((a, b) => a - b);
-  const lane = new Map(used.map((c, i) => [c, i]));
   const cols = used.map((c) => nodes.filter((n) => n.column === c));
 
   // Two barycentre passes: order each column by the mean position of the
@@ -592,8 +472,14 @@ function drawGraph(nodes, edges) {
       });
     });
   });
-  S.laidOut = placed;
   const at = new Map(placed.map((n) => [n.key, n]));
+
+  // Column bands, drawn first and very faint. They make the five stages
+  // readable as stages without adding a single line of ink to the nodes.
+  const bands = order.map((column, i) => column.length
+    ? `<rect x="${PAD_X + i * COL_W - COL_W / 2 + 8}" y="18"
+             width="${COL_W - 16}" height="${H - 30}" rx="12"
+             fill="var(--surface-0)" opacity="${i % 2 ? 0.55 : 0.28}"></rect>` : "").join("");
 
   const links = edges.map((e) => {
     const a = at.get(e.src), b = at.get(e.dst);
@@ -607,22 +493,23 @@ function drawGraph(nodes, edges) {
       d="M${x1},${a.y} C${mx},${a.y} ${mx},${b.y} ${x2},${b.y}"></path>`;
   }).join("");
 
-  const heads = order.map((column, i) => {
-    if (!column.length) return "";
-    return `<text class="collabel" x="${PAD_X + i * COL_W}" y="26"
-      text-anchor="middle">${esc(COL_TITLE[column[0].kind] || "")}</text>`;
-  }).join("");
+  const heads = order.map((column, i) => column.length
+    ? `<text class="collabel" x="${PAD_X + i * COL_W}" y="34"
+        text-anchor="middle">${esc(COL_TITLE[column[0].kind] || "")}</text>` : "").join("");
 
   const circles = placed.map((n) => {
-    const style = fillFor(n.kind);
-    const label = clip(n.label, 26);
-    const subShort = clip(n.sub || "", 32);
-    return `<g class="node" data-key="${esc(n.key)}"
-              transform="translate(${n.x},${n.y})">
-      <circle r="${n.r}" fill="${style.fill}" stroke="${style.stroke}"
-              stroke-width="${style.width}"></circle>
-      <text class="nlabel" y="${n.r + 15}" text-anchor="middle">${esc(label)}</text>
-      <text class="nsub" y="${n.r + 27}" text-anchor="middle">${esc(subShort)}</text>
+    const st = fillFor(n.kind);
+    // Two haloes half a cycle apart, so the ring is continuous rather than
+    // blinking on and off.
+    const halo = n.kind === "threat"
+      ? `<circle class="halo on" r="26"></circle><circle class="halo on b" r="26"></circle>`
+      : "";
+    return `<g class="node" data-key="${esc(n.key)}" transform="translate(${n.x},${n.y})">
+      ${halo}
+      <circle class="body" r="${n.r}" fill="${st.fill}" stroke="${st.stroke}"
+              stroke-width="${st.width}"></circle>
+      <text class="nlabel" y="${n.r + 16}" text-anchor="middle">${esc(clip(n.label, 26))}</text>
+      <text class="nsub" y="${n.r + 28}" text-anchor="middle">${esc(clip(n.sub || "", 32))}</text>
     </g>`;
   }).join("");
 
@@ -631,7 +518,7 @@ function drawGraph(nodes, edges) {
   svg.setAttribute("height", H);
   svg.style.width = W + "px";
   svg.style.height = H + "px";
-  svg.innerHTML = heads + links + circles;
+  svg.innerHTML = bands + heads + links + circles;
 
   for (const g of svg.querySelectorAll(".node")) {
     g.onmouseenter = () => highlight(g.dataset.key);
@@ -653,14 +540,14 @@ function clip(text, max) {
   return text.slice(0, head) + "…" + text.slice(text.length - (max - 1 - head));
 }
 
-/* Filled vs ring is the fourth distinction, standing in for the hue that
-   all-pairs validation would not allow. See the note at the top. */
+/* Filled vs ring is the fourth and fifth distinction, standing in for hues
+   that all-pairs validation would not allow. See the note at the top. */
 function fillFor(kind) {
-  if (kind === "threat") return { fill: "var(--threat)", stroke: "var(--threat)", width: 2 };
-  if (kind === "bridge") return { fill: "var(--deps)", stroke: "var(--deps)", width: 2 };
-  if (kind === "import") return { fill: "var(--surface-1)", stroke: "var(--deps)", width: 2.6 };
-  if (kind === "uses")   return { fill: "var(--code)", stroke: "var(--code)", width: 2 };
-  return { fill: "var(--surface-1)", stroke: "var(--code)", width: 2.6 };
+  if (kind === "threat") return { fill: "var(--threat-2)", stroke: "var(--threat-1)", width: 2 };
+  if (kind === "bridge") return { fill: "var(--deps-1)", stroke: "var(--deps-1)", width: 2 };
+  if (kind === "import") return { fill: "var(--surface-0)", stroke: "var(--deps-2)", width: 3 };
+  if (kind === "uses")   return { fill: "var(--fleet-2)", stroke: "var(--fleet-1)", width: 2 };
+  return { fill: "var(--surface-0)", stroke: "var(--fleet-2)", width: 3 };
 }
 
 function highlight(key) {
@@ -732,11 +619,11 @@ function nodeDetail(n, threat) {
   }
 
   return `<h3>${esc(n.label)}</h3>
-    <div class="sub">${esc(title)}</div>
+    <div class="sub"><span class="chip quiet">${esc(n.kind)}</span> ${esc(title)}</div>
     ${rows.join("")}
     <div class="rule"></div>
     <div class="muted">Part of the trace for <b>${esc(threat.spec)}</b>.
-      Click the background of the list to go back to the finding.</div>`;
+      Click empty space in the list to go back to the finding.</div>`;
 }
 
 function threatDetail(t) {
@@ -744,9 +631,9 @@ function threatDetail(t) {
   const head = `<h3>${esc(t.spec)}</h3>
     <div class="sub">
       <span class="chip ${esc(sev)}"><i></i>${esc(sev)}</span>
-      &nbsp;${t.in_code
-        ? `reached by ${t.import_count} import(s), running in ${t.function_count} function(s)`
-        : "installed, not imported from source here"}
+      <span>${t.in_code
+        ? `reached by ${plural(t.import_count, "import")}, running in ${plural(t.function_count, "function")}`
+        : "installed, not imported from source here"}</span>
     </div>`;
 
   const rows = [];
@@ -769,7 +656,7 @@ function threatDetail(t) {
   let incident = "";
   if (t.incident) {
     const sim = t.incident.simulated;
-    incident = `<div class="note ${sim ? "" : "bad"}" style="margin:9px 0">
+    incident = `<div class="note ${sim ? "" : "bad"}" style="margin:10px 0">
       <b>${esc(t.incident.incident_id)}</b> — ${esc(t.incident.status)}<br>
       ${esc(t.incident.summary)}
       ${sim ? "<br><b>This is a drill, not a live compromise.</b>" : ""}
@@ -779,8 +666,7 @@ function threatDetail(t) {
   const advisories = t.advisories.map((a) => `
     <div class="adv">
       <div class="id">${esc(a.advisory_id)}
-        <span class="chip ${esc((a.severity || "").toLowerCase())}"
-              style="margin-left:5px"><i></i>${esc(a.severity || "unrated")}</span>
+        <span class="chip ${esc((a.severity || "").toLowerCase())}"><i></i>${esc(a.severity || "unrated")}</span>
       </div>
       ${a.summary ? `<div class="sum">${esc(a.summary)}</div>` : ""}
       ${range(a)}
@@ -788,9 +674,9 @@ function threatDetail(t) {
     </div>`).join("");
 
   const trailer = (!t.in_code && S.reach && S.reach.note)
-    ? `<div class="note" style="margin-top:9px">${esc(S.reach.note)}</div>`
+    ? `<div class="note" style="margin-top:10px">${esc(S.reach.note)}</div>`
     : (S.reach && S.reach.truncated_callers
-        ? `<div class="note" style="margin-top:9px">
+        ? `<div class="note" style="margin-top:10px">
              ${S.reach.truncated_callers} further caller(s) exist beyond the two
              hops drawn, and are counted rather than shown.</div>`
         : "");
@@ -821,7 +707,7 @@ function range(a) {
   const parts = [];
   if (from) parts.push(`introduced <b>${esc(from)}</b>`);
   parts.push(to ? `fixed in <b>${esc(to)}</b>` : `<b>no fix published</b>`);
-  return `<div class="cvss" style="color:var(--text-2)">${parts.join(" · ")}</div>`;
+  return `<div class="rng">${parts.join(" · ")}</div>`;
 }
 
 /* Clicking empty space in the list clears a picked graph node, so the panel
@@ -841,7 +727,7 @@ async function loadPersistence() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     d = await r.json();
   } catch (e) {
-    box.innerHTML = `<div class="note bad" style="margin:8px">${esc(String(e))}</div>`;
+    box.innerHTML = `<div class="note bad">${esc(String(e))}</div>`;
     return;
   }
 
@@ -851,8 +737,8 @@ async function loadPersistence() {
     // second one dressed as the first is the worst output this tool can
     // produce. Naming the directories that were checked is what separates
     // them.
-    box.innerHTML = `<div class="note" style="margin:8px">
-      Nothing in ${esc((d.watched_dirs || []).join(", "))}.
+    box.innerHTML = `<div class="note good">
+      Nothing in <b>${esc((d.watched_dirs || []).join(", "))}</b>.
       <span class="muted">These directories are checked on every ingest
       because a worm that writes there outlives the package that carried
       it.</span></div>`;
@@ -861,8 +747,8 @@ async function loadPersistence() {
 
   box.innerHTML = rows.slice(0, 40).map((a) => {
     const ioc = a.kind !== "watched-dir";
-    return `<div class="card ${ioc ? "reach" : "installed"}">
-      <div class="spec">${esc(a.path)}</div>
+    return `<div class="card ${ioc ? "is-threat" : "is-quiet"}">
+      <div class="title">${esc(a.path)}</div>
       <div class="meta">
         <span class="chip ${ioc ? "critical" : "quiet"}"><i></i>${esc(a.kind)}</span>
         ${a.watched_dir ? `<span class="chip quiet">${esc(a.watched_dir)}</span>` : ""}

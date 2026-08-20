@@ -6,53 +6,92 @@
 <title>Blast Radius Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/base.css">
+<script src="/static/chrome.js"></script>
 <style>
 /* ------------------------------------------------------------------ tokens
-   Lifted from the design handoff. The tier colours carry the argument:
-   red is filed against the node, amber is a traced path, yellow is build
-   scope only, green is checked-and-clear. Green is a result, not an absence. */
+   Every name below is an ALIAS onto base.css, not a value.
+
+   This page was built dark-only against its own violet palette, so a
+   colour meant one thing here and something else two tabs away -- and
+   the tool whose entire job is explaining a graph was speaking three
+   dialects. Rather than rewrite eight hundred lines of selectors, the
+   old names are kept and repointed at the shared tokens: the page reads
+   the same, but it now themes with the others and draws from the one
+   validated palette.
+
+   The tier colours carry the argument and keep their meaning: red is
+   filed against the node, amber is a traced path, yellow is build scope
+   only, green is checked-and-clear. Green is a result, not an absence.
+   They map onto the reserved STATUS ramp, which is outside the
+   categorical set on every page for exactly this reason.
+
+   `--soft-N` replaces the hardcoded var(--soft-1) washes. Those
+   are invisible on a light surface, which is the single thing that
+   would have made this page unusable in the shared theme. */
 :root{
-  --bg:#08080b; --panel:#0a0a0e; --panel-2:#0b0b10; --panel-3:#0e0e14;
-  --line:rgba(255,255,255,0.08); --line-2:rgba(255,255,255,0.07);
-  --line-3:rgba(255,255,255,0.06);
-  --fg:#eceef4; --fg-2:#cfd2de; --fg-3:#b6b9c8; --fg-4:#a8abbb;
-  --mut:#9a9db0; --mut-2:#82859a; --mut-3:#74778a; --mut-4:#6f7286; --mut-5:#5d6072;
-  --high:#ff5d5d; --mod:#ffb14d; --warn:#f2d05a; --safe:#48d597; --violet:#7c6bff;
-  --violet-fg:#b5a6ff;
-  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
-  --sans:'Space Grotesk',system-ui,-apple-system,sans-serif;
+  --bg:var(--surface-1); --panel:var(--surface-0);
+  --panel-2:var(--surface-0); --panel-3:var(--surface-2);
+  --line-2:var(--line-soft);
+  --line-3:var(--line-soft);
+  --fg:var(--ink-1); --fg-2:var(--ink-2); --fg-3:var(--ink-2); --fg-4:var(--ink-2);
+  --mut:var(--ink-3); --mut-2:var(--ink-3); --mut-3:var(--ink-3);
+  --mut-4:var(--ink-3); --mut-5:var(--ink-3);
+
+  --high:var(--critical); --mod:var(--serious); --warn:var(--warn);
+  --safe:var(--ok); --violet:var(--accent); --violet-fg:var(--accent);
+
+  --soft-1:color-mix(in srgb, var(--ink-1) 3%, transparent);
+  --soft-2:color-mix(in srgb, var(--ink-1) 5%, transparent);
+  --soft-3:color-mix(in srgb, var(--ink-1) 9%, transparent);
+  --soft-4:color-mix(in srgb, var(--ink-1) 14%, transparent);
+  --soft-5:color-mix(in srgb, var(--ink-1) 24%, transparent);
 }
+/* base.css ships generic .card/.empty/.step/.rule components. This page
+   had all four names first and means something different by each, and it
+   loads after, so it wins wherever both set a property -- but not where
+   base.css sets one this page never does (a .card gains padding, an
+   .empty becomes position:absolute). Those four are reset here rather
+   than renamed across eight hundred lines. */
+.card{padding:0;box-shadow:none}
+.empty{position:static;inset:auto;display:block;place-items:normal}
+.lane .step,.stage .step{width:auto;height:auto;border-radius:0;background:none;
+  display:inline;place-items:normal;font-weight:400}
+.lane .rule{border:0}
+
 *{box-sizing:border-box}
 html,body{margin:0;padding:0;background:var(--bg)}
-body{font-family:var(--sans);color:var(--fg);height:100vh;overflow:hidden}
+body{font-family:var(--sans);color:var(--fg);height:100vh;overflow:hidden;
+  display:flex;flex-direction:column}
 a{color:var(--violet-fg);text-decoration:none}
-a:hover{color:#d5ccff}
+a:hover{color:var(--accent)}
 button{font-family:var(--sans)}
 ::-webkit-scrollbar{height:9px;width:9px}
-::-webkit-scrollbar-track{background:rgba(255,255,255,0.03)}
-::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15);border-radius:6px}
-::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.26)}
+::-webkit-scrollbar-track{background:var(--soft-1)}
+::-webkit-scrollbar-thumb{background:var(--soft-4);border-radius:6px}
+::-webkit-scrollbar-thumb:hover{background:var(--soft-5)}
 
 @keyframes brFlow{to{stroke-dashoffset:-36}}
 @keyframes brRise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 @keyframes brDraw{from{stroke-dashoffset:620}to{stroke-dashoffset:0}}
-@keyframes brPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,177,77,.32)}55%{box-shadow:0 0 0 9px rgba(255,177,77,0)}}
+@keyframes brPulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb, var(--serious) 32%, transparent)}55%{box-shadow:0 0 0 9px transparent}}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* ------------------------------------------------------------------ shell */
-#shell{display:grid;grid-template-columns:232px minmax(0,1fr);height:100vh;background:var(--bg);overflow:hidden}
+#shell{display:grid;grid-template-columns:232px minmax(0,1fr);flex:1;min-height:0;
+  background:var(--bg);overflow:hidden}
 
 aside{border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
 .brand-box{padding:18px 18px 16px;border-bottom:1px solid var(--line-2)}
 .brand{font-size:14.5px;font-weight:700;letter-spacing:-.01em}
 .brand-sub{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut-4);margin-top:4px}
 
-nav{padding:12px 10px;display:flex;flex-direction:column;gap:2px;border-bottom:1px solid var(--line-2)}
+aside > nav{padding:12px 10px;display:flex;flex-direction:column;gap:2px;border-bottom:1px solid var(--line-2)}
 .nav-btn{display:flex;align-items:center;gap:10px;text-align:left;cursor:pointer;border:0;border-radius:8px;
   padding:9px 11px;background:transparent;color:var(--mut);font-size:13.5px;font-weight:500;transition:background .14s}
-.nav-btn:hover{background:rgba(255,255,255,.05)}
-.nav-btn.on{background:rgba(124,107,255,.16);color:var(--fg)}
+.nav-btn:hover{background:var(--soft-2)}
+.nav-btn.on{background:color-mix(in srgb, var(--accent) 16%, transparent);color:var(--fg)}
 .nav-btn .g{font-family:var(--mono);font-size:11px;color:var(--mut-5);width:13px}
 .nav-btn.on .g{color:var(--violet)}
 .nav-btn .lbl{flex:1}
@@ -64,22 +103,22 @@ nav{padding:12px 10px;display:flex;flex-direction:column;gap:2px;border-bottom:1
 #targets{flex:1;overflow-y:auto;padding:0 10px 12px;display:flex;flex-direction:column;gap:2px;min-height:0}
 .tgt{text-align:left;cursor:pointer;border:1px solid var(--line-2);background:transparent;border-radius:8px;
   padding:9px 10px;transition:border-color .14s,background .14s}
-.tgt:hover{border-color:rgba(255,255,255,.24)}
-.tgt.on{background:rgba(124,107,255,.14);border-color:rgba(124,107,255,.5)}
+.tgt:hover{border-color:var(--soft-5)}
+.tgt.on{background:color-mix(in srgb, var(--accent) 14%, transparent);border-color:color-mix(in srgb, var(--accent) 50%, transparent)}
 .tgt .row{display:flex;align-items:center;gap:8px}
 .tgt .gl{font-family:var(--mono);font-size:10px;flex:0 0 auto}
-.tgt .nm{font-family:var(--mono);font-size:11.5px;color:#e4e7ef;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tgt .nm{font-family:var(--mono);font-size:11.5px;color:var(--ink-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tgt .mt{font-family:var(--mono);font-size:10px;color:var(--mut-3);margin-top:5px}
 .side-foot{border-top:1px solid var(--line-2);padding:12px 16px;font-family:var(--mono);
   font-size:10.5px;color:var(--mut-4);line-height:1.7}
 
 /* ----------------------------------------------------------------- header */
 main{display:flex;flex-direction:column;min-width:0;min-height:0}
-header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-bottom:1px solid var(--line);
+main > header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-bottom:1px solid var(--line);
   background:var(--panel);flex-wrap:wrap;flex:0 0 auto}
 .view-title{font-size:15px;font-weight:600;letter-spacing:-.01em}
 .view-sub{font-family:var(--mono);font-size:10.5px;color:var(--mut-4);margin-top:3px}
-.focus{display:flex;align-items:center;gap:9px;background:var(--panel-3);border:1px solid rgba(255,255,255,.11);
+.focus{display:flex;align-items:center;gap:9px;background:var(--panel-3);border:1px solid var(--soft-3);
   border-radius:8px;padding:8px 13px;min-width:300px}
 .focus .k{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut-4)}
 .focus .v{font-family:var(--mono);font-size:12.5px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -91,21 +130,21 @@ header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-bottom:
   color:var(--mut);white-space:nowrap;cursor:default}
 .tier-chip .g{font-size:10px}
 .tier-chip .id{font-weight:700}
-.act{cursor:pointer;border:1px solid rgba(255,93,93,.35);background:rgba(255,93,93,.09);color:#ff9c9c;
+.act{cursor:pointer;border:1px solid color-mix(in srgb, var(--critical) 35%, transparent);background:color-mix(in srgb, var(--critical) 9%, transparent);color:var(--critical);
   border-radius:8px;padding:8px 14px;font-family:var(--mono);font-size:11.5px;white-space:nowrap;transition:background .14s}
-.act:hover{background:rgba(255,93,93,.17)}
+.act:hover{background:color-mix(in srgb, var(--critical) 17%, transparent)}
 .act[disabled]{opacity:.45;cursor:not-allowed}
-.act.retract{border-color:rgba(72,213,151,.35);background:rgba(72,213,151,.09);color:#6fe0af}
-.act.retract:hover{background:rgba(72,213,151,.17)}
+.act.retract{border-color:color-mix(in srgb, var(--ok) 35%, transparent);background:color-mix(in srgb, var(--ok) 9%, transparent);color:var(--ok)}
+.act.retract:hover{background:color-mix(in srgb, var(--ok) 17%, transparent)}
 
 /* ------------------------------------------------------------------- body */
 #body{flex:1;overflow:auto;min-height:0;padding:18px 22px 28px}
 
 .story{display:flex;align-items:flex-start;gap:16px;border:1px solid var(--line);
-  background:rgba(255,255,255,.025);border-radius:12px;padding:15px 17px}
-.story.p0{background:rgba(255,93,93,.06);border-color:rgba(255,93,93,.3)}
+  background:var(--soft-1);border-radius:12px;padding:15px 17px}
+.story.p0{background:color-mix(in srgb, var(--critical) 6%, transparent);border-color:color-mix(in srgb, var(--critical) 30%, transparent)}
 .story .badge{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;font-weight:700;
-  letter-spacing:.06em;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);
+  letter-spacing:.06em;background:var(--soft-2);border:1px solid var(--soft-4);
   border-radius:6px;padding:5px 9px;white-space:nowrap;flex:0 0 auto}
 .story .badge .g{font-size:10px}
 .story .sentence{font-size:14.5px;line-height:1.55;color:var(--fg);text-wrap:pretty}
@@ -142,7 +181,7 @@ header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-bottom:
   padding:2px 5px;border-radius:4px;white-space:nowrap}
 .gnode{position:absolute;cursor:pointer;border:1px solid;border-radius:10px;padding:9px 11px;
   transition:transform .16s ease,border-color .16s ease}
-.gnode:hover{transform:translateY(-2px);border-color:rgba(255,255,255,.36)}
+.gnode:hover{transform:translateY(-2px);border-color:var(--ink-3)}
 .gnode .r1{display:flex;align-items:center;gap:8px}
 .gnode .gl{font-family:var(--mono);font-size:10px;flex:0 0 auto}
 .gnode .nm{font-family:var(--mono);font-size:12px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -151,23 +190,23 @@ header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-bottom:
   overflow:hidden;text-overflow:ellipsis}
 .gnode .tag{font-family:var(--mono);font-size:8.5px;font-weight:700;letter-spacing:.08em;border-radius:4px;
   padding:2px 5px;white-space:nowrap;flex:0 0 auto}
-.tip{position:absolute;width:296px;z-index:5;border:1px solid rgba(255,255,255,.18);background:rgba(12,12,18,.97);
-  backdrop-filter:blur(8px);border-radius:10px;padding:13px 14px;box-shadow:0 18px 40px -18px rgba(0,0,0,.9);
+.tip{position:absolute;width:296px;z-index:5;border:1px solid var(--soft-5);background:color-mix(in srgb, var(--surface-0) 97%, transparent);
+  backdrop-filter:blur(8px);border-radius:10px;padding:13px 14px;box-shadow:var(--shadow-2);
   pointer-events:none}
 .tip .r{display:flex;align-items:center;gap:8px}
 .tip .nm{font-family:var(--mono);font-size:12px;color:var(--fg)}
 .tip .tr{font-family:var(--mono);font-size:10px;font-weight:700}
-.tip .why{font-size:12.5px;line-height:1.5;color:#b8bbc9;margin-top:9px;text-wrap:pretty}
+.tip .why{font-size:12.5px;line-height:1.5;color:var(--ink-2);margin-top:9px;text-wrap:pretty}
 .tip .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut-4);margin-top:11px}
 .tip .edges{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
-.tip .e{font-family:var(--mono);font-size:9.5px;color:#d9c9a0;background:rgba(255,177,77,.1);
-  border:1px solid rgba(255,177,77,.28);border-radius:4px;padding:3px 6px}
+.tip .e{font-family:var(--mono);font-size:9.5px;color:var(--ident-2);background:color-mix(in srgb, var(--serious) 10%, transparent);
+  border:1px solid color-mix(in srgb, var(--serious) 28%, transparent);border-radius:4px;padding:3px 6px}
 .tip .mt{font-family:var(--mono);font-size:10px;color:var(--mut-3);margin-top:11px;word-break:break-all}
 
 /* --------------------------------------------------------------- findings */
 .split{display:flex;flex-wrap:wrap;gap:14px;margin-top:14px;align-items:flex-start}
 .pane{flex:1 1 620px;min-width:0;border:1px solid var(--line);border-radius:12px;overflow:hidden}
-.pane-head{display:flex;align-items:center;gap:12px;padding:11px 16px;background:rgba(255,255,255,.03);
+.pane-head{display:flex;align-items:center;gap:12px;padding:11px 16px;background:var(--soft-1);
   border-bottom:1px solid var(--line-2)}
 .pane-head .t{font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--fg-3)}
 .pane-head .h{font-family:var(--mono);font-size:10.5px;color:var(--mut-3)}
@@ -177,10 +216,10 @@ header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-bottom:
 
 .finding{cursor:pointer;padding:13px 16px;border-bottom:1px solid var(--line-3);display:grid;
   grid-template-columns:62px minmax(180px,240px) minmax(0,1fr) 118px;gap:14px;align-items:center;transition:background .14s}
-.finding:hover{background:rgba(255,255,255,.045)}
-.finding.on{background:rgba(124,107,255,.1)}
+.finding:hover{background:var(--soft-2)}
+.finding.on{background:color-mix(in srgb, var(--accent) 10%, transparent)}
 .tier-badge{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;font-weight:700;
-  background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);border-radius:5px;padding:4px 6px;justify-self:start}
+  background:var(--soft-2);border:1px solid var(--soft-4);border-radius:5px;padding:4px 6px;justify-self:start}
 .tier-badge .g{font-size:9px}
 .finding .pkg{font-family:var(--mono);font-size:12.5px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .finding .counts{font-family:var(--mono);font-size:10px;color:var(--mut-3);margin-top:5px}
@@ -188,47 +227,47 @@ header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-bottom:
 .path{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap}
 .hop{font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:3px 7px;white-space:nowrap;border:1px solid}
 .hop-edge{font-family:var(--mono);font-size:8.5px;letter-spacing:.06em;color:var(--mut-4);white-space:nowrap}
-.open-btn{cursor:pointer;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:#d5ccff;
+.open-btn{cursor:pointer;border:1px solid var(--soft-4);background:var(--soft-2);color:var(--accent);
   border-radius:7px;padding:8px 10px;font-family:var(--mono);font-size:10.5px;white-space:nowrap;transition:background .14s,border-color .14s}
-.open-btn:hover{background:rgba(124,107,255,.16);border-color:rgba(124,107,255,.5)}
+.open-btn:hover{background:color-mix(in srgb, var(--accent) 16%, transparent);border-color:color-mix(in srgb, var(--accent) 50%, transparent)}
 .tier-def{display:flex;gap:10px}
 .tier-def .id{font-family:var(--mono);font-size:11px;font-weight:700;flex:0 0 46px}
 .tier-def .help{font-size:12.5px;color:var(--fg-4);line-height:1.45;flex:1;text-wrap:pretty}
-.edge-def .id{font-family:var(--mono);font-size:10.5px;color:#d9c9a0}
+.edge-def .id{font-family:var(--mono);font-size:10.5px;color:var(--ident-2)}
 .edge-def .help{font-size:12px;color:var(--mut-2);margin-top:3px;line-height:1.45}
 
 /* ------------------------------------------------------------- advisories */
 .adv-grid{display:grid;grid-template-columns:minmax(120px,190px) 110px minmax(0,1fr) 90px;gap:12px;
   padding:12px 16px;align-items:center;border-top:1px solid var(--line-3)}
 .adv-head{display:grid;grid-template-columns:minmax(120px,190px) 110px minmax(0,1fr) 90px;gap:12px;padding:11px 16px;
-  background:rgba(255,255,255,.03);font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;
+  background:var(--soft-1);font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;
   text-transform:uppercase;color:var(--mut-4)}
 .adv-grid .id{font-family:var(--mono);font-size:12px;color:var(--fg);cursor:pointer}
 .adv-grid .id:hover{color:var(--violet-fg)}
 .adv-grid .sev{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px}
 .adv-grid .vec{font-family:var(--mono);font-size:10.5px;color:var(--mut-3);overflow:hidden;text-overflow:ellipsis}
-.adv-grid .fix{font-family:var(--mono);font-size:11px;color:#6fe0af;text-align:right}
-.pill{font-family:var(--mono);font-size:11px;color:#6fe0af;background:rgba(72,213,151,.08);
-  border:1px solid rgba(72,213,151,.24);border-radius:6px;padding:4px 8px}
+.adv-grid .fix{font-family:var(--mono);font-size:11px;color:var(--ok);text-align:right}
+.pill{font-family:var(--mono);font-size:11px;color:var(--ok);background:color-mix(in srgb, var(--ok) 8%, transparent);
+  border:1px solid color-mix(in srgb, var(--ok) 24%, transparent);border-radius:6px;padding:4px 8px}
 
 /* ------------------------------------------------------------- repository */
 .repo-form{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start}
 .repo-input{flex:1 1 420px;min-width:0;display:flex;align-items:center;gap:9px;background:var(--panel-3);
-  border:1px solid rgba(255,255,255,.11);border-radius:8px;padding:10px 13px;transition:border-color .14s}
-.repo-input:focus-within{border-color:rgba(124,107,255,.55)}
+  border:1px solid var(--soft-3);border-radius:8px;padding:10px 13px;transition:border-color .14s}
+.repo-input:focus-within{border-color:color-mix(in srgb, var(--accent) 55%, transparent)}
 .repo-input .pre{font-family:var(--mono);font-size:10.5px;color:var(--mut-4);white-space:nowrap}
 .repo-input input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--fg);
   font-family:var(--mono);font-size:12.5px}
 .repo-input input::placeholder{color:var(--mut-5)}
-.repo-submit{cursor:pointer;border:1px solid rgba(124,107,255,.5);background:rgba(124,107,255,.16);color:#d5ccff;
+.repo-submit{cursor:pointer;border:1px solid color-mix(in srgb, var(--accent) 50%, transparent);background:color-mix(in srgb, var(--accent) 16%, transparent);color:var(--accent);
   border-radius:8px;padding:10px 18px;font-family:var(--mono);font-size:11.5px;white-space:nowrap;transition:background .14s}
-.repo-submit:hover{background:rgba(124,107,255,.26)}
+.repo-submit:hover{background:color-mix(in srgb, var(--accent) 26%, transparent)}
 .repo-submit[disabled]{opacity:.45;cursor:not-allowed}
 .repo-msg{font-family:var(--mono);font-size:11px;margin-top:11px;display:flex;align-items:center;gap:8px}
-.repo-msg.err{color:#ff9c9c}
-.repo-msg.ok{color:#6fe0af}
+.repo-msg.err{color:var(--critical)}
+.repo-msg.ok{color:var(--ok)}
 .repo-msg.wait{color:var(--mod)}
-.spinner{width:11px;height:11px;border:1.5px solid rgba(255,177,77,.3);border-top-color:var(--mod);
+.spinner{width:11px;height:11px;border:1.5px solid color-mix(in srgb, var(--serious) 30%, transparent);border-top-color:var(--mod);
   border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
 .repo-row{display:grid;grid-template-columns:minmax(180px,1fr) 150px 110px 96px;gap:14px;padding:13px 16px;
   border-top:1px solid var(--line-3);align-items:center}
@@ -238,16 +277,16 @@ header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-bottom:
 .status{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;
   border-radius:999px;padding:4px 9px;justify-self:start;white-space:nowrap}
 .status .g{font-size:9px}
-.ghost{cursor:pointer;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:var(--mut);
+.ghost{cursor:pointer;border:1px solid var(--soft-4);background:var(--soft-2);color:var(--mut);
   border-radius:7px;padding:7px 10px;font-family:var(--mono);font-size:10.5px;transition:background .14s,color .14s}
-.ghost:hover{background:rgba(255,255,255,.09);color:var(--fg)}
+.ghost:hover{background:var(--soft-3);color:var(--fg)}
 
 /* ------------------------------------------------------------ proof chain */
 .stage{display:grid;grid-template-columns:30px minmax(150px,210px) 128px minmax(0,1fr);gap:14px;padding:12px 16px;
   border-bottom:1px solid var(--line-3);align-items:center}
 .stage .step{font-family:var(--mono);font-size:10.5px;color:var(--mut-5)}
 .stage .title{font-size:13.5px;font-weight:500;color:var(--fg)}
-.stage .blurb{font-size:12.5px;color:#90939f;line-height:1.45;text-wrap:pretty}
+.stage .blurb{font-size:12.5px;color:var(--ink-2);line-height:1.45;text-wrap:pretty}
 
 /* --------------------------------------------------------------- inspector */
 .meta-row{display:flex;align-items:baseline;gap:12px;padding:9px 0;border-top:1px solid var(--line-2)}
@@ -256,23 +295,29 @@ header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-bottom:
 .verdict-box{border:1px solid;border-radius:10px;padding:12px 13px;margin-top:14px}
 .verdict-box .t{font-size:13px;font-weight:600}
 .verdict-box .n{font-size:12.5px;color:var(--fg-4);margin-top:6px;line-height:1.5;text-wrap:pretty}
-.clear-box{border:1px dashed rgba(72,213,151,.28);background:rgba(72,213,151,.04);border-radius:9px;padding:12px 13px}
-.clear-box .t{font-family:var(--mono);font-size:11.5px;color:#6fe0af}
+.clear-box{border:1px dashed color-mix(in srgb, var(--ok) 28%, transparent);background:color-mix(in srgb, var(--ok) 4%, transparent);border-radius:9px;padding:12px 13px}
+.clear-box .t{font-family:var(--mono);font-size:11.5px;color:var(--ok)}
 .clear-box .n{font-size:12.5px;color:var(--fg-4);margin-top:6px;line-height:1.5;text-wrap:pretty}
 
 .empty{padding:44px 16px;text-align:center;font-family:var(--mono);font-size:11.5px;color:var(--mut-4);line-height:1.9}
-.banner{margin-top:14px;border:1px solid rgba(255,93,93,.3);background:rgba(255,93,93,.06);border-radius:12px;
-  padding:14px 16px;font-family:var(--mono);font-size:11.5px;color:#ff9c9c;line-height:1.7}
+.banner{margin-top:14px;border:1px solid color-mix(in srgb, var(--critical) 30%, transparent);background:color-mix(in srgb, var(--critical) 6%, transparent);border-radius:12px;
+  padding:14px 16px;font-family:var(--mono);font-size:11.5px;color:var(--critical);line-height:1.7}
 </style>
 </head>
 <body>
 
+<header class="appbar">
+  <div class="bar-spacer"></div>
+  <div class="barstats">
+    <div class="barstat alarm"><b id="barP0">—</b><span>runtime exposed</span></div>
+    <div class="barstat"><b id="barFindings">—</b><span>findings</span></div>
+    <div class="barstat"><b id="barMs">—</b><span>answered in ms</span></div>
+  </div>
+</header>
+
 <div id="shell">
   <aside>
-    <div class="brand-box">
-      <div class="brand">Blast Radius</div>
-      <div class="brand-sub">console · v2.4</div>
-    </div>
+    <div class="side-head" style="padding-top:16px">this package</div>
     <nav id="nav"></nav>
     <div class="side-head">trace targets</div>
     <div id="targets"></div>
@@ -322,7 +367,12 @@ header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-bottom:
      /api/repos         -> repository intake (frontend only; see REPO INTAKE)
    ===================================================================== */
 
-const HIGH='#ff5d5d', MOD='#ffb14d', WARN='#f2d05a', SAFE='#48d597', VIOLET='#7c6bff';
+/* The tier ramp, read off the shared tokens rather than frozen as hexes,
+   so it themes with everything else. These are the reserved STATUS
+   colours -- outside the categorical set on every page, because a tier is
+   a state and not a series. */
+const HIGH='var(--critical)', MOD='var(--serious)', WARN='var(--warn)',
+      SAFE='var(--ok)', VIOLET='var(--accent)';
 const G={p0:'■',p1:'▲',p2:'◆',p3:'●'};
 
 const TIERS={
@@ -333,12 +383,12 @@ const TIERS={
 };
 
 const TONES={
-  hot  :{dot:HIGH,glyph:G.p0,bg:'rgba(255,93,93,0.07)' ,border:'rgba(255,93,93,0.32)'},
-  path :{dot:MOD ,glyph:G.p1,bg:'rgba(255,177,77,0.08)',border:'rgba(255,177,77,0.36)'},
-  build:{dot:WARN,glyph:G.p2,bg:'rgba(242,208,90,0.06)',border:'rgba(242,208,90,0.26)'},
-  clean:{dot:SAFE,glyph:G.p3,bg:'rgba(72,213,151,0.04)',border:'rgba(255,255,255,0.1)'}
+  hot  :{dot:HIGH,glyph:G.p0,bg:'color-mix(in srgb, var(--critical) 7%, transparent)' ,border:'color-mix(in srgb, var(--critical) 32%, transparent)'},
+  path :{dot:MOD ,glyph:G.p1,bg:'color-mix(in srgb, var(--serious) 8%, transparent)',border:'color-mix(in srgb, var(--serious) 36%, transparent)'},
+  build:{dot:WARN,glyph:G.p2,bg:'color-mix(in srgb, var(--warn) 6%, transparent)',border:'color-mix(in srgb, var(--warn) 26%, transparent)'},
+  clean:{dot:SAFE,glyph:G.p3,bg:'color-mix(in srgb, var(--ok) 4%, transparent)',border:'var(--soft-3)'}
 };
-const EDGE_COLOR={hot:'rgba(255,93,93,0.5)',path:'rgba(255,177,77,0.62)',clean:'rgba(255,255,255,0.13)'};
+const EDGE_COLOR={hot:'color-mix(in srgb, var(--critical) 50%, transparent)',path:'color-mix(in srgb, var(--serious) 62%, transparent)',clean:'var(--soft-4)'};
 const TIER_OF_TONE={hot:'P0',path:'P1',build:'P2',clean:'P3'};
 
 const WHY={
@@ -563,9 +613,22 @@ function toneOf(n){
   return n.vuln?'path':'clean';
 }
 
+/* The three numbers in the shared app bar. Deliberately the same shape as
+   the other two pages' bars -- one alarming count, one scope count, one
+   cost -- so a reader who has learnt to glance at the top right on one
+   page has learnt it on all three. */
+function renderBarStats(){
+  const s=(S.pkg&&S.pkg.stats)||{};
+  const findings=(S.pkg&&S.pkg.findings)||[];
+  const p0=findings.filter(f=>f.tier==='P0').length;
+  setStat('barP0', S.pkg?p0:null);
+  setStat('barFindings', S.pkg?findings.length:null);
+  setStat('barMs', s.query_ms!=null?s.query_ms:null);
+}
+
 /* --------------------------------------------------------------- rendering */
 function render(){
-  renderNav(); renderTargets(); renderFoot();
+  renderNav(); renderTargets(); renderFoot(); renderBarStats();
   /* Falls back to `supply`, not to a removed view. `TITLES.overview` was the
      old default and no longer exists, so destructuring it would throw and
      blank the page rather than degrade. */
@@ -653,7 +716,7 @@ function kpis(){
       {label:'Exposed projects',value:s.exposed_projects??0,unit:'transitively',color:s.exposed_projects?MOD:SAFE},
       {label:'Resolved while live',value:s.live_window_projects??0,unit:'in the window',color:s.live_window_projects?HIGH:SAFE},
       {label:'Related by identity',value:s.related??0,unit:'identity only',color:s.related?WARN:SAFE},
-      {label:'Answered in',value:s.query_ms??'—',unit:'ms',color:'#cfd2de'}
+      {label:'Answered in',value:s.query_ms??'—',unit:'ms',color:'var(--ink-1)'}
     ];
   }
   if(!items.length) return '';
@@ -688,7 +751,7 @@ function graphCard(g,title,hint){
     const c=byLayer[l].length;
     const anyHot=byLayer[l].some(n=>toneOf(n)==='hot');
     const anyPath=byLayer[l].some(n=>toneOf(n)==='path');
-    const rule=anyHot?'rgba(255,93,93,0.45)':anyPath?'rgba(255,177,77,0.45)':'rgba(72,213,151,0.35)';
+    const rule=anyHot?'color-mix(in srgb, var(--critical) 45%, transparent)':anyPath?'color-mix(in srgb, var(--serious) 45%, transparent)':'color-mix(in srgb, var(--ok) 35%, transparent)';
     return `<div class="lane" style="left:${laneX[l]}px;width:${LANE_W}px">
       <div class="r"><span class="step">0${i+1}</span>
       <span class="title">${esc(cols[l]||('layer '+l))}</span></div>
@@ -727,8 +790,8 @@ function graphCard(g,title,hint){
     if(pulse) anim+=`, brPulse 2.6s ease-out ${(+delay+0.7).toFixed(2)}s infinite`;
     const tag=n.kind==='compromised'?'COMPROMISED':n.kind==='exposed'?'EXPOSED'
              :n.kind==='resolution'?'CONFIRMED':n.kind==='possible'?'RANGE ONLY':null;
-    const tagBg=n.kind==='compromised'?'rgba(179,38,44,0.9)':n.kind==='possible'?'rgba(176,110,26,0.9)':MOD;
-    const tagFg=n.kind==='compromised'||n.kind==='possible'?'#fff':'#1a1206';
+    const tagBg=n.kind==='compromised'?'var(--threat-1)':n.kind==='possible'?'var(--ident-1)':MOD;
+    const tagFg=n.kind==='compromised'||n.kind==='possible'?'var(--ink-on)':'var(--surface-0)';
     return `<div class="gnode" style="left:${p.x}px;top:${p.y}px;width:${LANE_W}px;
       border-color:${T.border};background:${T.bg};animation:${anim}"
       data-nm="${esc(n.label)}" data-mt="${esc(n.sub||'')}" data-tone="${tone}"
@@ -745,9 +808,9 @@ function graphCard(g,title,hint){
     <div class="card-head">
       <span class="t">${esc(title)}</span><span class="h">${esc(hint)}</span>
       <span class="spacer"></span>
-      <span class="edge-key"><i style="background:rgba(255,93,93,0.6)"></i>advisory edge</span>
-      <span class="edge-key"><i style="background:rgba(255,177,77,0.75)"></i>confirmed path</span>
-      <span class="edge-key"><i style="background:rgba(255,255,255,0.22)"></i>checked, clear</span>
+      <span class="edge-key"><i style="background:color-mix(in srgb, var(--critical) 60%, transparent)"></i>advisory edge</span>
+      <span class="edge-key"><i style="background:color-mix(in srgb, var(--serious) 75%, transparent)"></i>confirmed path</span>
+      <span class="edge-key"><i style="background:var(--soft-5)"></i>checked, clear</span>
     </div>
     <div class="graph-scroll"><div class="graph-plane" id="plane" style="width:${cw}px;height:${ch}px">
       <svg width="${cw}" height="${ch}">${paths}</svg>
@@ -857,20 +920,20 @@ function advisories(){
 function stages(){
   if(!S.pkg||!S.pkg.stats) return '';
   const s=S.pkg.stats;
-  const mk=(v,onFg,onBg,onG,offTxt)=>v?{status:v+'',fg:onFg,bg:onBg,g:onG}:{status:offTxt,fg:SAFE,bg:'rgba(72,213,151,0.1)',g:G.p3};
+  const mk=(v,onFg,onBg,onG,offTxt)=>v?{status:v+'',fg:onFg,bg:onBg,g:onG}:{status:offTxt,fg:SAFE,bg:'color-mix(in srgb, var(--ok) 10%, transparent)',g:G.p3};
   const rows=[
-    ['01','Threat', mk(s.advisories,HIGH,'rgba(255,93,93,0.1)',G.p0,'none'),
+    ['01','Threat', mk(s.advisories,HIGH,'color-mix(in srgb, var(--critical) 10%, transparent)',G.p0,'none'),
       'Published advisories and simulated incidents filed against this version.'],
-    ['02','Compromised version', S.pkg.compromised?{status:'1 match',fg:MOD,bg:'rgba(255,177,77,0.1)',g:G.p1}
-      :{status:'clear',fg:SAFE,bg:'rgba(72,213,151,0.1)',g:G.p3},
+    ['02','Compromised version', S.pkg.compromised?{status:'1 match',fg:MOD,bg:'color-mix(in srgb, var(--serious) 10%, transparent)',g:G.p1}
+      :{status:'clear',fg:SAFE,bg:'color-mix(in srgb, var(--ok) 10%, transparent)',g:G.p3},
       'The exact release the threat points at. Marking 4.17.21 never touches 4.17.20.'],
-    ['03','Range admits it', mk(s.range_admits,WARN,'rgba(242,208,90,0.1)',G.p2,'clear'),
+    ['03','Range admits it', mk(s.range_admits,WARN,'color-mix(in srgb, var(--warn) 10%, transparent)',G.p2,'clear'),
       'Declared ranges that provably admit it. A lead, not a finding — this is what a range-only tool would report in full.'],
-    ['04','Lockfile resolves it', mk(s.lockfile_entries,MOD,'rgba(255,177,77,0.1)',G.p1,'clear'),
+    ['04','Lockfile resolves it', mk(s.lockfile_entries,MOD,'color-mix(in srgb, var(--serious) 10%, transparent)',G.p1,'clear'),
       'A lockfile actually selected this version. This is the confirmed claim.'],
-    ['05','Exposed projects', mk(s.exposed_projects,MOD,'rgba(255,177,77,0.1)',G.p1,'clear'),
+    ['05','Exposed projects', mk(s.exposed_projects,MOD,'color-mix(in srgb, var(--serious) 10%, transparent)',G.p1,'clear'),
       'One hop over the precomputed RESOLVED_IN closure — no live traversal.'],
-    ['06','Related by identity', mk(s.related,WARN,'rgba(242,208,90,0.1)',G.p2,'clear'),
+    ['06','Related by identity', mk(s.related,WARN,'color-mix(in srgb, var(--warn) 10%, transparent)',G.p2,'clear'),
       'Shared maintainer, repository, publisher, or a typosquat neighbour. Never a verdict on its own.']
   ];
   return `<div class="card">
@@ -912,9 +975,9 @@ function inspector(){
           <div style="font-family:var(--mono);font-size:10.5px;color:var(--mut-3);margin-top:4px">${esc(n.kind||'')}</div>
         </div>
       </div>
-      <div class="verdict-box" style="border-color:${onPath?'rgba(255,177,77,0.32)':'rgba(72,213,151,0.28)'};
-        background:${onPath?'rgba(255,177,77,0.08)':'rgba(72,213,151,0.07)'}">
-        <div class="t" style="color:${onPath?'#ffc478':'#6fe0af'}">
+      <div class="verdict-box" style="border-color:${onPath?'color-mix(in srgb, var(--serious) 32%, transparent)':'color-mix(in srgb, var(--ok) 28%, transparent)'};
+        background:${onPath?'color-mix(in srgb, var(--serious) 8%, transparent)':'color-mix(in srgb, var(--ok) 7%, transparent)'}">
+        <div class="t" style="color:${onPath?'var(--serious)':'var(--ok)'}">
           ${onPath?'A flagged import is reachable here':'No advisory reaches this node'}</div>
         <div class="n">${onPath?'This node calls through to a package with an open advisory. Re-check it after the upgrade.'
           :'Nothing on this call path imports a package with an open advisory.'}</div>
@@ -1014,10 +1077,10 @@ function repos(){
 
   const rows=S.repos.length?S.repos.map(r=>{
     const st=r.status==='scanned'
-      ? {fg:SAFE,bg:'rgba(72,213,151,0.1)',g:G.p3,t:'scanned'}
+      ? {fg:SAFE,bg:'color-mix(in srgb, var(--ok) 10%, transparent)',g:G.p3,t:'scanned'}
       : r.status==='failed'
-      ? {fg:HIGH,bg:'rgba(255,93,93,0.1)',g:G.p0,t:'failed'}
-      : {fg:MOD,bg:'rgba(255,177,77,0.1)',g:G.p1,t:'queued'};
+      ? {fg:HIGH,bg:'color-mix(in srgb, var(--critical) 10%, transparent)',g:G.p0,t:'failed'}
+      : {fg:MOD,bg:'color-mix(in srgb, var(--serious) 10%, transparent)',g:G.p1,t:'queued'};
     let when='—';
     try{ when=new Date(r.submitted_at).toLocaleString(); }catch(e){}
     return `<div class="repo-row">

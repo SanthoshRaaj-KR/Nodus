@@ -735,13 +735,25 @@ def index() -> FileResponse:
     still the only view of the micro/code graph that does not depend on the
     bundle being built.
     """
-    return FileResponse(_console_file())
+    return FileResponse(
+        _console_file(),
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
 
 
 @app.get("/console")
 def console() -> FileResponse:
-    """Kept so existing links and bookmarks do not break."""
-    return FileResponse(_console_file())
+    """Kept so existing links and bookmarks do not break.
+
+    Served no-store for the same reason /explorer and /graph are: a
+    Last-Modified that the browser honours from memory cache makes an
+    edited page keep rendering the previous build, which looks exactly
+    like the edit not working.
+    """
+    return FileResponse(
+        _console_file(),
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
 
 
 @app.get("/explorer")
