@@ -107,7 +107,9 @@ EDGE_PROPS: dict[str, tuple[str, ...]] = {
     schema.TYPOSQUAT_OF: (
         "distance", "technique", "popularity_ratio", "source",
     ),
-    schema.AFFECTS: ("fixed_version", "introduced_version", "source"),
+    schema.AFFECTS: (
+        "fixed_version", "introduced_version", "fixed_published_at", "source",
+    ),
     schema.COMPROMISES: ("source",),
 }
 
@@ -125,6 +127,11 @@ _DEFAULTS: dict[str, Any] = {
     "live_until": schema.STILL_LIVE,
     "published": schema.UNKNOWN_TS,
     "modified": schema.UNKNOWN_TS,
+    # UNKNOWN_TS, not STILL_LIVE. "We could not date the fix" and "there is no
+    # fix" are different claims, and defaulting to the second would close
+    # every window at the end of time and report exposure that was never
+    # measured.
+    "fixed_published_at": schema.UNKNOWN_TS,
     "severity_score": schema.UNKNOWN_SCORE,
     "depth": schema.NO_DEPTH,
     "downloads": 0,

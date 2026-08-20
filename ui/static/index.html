@@ -444,6 +444,11 @@ function renderList() {
         <i></i>${sim ? "drill" : "compromised"}</span>`);
     }
     if (t.kind === "deprecated") bits.push(`<span class="chip quiet"><i></i>deprecated</span>`);
+    if (t.live_window_services.length) {
+      bits.push(`<span class="chip critical"><i></i>held while live</span>`);
+    } else if (t.after_fix_services.length) {
+      bits.push(`<span class="chip moderate"><i></i>fix predates lockfile</span>`);
+    }
     const n = t.advisories.length;
     if (n) bits.push(`<span class="muted">${n} advisor${n === 1 ? "y" : "ies"}</span>`);
     if (t.services.length) {
@@ -746,6 +751,19 @@ function threatDetail(t) {
 
   const rows = [];
   rows.push(kv("services", t.services.join(", ") || "none resolved it"));
+  if (t.window_start > 0) {
+    rows.push(kv("live window",
+      `${when(t.window_start)} → ${when(t.window_end)}  (${t.window_basis})`));
+  }
+  if (t.live_window_services.length) {
+    rows.push(kv("resolved while live", t.live_window_services.join(", ")));
+  }
+  if (t.after_fix_services.length) {
+    // Not a lesser finding. It means the remedy already existed when this
+    // lockfile was written, which is a different conversation from "you were
+    // unlucky and were holding it while it was live".
+    rows.push(kv("resolved after the fix", t.after_fix_services.join(", ")));
+  }
   if (t.deprecated_reason) rows.push(kv("deprecated", t.deprecated_reason));
 
   let incident = "";
@@ -783,6 +801,13 @@ function threatDetail(t) {
 
 function kv(key, value) {
   return `<div class="kv"><b>${esc(key)}</b><span>${esc(value)}</span></div>`;
+}
+
+/* STILL_LIVE is the year-2100 sentinel, not a date anybody means. */
+function when(ts) {
+  if (!ts || ts <= 0) return "undated";
+  if (ts >= 4e9) return "still open";
+  return new Date(ts * 1000).toISOString().slice(0, 10);
 }
 
 /* The vulnerable range, both ends. "Fixed in 4.17.21" alone answers what to

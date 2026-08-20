@@ -55,6 +55,10 @@ class FakeClient:
         ("v.deprecated = true", "deprecated"),
         ("DEPENDS_ON", "depends"),
         ("PRESENT_IN", "services"),
+        # Must precede the generic `MATCH (v:PackageVersion)` entry, or the
+        # resolution sweep falls through to it and silently gets the version
+        # rows -- which is exactly how the first run of these tests failed.
+        ("RESOLVED_IN", "resolutions"),
         ("RESOLVES_TO", "resolved"),
         ("MATCH (e:ExternalImport) RETURN", "imports"),
         ("CALLS_EXTERNAL", "import_users"),
@@ -442,3 +446,141 @@ def test_empty_graph_yields_no_threats():
 def test_every_severity_word_survives_the_round_trip(severity):
     client = simple_graph(advisories=[advisory(1, "CVE-1", severity)])
     assert threats(client)[0].to_dict()["severity"] == severity
+
+
+# --------------------------------------------------------------------------
+# The live window
+# --------------------------------------------------------------------------
+
+DAY = 86400
+
+
+def windowed(**over):
+    """A graph where lodash@4.17.21 is advised, with datable events."""
+    tables = dict(
+        versions=[
+            {"id": 1, "name": "lodash", "version": "4.17.21",
+             "published_at": 1000 * DAY},
+            {"id": 2, "name": "inquirer", "version": "9.0.0",
+             "published_at": 900 * DAY},
+        ],
+        depends=[edge(2, 1)],
+        services=[{"id": 1, "service": "api"}],
+        resolutions=[],
+        resolved=[{"eid": 10, "vid": 2}],
+        imports=[imp(10, "inquirer")],
+        functions=[fn(100, "prompt", "cli.js", 5)],
+        import_users=[{"fid": 100, "eid": 10}],
+        calls=[],
+        advisories=[],
+        incidents=[],
+        deprecated=[],
+    )
+    tables.update(over)
+    return FakeClient(**tables)
+
+
+def advisory_dated(vid, aid, severity, published, fixed_at):
+    return {"vid": vid, "advisory_id": aid, "severity": severity,
+            "summary": "s", "cvss_vector": "", "published": published,
+            "introduced_version": "0", "fixed_version": "4.17.22",
+            "fixed_published_at": fixed_at}
+
+
+def resolution(vid, service, first_seen, last_seen=4_102_444_800):
+    return {"id": vid, "service": service,
+            "first_seen": first_seen, "last_seen": last_seen}
+
+
+def test_the_window_opens_when_the_version_was_published():
+    """Not when the advisory was.
+
+    The first draft used the advisory date and produced windows that ended
+    before they began -- esbuild@0.21.5 came out as 2025-02-10 -> 2025-02-08.
+    That is the normal order of events: the fix ships, the advisory follows.
+    A vulnerable version is installable from the moment it exists.
+    """
+    client = windowed(advisories=[
+        advisory_dated(1, "CVE-1", "high",
+                       published=1100 * DAY, fixed_at=1050 * DAY),
+    ])
+    threat = threats(client)[0]
+    assert threat.window == (1000 * DAY, 1050 * DAY)
+    assert threat.window[0] < threat.window[1], "window must not be inverted"
+    assert threat.window_basis.startswith("version published")
+
+
+def test_an_undated_version_falls_back_to_the_advisory_and_says_so():
+    client = windowed(
+        versions=[{"id": 1, "name": "lodash", "version": "4.17.21",
+                   "published_at": 0}],
+        advisories=[advisory_dated(1, "CVE-1", "high",
+                                   published=1100 * DAY, fixed_at=1200 * DAY)],
+    )
+    threat = threats(client)[0]
+    assert threat.window[0] == 1100 * DAY
+    assert threat.window_basis.startswith("advisory published")
+
+
+def test_no_dated_fix_leaves_the_window_open():
+    client = windowed(advisories=[
+        advisory_dated(1, "CVE-1", "high", published=1100 * DAY, fixed_at=0),
+    ])
+    threat = threats(client)[0]
+    assert threat.window[1] == 4_102_444_800
+    assert "no dated fix" in threat.window_basis
+
+
+def test_a_lockfile_held_during_the_window_is_reported_as_such():
+    client = windowed(
+        advisories=[advisory_dated(1, "CVE-1", "high",
+                                   published=1100 * DAY, fixed_at=1200 * DAY)],
+        resolutions=[resolution(1, "api", first_seen=1150 * DAY)],
+    )
+    threat = threats(client)[0]
+    assert threat.live_window_services == ["api"]
+    assert threat.after_fix_services == []
+
+
+def test_a_lockfile_written_after_the_fix_is_a_different_finding():
+    """Not a lesser one: the remedy already existed when it was written."""
+    client = windowed(
+        advisories=[advisory_dated(1, "CVE-1", "high",
+                                   published=1100 * DAY, fixed_at=1200 * DAY)],
+        resolutions=[resolution(1, "api", first_seen=1500 * DAY)],
+    )
+    threat = threats(client)[0]
+    assert threat.after_fix_services == ["api"]
+    assert threat.live_window_services == []
+
+
+def test_an_undated_resolution_is_not_counted_either_way():
+    """Unknown is not "no". A resolution with no observation time cannot be
+    placed against the window, and guessing would invent a finding."""
+    client = windowed(
+        advisories=[advisory_dated(1, "CVE-1", "high",
+                                   published=1100 * DAY, fixed_at=1200 * DAY)],
+        resolutions=[resolution(1, "api", first_seen=0)],
+    )
+    threat = threats(client)[0]
+    assert threat.live_window_services == []
+    assert threat.after_fix_services == []
+
+
+def test_several_advisories_widen_the_window():
+    client = windowed(advisories=[
+        advisory_dated(1, "CVE-1", "low", published=1100 * DAY, fixed_at=1150 * DAY),
+        advisory_dated(1, "CVE-2", "high", published=1100 * DAY, fixed_at=1400 * DAY),
+    ])
+    threat = threats(client)[0]
+    assert threat.window == (1000 * DAY, 1400 * DAY)
+
+
+def test_window_fields_are_serialised():
+    client = windowed(advisories=[
+        advisory_dated(1, "CVE-1", "high", published=1100 * DAY, fixed_at=1200 * DAY),
+    ])
+    payload = threats(client)[0].to_dict()
+    for key in ("window_start", "window_end", "window_basis",
+                "live_window_services", "after_fix_services"):
+        assert key in payload

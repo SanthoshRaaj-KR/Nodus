@@ -595,9 +595,24 @@ def ingest(
                 # `introduced` is where it opens, `fixed` where it closes.
                 # Reporting only the second answers "what do I upgrade to"
                 # and leaves "when did this start" unanswerable.
+                # When the fix shipped, read off the packument already
+                # fetched for this package. It is what closes the window the
+                # brief asks about -- "while it was live" needs an end as well
+                # as a start, and the graph does not hold the fixed version
+                # itself (nothing resolved it, so nothing materialised it).
+                # UNKNOWN_TS means "we could not date it", which the query
+                # layer treats as still open rather than as zero.
+                fixed_at = schema.UNKNOWN_TS
+                packument = packuments.get(norm)
+                if fixed and packument is not None:
+                    summary_row = packument.versions.get(fixed)
+                    if summary_row is not None and summary_row.published_at > 0:
+                        fixed_at = summary_row.published_at
+
                 writer.edge(schema.AFFECTS, adv_id, target,
                             fixed_version=fixed,
                             introduced_version=advisory.introduced.get(norm, ""),
+                            fixed_published_at=fixed_at,
                             source=config.source_osv)
                 report.affects_edges += 1
 

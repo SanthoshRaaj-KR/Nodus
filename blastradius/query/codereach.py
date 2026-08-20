@@ -117,6 +117,10 @@ class CodeIndex:
 
     #: version id -> (name, version)
     versions: dict[int, tuple[str, str]] = field(default_factory=dict)
+    #: version id -> when that exact version was published. The START of the
+    #: window it was live: a vulnerable version is installable from the moment
+    #: it exists, which is well before anybody publishes an advisory about it.
+    published: dict[int, int] = field(default_factory=dict)
     #: version id -> version ids it depends on
     depends: dict[int, list[int]] = field(default_factory=dict)
     #: import id -> {id, specifier, file, service, names, version_id}
@@ -129,6 +133,10 @@ class CodeIndex:
     callers: dict[int, list[int]] = field(default_factory=dict)
     #: version id -> service names that resolved it
     services: dict[int, list[str]] = field(default_factory=dict)
+    #: version id -> [(service, first_seen, last_seen)] from RESOLVED_IN.
+    #: The interval a lockfile is known to have held this version, which is
+    #: what an advisory's live window is compared against.
+    resolutions: dict[int, list[tuple[str, int, int]]] = field(default_factory=dict)
     #: import id -> {reached version id: hops}, precomputed once
     import_reach: dict[int, dict[int, int]] = field(default_factory=dict)
 
@@ -143,11 +151,13 @@ def build_index(client: HydraClient) -> CodeIndex:
 
     for row in client.query(
         f"MATCH (v:{schema.PACKAGE_VERSION}) "
-        "RETURN v.id AS id, v.name AS name, v.version AS version"
+        "RETURN v.id AS id, v.name AS name, v.version AS version, "
+        "v.published_at AS published_at"
     ).rows:
         node_id = _int(row.get("id"))
         if node_id >= 0:
             index.versions[node_id] = (_text(row.get("name")), _text(row.get("version")))
+            index.published[node_id] = _int(row.get("published_at"), schema.UNKNOWN_TS)
 
     for row in client.query(
         f"MATCH (a:{schema.PACKAGE_VERSION})-[:{schema.DEPENDS_ON}]->"
@@ -165,6 +175,20 @@ def build_index(client: HydraClient) -> CodeIndex:
         service = _text(row.get("service"))
         if node_id >= 0 and service:
             index.services.setdefault(node_id, []).append(service)
+
+    for row in client.query(
+        f"MATCH (v:{schema.PACKAGE_VERSION})-[e:{schema.RESOLVED_IN}]->"
+        f"(s:{schema.SERVICE}) RETURN v.id AS id, s.name AS service, "
+        "e.first_seen AS first_seen, e.last_seen AS last_seen"
+    ).rows:
+        node_id = _int(row.get("id"))
+        service = _text(row.get("service"))
+        if node_id >= 0 and service:
+            index.resolutions.setdefault(node_id, []).append((
+                service,
+                _int(row.get("first_seen"), schema.UNKNOWN_TS),
+                _int(row.get("last_seen"), schema.STILL_LIVE),
+            ))
 
     # The bridge. An import with no RESOLVES_TO edge is a builtin like
     # `node:fs` or an unresolved specifier; it is kept in the index with
@@ -283,6 +307,15 @@ class Threat:
     reached_by: dict[int, int] = field(default_factory=dict)
     #: Distinct functions that would run its code, counted not listed.
     function_count: int = 0
+    #: Services whose lockfile held this version while the advisory was live.
+    live_window_services: list[str] = field(default_factory=list)
+    #: Services that resolve it but only after a fix already existed. Not the
+    #: same finding and not a lesser one -- it means the fix was available
+    #: before this lockfile was even written.
+    after_fix_services: list[str] = field(default_factory=list)
+    #: (start, end) of the window, and how it was arrived at.
+    window: tuple[int, int] = (schema.UNKNOWN_TS, schema.STILL_LIVE)
+    window_basis: str = ""
 
     @property
     def in_code(self) -> bool:
@@ -321,6 +354,11 @@ class Threat:
             "in_code": self.in_code,
             "import_count": len(self.reached_by),
             "function_count": self.function_count,
+            "live_window_services": sorted(self.live_window_services),
+            "after_fix_services": sorted(self.after_fix_services),
+            "window_start": self.window[0],
+            "window_end": self.window[1],
+            "window_basis": self.window_basis,
         }
 
 
@@ -355,6 +393,8 @@ def threats(client: HydraClient, index: CodeIndex | None = None) -> list[Threat]
         f"(v:{schema.PACKAGE_VERSION}) RETURN v.id AS vid, "
         "a.advisory_id AS advisory_id, a.severity AS severity, "
         "a.summary AS summary, a.cvss_vector AS cvss_vector, "
+        "a.published AS published, "
+        "e.fixed_published_at AS fixed_published_at, "
         # Both ends of the vulnerable range, read off the edge rather than
         # guessed from the versions this graph happens to hold.
         "e.introduced_version AS introduced_version, "
@@ -381,6 +421,41 @@ def threats(client: HydraClient, index: CodeIndex | None = None) -> list[Threat]
             ),
             "fixed_version": _text(row.get("fixed_version")),
         })
+
+        # The window the bad version was live: it opens when THAT VERSION
+        # was published and closes when the fix shipped.
+        #
+        # The first draft opened it at the advisory's publication date and
+        # produced windows that ended before they began -- esbuild@0.21.5 came
+        # out as 2025-02-10 -> 2025-02-08. That is not a bug in the data, it
+        # is the normal order of events: the fix is released first and the
+        # advisory is published afterwards. A vulnerable version is
+        # installable from the moment it exists, which is what the brief means
+        # by "the window it was live", so the version's own publish date is
+        # the start and the advisory's is irrelevant to it.
+        closed = _int(row.get("fixed_published_at"), schema.UNKNOWN_TS)
+        if closed <= 0:
+            closed = schema.STILL_LIVE
+        opened = index.published.get(version_id, schema.UNKNOWN_TS)
+        if opened <= 0:
+            # No publish date for the version: fall back to the advisory, and
+            # say so, rather than silently reporting a window nobody measured.
+            opened = _int(row.get("published"), schema.UNKNOWN_TS)
+            basis = "advisory published -> fix released"
+        else:
+            basis = "version published -> fix released"
+        if opened > 0:
+            start, end = threat.window
+            # Several advisories on one version: keep the widest window any of
+            # them kept it dangerous for.
+            threat.window = (
+                opened if start <= 0 else min(start, opened),
+                max(end if end != schema.STILL_LIVE else 0, closed),
+            )
+            threat.window_basis = (
+                basis if closed != schema.STILL_LIVE
+                else basis.replace("fix released", "no dated fix")
+            )
         # A version is as dangerous as the worst thing known about it.
         #
         # The emptiness test is not redundant with the comparison. An unset
@@ -436,6 +511,32 @@ def threats(client: HydraClient, index: CodeIndex | None = None) -> list[Threat]
             threat = found.get(version_id)
             if threat is not None:
                 threat.reached_by[import_id] = hops
+
+    # Which lockfiles held this version while the window was open. Interval
+    # overlap, computed here rather than in Cypher because the window is
+    # per-advisory and the resolutions are already in memory.
+    #
+    # THE CAVEAT THAT MATTERS: `first_seen` is when this ingest observed the
+    # lockfile, and `last_seen` is "still". One snapshot per lockfile means
+    # the interval is [scanned, forever), so this can say "your lockfile holds
+    # it and the advisory was live then" -- it cannot reconstruct that you
+    # held it last March and moved off in April. Answering that properly needs
+    # lockfile history, which is an ingest of many commits, not a query.
+    for threat in found.values():
+        start, end = threat.window
+        if start <= 0:
+            continue
+        for service, first_seen, last_seen in index.resolutions.get(
+            threat.version_id, ()
+        ):
+            if first_seen <= 0:
+                continue
+            if first_seen <= end and last_seen >= start:
+                threat.live_window_services.append(service)
+            elif first_seen > end:
+                # Resolved only after the fix shipped. Worth separating: the
+                # remedy already existed when this lockfile was written.
+                threat.after_fix_services.append(service)
 
     for threat in found.values():
         users: set[int] = set()
