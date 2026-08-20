@@ -65,30 +65,34 @@ body {
   </div>
 
   <div class="sheet">
-    <div id="repoSection">
+    <div id="repoSection" class="hidden">
       <div class="panel-title">Your repositories</div>
       <div id="repoList" class="repolist"></div>
-      <div id="repoEmpty" class="muted hidden">Nothing ingested yet -- add a repository below.</div>
+      <button id="addToggle" class="btn ghost sm hidden" type="button" style="margin-top:8px;">+ Add a repository</button>
     </div>
 
-    <div class="or-rule">or</div>
+    <div id="addBlock" class="hidden">
+      <div id="orRule" class="or-rule hidden">or</div>
 
-    <div id="entrySection">
-      <div class="panel-title">Add from GitHub</div>
-      <div class="entry-row">
-        <label class="field">
-          <span>Repository URL</span>
-          <input type="text" id="repoUrl" placeholder="https://github.com/owner/repo">
-        </label>
-        <button class="btn primary" id="startBtn" type="button" style="margin-top:20px;">Start</button>
+      <div id="entrySection">
+        <div class="panel-title">Add from GitHub</div>
+        <div class="entry-row">
+          <label class="field">
+            <span>Repository URL</span>
+            <input type="text" id="repoUrl" placeholder="https://github.com/owner/repo">
+          </label>
+          <button class="btn primary" id="startBtn" type="button" style="margin-top:20px;">Start</button>
+        </div>
+        <div id="entryError" class="note bad hidden" style="margin-top:10px;"></div>
       </div>
-      <div id="entryError" class="note bad hidden" style="margin-top:10px;"></div>
+
+      <div id="progressSection" class="hidden">
+        <div class="panel-title" style="margin-top:16px;">Building the graph</div>
+        <div id="stageList" class="stagelist"></div>
+      </div>
     </div>
 
-    <div id="progressSection" class="hidden">
-      <div class="panel-title" style="margin-top:16px;">Building the graph</div>
-      <div id="stageList" class="stagelist"></div>
-    </div>
+    <div id="repoEmpty" class="muted hidden">Could not reach the server -- is it running?</div>
   </div>
 </div>
 
@@ -96,8 +100,12 @@ body {
 "use strict";
 
 const WORKSPACE_KEY = "nodus.workspace";
+const repoSection = document.getElementById("repoSection");
 const repoList = document.getElementById("repoList");
 const repoEmpty = document.getElementById("repoEmpty");
+const addToggle = document.getElementById("addToggle");
+const addBlock = document.getElementById("addBlock");
+const orRule = document.getElementById("orRule");
 const repoUrl = document.getElementById("repoUrl");
 const startBtn = document.getElementById("startBtn");
 const entryError = document.getElementById("entryError");
@@ -110,17 +118,28 @@ function openWorkspace(ref) {
   location.href = "/console";
 }
 
+function showAddBlock(withDivider) {
+  addBlock.classList.remove("hidden");
+  addToggle.classList.add("hidden");
+  orRule.classList.toggle("hidden", !withDivider);
+}
+
 async function loadWorkspaces() {
   try {
     const res = await fetch("/api/chat/workspaces");
     const data = await res.json();
     const repos = (data.workspaces || []).filter((w) => w.slug !== "default");
     repoList.innerHTML = "";
+
     if (!repos.length) {
-      repoEmpty.classList.remove("hidden");
+      // Nothing ingested yet -- the only useful thing on this screen is the
+      // GitHub form, so it is what shows, not a list with nothing in it.
+      repoSection.classList.add("hidden");
+      showAddBlock(false);
       return;
     }
-    repoEmpty.classList.add("hidden");
+
+    repoSection.classList.remove("hidden");
     for (const w of repos) {
       const card = document.createElement("div");
       card.className = "card tappable";
@@ -134,11 +153,19 @@ async function loadWorkspaces() {
       card.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); card.click(); } };
       repoList.append(card);
     }
+    // Repos exist -- the GitHub form is a secondary action, tucked behind
+    // one click rather than sharing the screen with the thing most visits
+    // actually want, which is picking a repo already known.
+    addToggle.classList.remove("hidden");
   } catch (e) {
+    repoSection.classList.add("hidden");
     repoEmpty.textContent = "Could not reach the server -- is it running?";
     repoEmpty.classList.remove("hidden");
+    showAddBlock(false);
   }
 }
+
+addToggle.addEventListener("click", () => showAddBlock(true));
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
