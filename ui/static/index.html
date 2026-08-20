@@ -30,7 +30,9 @@
 body {
   display: grid;
   grid-template-columns: 384px minmax(0, 1fr);
-  grid-template-rows: var(--bar-h) 1fr;
+  /* `auto`, not a fixed bar height: the app bar wraps to two rows on a
+     phone and must be allowed to take the space it needs. */
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -82,7 +84,7 @@ main { display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
     var(--surface-1);
   display: grid; place-items: center;
 }
-#viz { display: block; }
+#viz { display: block; max-width: 100%; height: auto; }
 
 /* Docked under the drawing, full width, never over it. */
 .legendbar {
@@ -151,6 +153,62 @@ main { display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
   .halo.on { animation: none; r: 32px; opacity: .5; }
   .halo.on.b { display: none; }
 }
+
+/* ==================================================================
+   Responsive
+
+   Two panes, and they are not equally negotiable. The threat list is a
+   list -- it survives being narrow. The trace diagram is the answer,
+   and it is up to five columns wide, so it gets the room.
+
+   Below 900 there is no width for both, and the rail becomes a panel
+   opened from the app bar rather than a 200px column that can hold
+   neither a package spec nor its chips.
+   ================================================================== */
+@media (max-width: 1280px) {
+  body { grid-template-columns: 330px minmax(0, 1fr); }
+  .mainhead, .legendbar, #detail { padding-left: 14px; padding-right: 14px; }
+}
+
+@media (max-width: 1080px) {
+  body { grid-template-columns: 290px minmax(0, 1fr); }
+  /* The five column captions are what make the diagram readable, so the
+     diagram is allowed to scroll here rather than shrinking to the point
+     where its labels collide. */
+  #viz { max-width: none; }
+  #stage { place-items: center start; }
+  .legendbar { gap: 12px; font-size: 10.5px; }
+}
+
+@media (max-width: 900px) {
+  body { grid-template-columns: minmax(0, 1fr); }
+  aside {
+    width: min(360px, 90vw);
+    border-right: 0;
+  }
+  aside.as-drawer { width: min(360px, 90vw); }
+  /* Sticky inside a fixed-position drawer works, but the header would
+     then sit under the drawer's own top edge. Static is honest here. */
+  aside.as-drawer .sechead { position: static; }
+  #detail { max-height: 46%; }
+}
+
+/* Phone. The diagram keeps its own scroll -- a five-column trace does
+   not become readable by being squeezed to 360px, it becomes a smudge --
+   and everything around it gets out of its way. */
+@media (max-width: 700px) {
+  .mainhead { padding: 10px 12px; }
+  .mainhead h2 { font-size: 12.5px; }
+  .verdict { font-size: 12.5px; gap: 7px; }
+  .verdict .k { font-size: 9px; padding: 4px 6px; }
+  #stage { background-size: 18px 18px; }
+  .legendbar { padding: 8px 12px; gap: 10px; row-gap: 6px; }
+  /* The hover hint is a lie on a touch screen: there is no hover. */
+  .legendbar .muted { display: none; }
+  #detail { max-height: 50%; padding: 12px 12px 16px; }
+  #detail h3 { font-size: 12.5px; }
+  .list { padding: 8px; }
+}
 </style>
 </head>
 <body>
@@ -160,8 +218,8 @@ main { display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
   <div class="barstats">
     <div class="barstat alarm"><b id="sConfirmed">—</b><span>confirmed</span></div>
     <div class="barstat alarm"><b id="sInCode">—</b><span>reach your code</span></div>
-    <div class="barstat"><b id="sScanned">—</b><span>versions scanned</span></div>
-    <div class="barstat"><b id="sFunctions">—</b><span>functions read</span></div>
+    <div class="barstat opt-1"><b id="sScanned">—</b><span>versions scanned</span></div>
+    <div class="barstat opt-2"><b id="sFunctions">—</b><span>functions read</span></div>
   </div>
 </header>
 
@@ -513,11 +571,15 @@ function drawGraph(nodes, edges) {
     </g>`;
   }).join("");
 
+  /* Width and height as ATTRIBUTES, not inline style. Presentation
+     attributes lose to the stylesheet, so `#viz{max-width:100%}` can
+     shrink the diagram to fit a narrow viewport while the viewBox keeps
+     it in proportion. Inline styles would win and force a horizontal
+     scrollbar on every phone instead. */
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   svg.setAttribute("width", W);
   svg.setAttribute("height", H);
-  svg.style.width = W + "px";
-  svg.style.height = H + "px";
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
   svg.innerHTML = bands + heads + links + circles;
 
   for (const g of svg.querySelectorAll(".node")) {
@@ -760,6 +822,23 @@ async function loadPersistence() {
     ? `<div class="muted" style="padding:6px 10px">…and ${rows.length - 40} more</div>`
     : "");
 }
+
+/* Below 900px the threat list becomes a panel rather than a column. It
+   is the page's entry point, so the button sits on the left of the bar,
+   where the list itself would be. */
+setupRail({
+  el: document.querySelector("aside"),
+  side: "left",
+  label: "Threats and persistence",
+  glyph: "☰",
+  media: 900,
+});
+
+/* Picking a threat means the panel has done its job, and on a phone it
+   is now covering the trace it was opened to produce. */
+el("list").addEventListener("click", (e) => {
+  if (e.target.closest(".card")) closeRails();
+});
 
 loadThreats();
 loadPersistence();

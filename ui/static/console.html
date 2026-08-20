@@ -150,9 +150,14 @@ main > header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-
 .story .sentence{font-size:14.5px;line-height:1.55;color:var(--fg);text-wrap:pretty}
 .story .sub{font-family:var(--mono);font-size:11px;color:var(--mut-2);margin-top:7px}
 
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:1px;background:var(--line);
+/* The 1px separators are drawn by each tile's outer shadow bleeding into
+   the gap, not by the container's background showing through it. Seven
+   KPIs into a four-wide grid leaves a trailing cell, and with the
+   line colour behind the grid that cell rendered as a solid grey block
+   -- a tile with no content in it, which reads as a bug. */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:1px;background:var(--panel-2);
   border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:14px}
-.kpi{background:var(--panel-2);padding:13px 15px}
+.kpi{background:var(--panel-2);padding:13px 15px;box-shadow:0 0 0 1px var(--line)}
 .kpi .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut-4);
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kpi .val{display:flex;align-items:baseline;gap:7px;margin-top:8px}
@@ -302,6 +307,92 @@ main > header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-
 .empty{padding:44px 16px;text-align:center;font-family:var(--mono);font-size:11.5px;color:var(--mut-4);line-height:1.9}
 .banner{margin-top:14px;border:1px solid color-mix(in srgb, var(--critical) 30%, transparent);background:color-mix(in srgb, var(--critical) 6%, transparent);border-radius:12px;
   padding:14px 16px;font-family:var(--mono);font-size:11.5px;color:var(--critical);line-height:1.7}
+/* ==================================================================
+   Responsive
+
+   This page is a sidebar plus a body of fixed-column grids, and the
+   grids are where it actually breaks: a four-column findings row with a
+   118px action button does not survive a phone by getting narrower, it
+   survives by becoming four stacked rows.
+
+   The sidebar carries two things -- the view switch and the trace
+   targets -- and below 940 it becomes a panel opened from the app bar
+   rather than a 160px column that can hold neither a package spec nor
+   its "19 admit · 1 installed" line.
+   ================================================================== */
+@media (max-width: 1240px){
+  #shell{grid-template-columns:206px minmax(0,1fr)}
+  #body{padding:16px 16px 26px}
+  main > header{padding:11px 16px;gap:12px}
+  .finding{grid-template-columns:56px minmax(150px,200px) minmax(0,1fr) auto;gap:12px}
+  .stage{grid-template-columns:26px minmax(130px,180px) 116px minmax(0,1fr);gap:12px}
+}
+
+/* The focus box is a label, not a control -- it repeats what the
+   sidebar's selection already says -- so it is the first thing to go
+   when the header runs out of room. */
+@media (max-width: 1080px){
+  .focus{min-width:0;flex:1 1 200px}
+  .tiers{display:none}
+  .adv-grid,.adv-head{grid-template-columns:minmax(110px,160px) 96px minmax(0,1fr) 78px;gap:10px}
+  .repo-row{grid-template-columns:minmax(150px,1fr) 130px 96px 88px;gap:10px}
+}
+
+@media (max-width: 940px){
+  #shell{grid-template-columns:minmax(0,1fr)}
+  aside{width:min(300px,88vw);border-right:0}
+  .focus{display:none}
+  main > header{padding:10px 14px}
+  #body{padding:14px 14px 24px}
+}
+
+/* Phone. Every fixed-column grid becomes a stack, in reading order:
+   what tier, what entity, why, and then the action. */
+@media (max-width: 720px){
+  main > header{gap:10px;padding:10px 12px;align-items:flex-start}
+  .view-title{font-size:14px}
+  .act{padding:9px 12px;font-size:11px}
+  #body{padding:12px 12px 22px}
+
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .kpi{padding:11px 12px}
+  .kpi .v{font-size:21px}
+
+  .story{flex-direction:column;gap:10px;padding:13px 14px}
+  .story .sentence{font-size:13.5px}
+
+  .finding{grid-template-columns:minmax(0,1fr);gap:9px;padding:13px 14px}
+  .finding .counts{margin-top:3px}
+  .open-btn{justify-self:start}
+  .tier-badge{justify-self:start}
+
+  .adv-grid,.adv-head{grid-template-columns:minmax(0,1fr);gap:6px}
+  .adv-head{display:none}          /* column headings over one column say nothing */
+  .adv-grid .fix{text-align:left}
+
+  .repo-row{grid-template-columns:minmax(0,1fr);gap:9px}
+  .stage{grid-template-columns:minmax(0,1fr);gap:6px;padding:12px 14px}
+  .stage .step{display:none}
+
+  .split{gap:12px}
+  .side-card{max-width:none;flex:1 1 100%;padding:14px}
+  .meta-row{flex-direction:column;align-items:flex-start;gap:2px}
+  .meta-row .v{text-align:left;flex:none}
+
+  /* The propagation graph is absolutely positioned at computed pixel
+     offsets -- six lanes of it do not reflow. It keeps its horizontal
+     scroll, which is the honest answer for a wide diagram on a narrow
+     screen. */
+  .graph-scroll{padding:12px}
+  .tip{width:min(280px,86vw)}
+}
+
+/* On a touch screen the propagation graph's hover tooltip can never
+   fire, so the hint that tells you to hover is a lie. */
+@media (hover: none){
+  .card-head .h{display:none}
+  .gnode:hover{transform:none}
+}
 </style>
 </head>
 <body>
@@ -311,12 +402,12 @@ main > header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-
   <div class="barstats">
     <div class="barstat alarm"><b id="barP0">—</b><span>runtime exposed</span></div>
     <div class="barstat"><b id="barFindings">—</b><span>findings</span></div>
-    <div class="barstat"><b id="barMs">—</b><span>answered in ms</span></div>
+    <div class="barstat opt-1"><b id="barMs">—</b><span>answered in ms</span></div>
   </div>
 </header>
 
 <div id="shell">
-  <aside>
+  <aside id="sidebar">
     <div class="side-head" style="padding-top:16px">this package</div>
     <nav id="nav"></nav>
     <div class="side-head">trace targets</div>
@@ -1148,6 +1239,19 @@ $('#markBtn').onclick=async()=>{
 
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){ S.hover=null; paintTip(); }
+});
+
+/* Below 940 the sidebar becomes a panel: it holds the view switch and
+   the trace targets, and neither survives a 160px column. */
+setupRail({
+  el:document.getElementById('sidebar'),
+  side:'left', label:'Views and trace targets', glyph:'\u2630', media:940
+});
+
+/* Choosing a view or a target is the whole reason the panel was opened,
+   and on a narrow screen it is now covering the answer. */
+document.getElementById('sidebar').addEventListener('click',e=>{
+  if(e.target.closest('.nav-btn')||e.target.closest('.tgt')) closeRails();
 });
 
 boot();

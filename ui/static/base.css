@@ -207,12 +207,22 @@ h1, h2, h3, h4 { margin: 0; font-weight: 600; letter-spacing: -.012em; }
 /* ------------------------------------------------------------------ */
 .appbar {
   grid-column: 1 / -1;
-  height: var(--bar-h);
+  /* min-height, not height: the bar wraps to two rows on a narrow
+     viewport rather than clipping its own contents, and every page's
+     grid gives it an `auto` row so it can take the space it needs. */
+  min-height: var(--bar-h);
   display: flex; align-items: center; gap: 14px;
-  padding: 0 14px;
+  padding: 6px 14px;
   background: var(--surface-0);
   border-bottom: 1px solid var(--line);
   position: relative; z-index: 40;
+  flex-wrap: wrap; row-gap: 8px;
+}
+/* Brand + tabs travel together, so they share a wrapper. It is
+   shrinkable so the tab strip inside it can compress on a phone. */
+.bar-lead {
+  display: flex; align-items: center; gap: 14px;
+  flex: 0 1 auto; min-width: 0;
 }
 .brand { display: flex; align-items: center; gap: 9px; flex: none; }
 .brand .mark {
@@ -281,6 +291,53 @@ h1, h2, h3, h4 { margin: 0; font-weight: 600; letter-spacing: -.012em; }
   font-size: 14px; line-height: 1;
 }
 .icon-btn:hover { background: var(--surface-2); color: var(--ink-1); }
+
+/* ------------------------------------------------------------------ */
+/* Collapsing rails                                                    */
+/*                                                                     */
+/* These pages are three-column analyst tools, and three columns of    */
+/* 300px do not exist below about 1150px. Rather than squeezing them   */
+/* until every column is too narrow to read — which loses the content  */
+/* AND the canvas — a rail that no longer fits becomes an overlay      */
+/* panel opened from a button in the app bar.                          */
+/*                                                                     */
+/* The mechanism is shared; which rail collapses at which width is a   */
+/* per-page decision, because the pages do not have the same rails.    */
+/* A page opts a rail in by giving it `.rail` inside a media query and */
+/* declaring which side it comes from.                                 */
+/* ------------------------------------------------------------------ */
+.railtoggle { display: none; }        /* revealed by each page's media query */
+.railtoggle[aria-expanded="true"] {
+  background: var(--surface-3); border-color: var(--ink-3); color: var(--ink-1);
+}
+
+/* Starts below the app bar, not at the top of the viewport: the bar holds
+   the toggle that closes the panel, and a scrim over it would eat the
+   click and leave the only way out as the Escape key. */
+.scrim {
+  position: fixed; top: var(--bar-top, 52px); left: 0; right: 0; bottom: 0;
+  z-index: 44;
+  background: color-mix(in srgb, #000 42%, transparent);
+  opacity: 0; pointer-events: none; transition: opacity .18s;
+}
+body.rail-open .scrim { opacity: 1; pointer-events: auto; }
+@media (prefers-reduced-motion: reduce) { .scrim { transition: none; } }
+
+/* Applied to a rail only while it is in overlay mode. Anchored below the
+   app bar so the tabs and the toggle stay reachable with a panel open —
+   a drawer that covers its own dismiss button is a trap. */
+.as-drawer {
+  position: fixed; top: var(--bar-top, 52px); bottom: 0; z-index: 46;
+  width: min(340px, 88vw);
+  background: var(--surface-0);
+  box-shadow: var(--shadow-2);
+  transition: transform .2s cubic-bezier(.3,.7,.4,1);
+  overscroll-behavior: contain;
+}
+.as-drawer.from-left  { left: 0;  border-right: 1px solid var(--line); transform: translateX(-101%); }
+.as-drawer.from-right { right: 0; border-left: 1px solid var(--line);  transform: translateX(101%); }
+.as-drawer.open { transform: none; }
+@media (prefers-reduced-motion: reduce) { .as-drawer { transition: none; } }
 
 /* ------------------------------------------------------------------ */
 /* Buttons                                                             */
@@ -544,3 +601,106 @@ input[type=text]:focus, input[type=search]:focus {
 .grow  { flex: 1; }
 .nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 [hidden] { display: none !important; }
+
+/* ================================================================== */
+/* Responsive: the app bar                                             */
+/*                                                                     */
+/* The bar carries four things and they do not all survive a phone:    */
+/* identity, navigation, headline numbers, and the theme control.      */
+/* Navigation is the one that must never go — it is the only way off   */
+/* the page — so it is the last thing to give up space, and the        */
+/* numbers shed in priority order instead of all shrinking together    */
+/* into an unreadable row.                                             */
+/*                                                                     */
+/* Each page marks its own stats: `.opt-2` is the first to go, then    */
+/* `.opt-1`. Whatever is left unmarked is the number that page thinks  */
+/* is worth a glance at any width.                                     */
+/* ================================================================== */
+
+/* A stat strip that outgrows the bar scrolls rather than wrapping into
+   a ragged block or pushing the theme button off the edge. */
+@media (max-width: 1400px) {
+  .barstats { overflow-x: auto; scrollbar-width: none; }
+  .barstats::-webkit-scrollbar { display: none; }
+  .barstat { padding: 0 10px; }
+  .barstat b { font-size: 14px; }
+}
+
+@media (max-width: 1200px) {
+  .barstat.opt-2 { display: none; }
+}
+
+@media (max-width: 1024px) {
+  .barstat.opt-1 { display: none; }
+  .appbar { gap: 10px; padding: 6px 10px; }
+  .tabs a { padding: 7px 11px; }
+  .tabs a[aria-current="page"] { padding: 6px 10px; }
+}
+
+/* Below this the brand wordmark is the cheapest thing to lose: the tile
+   still identifies the product, and the page name is in the title bar
+   and in the held-down tab. */
+@media (max-width: 860px) {
+  .brand .name { display: none; }
+}
+
+/* Phone. The tabs keep their labels — three destinations reduced to
+   three glyphs is a puzzle, not a navigation — but the bar is allowed
+   to become its own scrolling row, and the stats sit on a second line
+   where they have room to be read. */
+@media (max-width: 700px) {
+  :root { --bar-h: 46px; }
+  /* Still wrapping — the stat strip below deliberately takes its own
+     line — but the first line has to compress rather than spill, or the
+     theme button lands on a row by itself. */
+  .appbar { padding: 6px 8px; gap: 8px; }
+  /* `flex-basis: 0`, not `auto`. Flexbox assigns items to lines using
+     their hypothetical size and only flexes WITHIN a line, so an
+     auto-basis wrapper forces the wrap before shrinking ever gets a
+     chance — which is how the theme button ended up on a row by itself
+     next to 40px of empty space. A zero basis lets this wrapper claim
+     what is left instead of demanding what it contains. */
+  .bar-lead { flex: 1 1 0; min-width: 0; gap: 8px; }
+  .bar-spacer { display: none; }
+  /* `min-width: 0` is what actually lets this shrink. A flex item
+     defaults to min-width:auto, so the tab strip refused to go below its
+     content width and wrapped the theme button onto a line of its own
+     instead. With it, the strip scrolls inside whatever room is left and
+     the bar stays one row. */
+  .tabs { flex: 1 1 0; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs a { font-size: 12px; padding: 7px 10px; flex: none; }
+  .barstats {
+    order: 10; flex-basis: 100%;
+    border-top: 1px solid var(--line-soft); padding-top: 6px;
+  }
+  .barstat { flex: 1; text-align: left; padding: 0 8px; }
+  .barstat:first-child { padding-left: 0; }
+}
+
+/* ================================================================== */
+/* Responsive: shared components                                       */
+/* ================================================================== */
+@media (max-width: 700px) {
+  /* Touch targets. 32px is fine for a mouse and short of the ~44px a
+     finger needs, and these controls are the ones a phone user reaches
+     for first. */
+  .icon-btn { width: 38px; height: 38px; }
+  .btn { padding: 11px 14px; }
+  .btn.sm { padding: 9px 12px; }
+  .pills button { padding: 8px 12px; }
+
+  .kv { flex-direction: column; gap: 2px; padding: 5px 0; }
+  .kv > b { min-width: 0; }
+
+  .sechead { padding: 12px 12px 10px; }
+  .card { padding: 11px 12px; }
+}
+
+/* A pointer that cannot hover gets no hover-only affordances, and needs
+   its hit areas sized for a finger rather than a cursor. */
+@media (hover: none) {
+  .card.tappable:hover { border-color: var(--line); }
+  .tabs a:hover { background: transparent; color: var(--ink-2); }
+  .tabs a[aria-current="page"]:hover { background: var(--surface-0); color: var(--ink-1); }
+}

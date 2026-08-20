@@ -32,7 +32,9 @@
 body {
   display: grid;
   grid-template-columns: 312px minmax(0, 1fr) 344px;
-  grid-template-rows: var(--bar-h) 1fr;
+  /* `auto`, not a fixed bar height: the app bar wraps to two rows on a
+     phone and must be allowed to take the space it needs. */
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -57,7 +59,13 @@ main { position: relative; overflow: hidden; display: flex; flex-direction: colu
     0 0 / 30px 30px,
     var(--surface-1);
 }
-canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+canvas {
+  display: block; width: 100%; height: 100%; cursor: grab;
+  /* The canvas handles its own pan and pinch, so the browser must not
+     also scroll or zoom the page underneath -- without this every drag
+     fights a rubber-band and every pinch zooms the whole document. */
+  touch-action: none;
+}
 canvas.dragging { cursor: grabbing; }
 
 /* A four-item family key, docked UNDER the canvas rather than floating
@@ -174,6 +182,56 @@ details.keybox > summary::after { content: "▾"; margin-left: auto; font-size: 
 details.keybox:not([open]) > summary::after { content: "▸"; }
 details.keybox > summary:hover { color: var(--ink-1); background: var(--surface-2); }
 details.keybox .body { padding: 0 14px 14px; }
+
+/* ==================================================================
+   Responsive
+
+   Three columns of 300px do not exist below about 1150px, and the
+   canvas is the page -- squeezing it to make room for two rails loses
+   the graph AND makes both rails too narrow to read. So the rails
+   collapse to panels, in priority order: the right one first, because
+   it is reference material (the key, the node you last clicked, the
+   feed), while the left one is the controls that make anything happen
+   at all.
+   ================================================================== */
+@media (max-width: 1500px) {
+  body { grid-template-columns: 288px minmax(0, 1fr) 312px; }
+}
+
+/* The right rail becomes a panel. It carries the key, so the four-family
+   strip under the canvas is now the only always-visible legend -- which
+   is why that strip exists rather than everything living in the rail. */
+@media (max-width: 1240px) {
+  body { grid-template-columns: 288px minmax(0, 1fr); }
+  section.right { width: min(360px, 90vw); border-left: 0; }
+}
+
+/* Both rails become panels. The canvas gets the whole viewport, which is
+   what a graph on a small screen actually needs. */
+@media (max-width: 940px) {
+  body { grid-template-columns: minmax(0, 1fr); }
+  aside { width: min(340px, 90vw); border-right: 0; }
+}
+
+@media (max-width: 700px) {
+  .famkey { padding: 8px 10px; gap: 12px; row-gap: 6px; font-size: 10.5px; }
+  /* "drag to pan · scroll to zoom · click to pin" is mouse instructions.
+     A touch device is told the touch gestures instead, by #hint below. */
+  .famkey .muted { display: none; }
+  .hud { right: 8px; top: 8px; padding: 5px 8px; font-size: 10.5px; }
+  aside, section.right .pad { padding: 12px; }
+  details.keybox > summary { padding: 12px; }
+  details.keybox .body { padding: 0 12px 12px; }
+}
+
+/* The gesture hint, shown only where the mouse instructions are wrong. */
+#hint { display: none; }
+@media (hover: none) {
+  .famkey .muted { display: none; }
+  #hint {
+    display: inline; color: var(--ink-3); font-size: 11px; white-space: nowrap;
+  }
+}
 </style>
 </head>
 <body>
@@ -182,8 +240,8 @@ details.keybox .body { padding: 0 14px 14px; }
   <div class="bar-spacer"></div>
   <div class="barstats">
     <div class="barstat alarm"><b id="sWrong">0</b><span>known bad</span></div>
-    <div class="barstat"><b id="gNodes">0</b><span>nodes</span></div>
-    <div class="barstat"><b id="gEdges">0</b><span>edges</span></div>
+    <div class="barstat opt-1"><b id="gNodes">0</b><span>nodes</span></div>
+    <div class="barstat opt-2"><b id="gEdges">0</b><span>edges</span></div>
     <div class="barstat alarm"><b id="wFleet">0</b><span>fleet hits</span></div>
   </div>
 </header>
@@ -281,6 +339,7 @@ details.keybox .body { padding: 0 14px 14px; }
     <span class="item"><i class="dot i"></i><b>amber</b> who could publish the next one</span>
     <span class="grow"></span>
     <span class="muted">drag to pan · scroll to zoom · click a circle to pin it</span>
+    <span id="hint">drag to pan · pinch to zoom · tap a circle to pin it</span>
   </div>
 </main>
 
@@ -617,7 +676,19 @@ function resize() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   S.w = r.width; S.h = r.height;
 }
-window.addEventListener("resize", () => { resize(); draw(); });
+/* Watch the ELEMENT, not the window.
+   `resize()` used to run once at script time and then only on window
+   resize, which is three separate races: the canvas measured 812x0 at
+   script time because the layout had not settled, no window event ever
+   followed, and the backing store stayed 1px tall while CSS stretched it
+   to 699 -- the graph rendered as vertical smears. Crossing a breakpoint
+   or opening a drawer resizes the canvas without resizing the window
+   too, and a ResizeObserver catches all of it. */
+if (window.ResizeObserver) {
+  new ResizeObserver(() => { resize(); draw(); }).observe(cv);
+} else {
+  window.addEventListener("resize", () => { resize(); draw(); });
+}
 
 function worldToScreen(n) {
   return {
@@ -850,7 +921,16 @@ function draw() {
      turns looking into knowing, and a reader should not have to zoom in
      and hover to learn that the red thing is GHSA-xxxx. */
   if (S.wrong.size && S.wrong.size <= 80) {
-    ctx.font = "600 10.5px " + LABEL_FONT;
+    /* Labels need room, and on a phone there is none: eleven pills of
+       ~150px laid over a 390px canvas cover the graph they exist to
+       annotate. So a narrow canvas gets the few nearest the centre,
+       clipped harder. Nothing is lost — the circle is still red,
+       enlarged and breathing, tapping it names it in the panel, and the
+       rail's list is the complete index at every width. */
+    const narrow = S.w < 620;
+    const maxLabels = narrow ? 3 : 80;
+    const maxChars = narrow ? 16 : 34;
+    ctx.font = `600 ${narrow ? 10 : 10.5}px ` + LABEL_FONT;
     /* Greedy de-collision. Findings cluster -- eight of them sit on one
        compromised package -- so eight pills land on the same forty
        pixels and the result is unreadable in exactly the region that
@@ -872,8 +952,10 @@ function draw() {
       .sort((a, b) => Math.hypot(a.p.x - cx, a.p.y - cy) - Math.hypot(b.p.x - cx, b.p.y - cy));
 
     for (const { n, p } of targets) {
+      if (placed.length >= maxLabels) break;
       const r = Math.max(1.2, Math.max((STYLE[n.label] || { r: 3 }).r, 7.5) * Math.sqrt(k));
-      const text = n.name.slice(0, 34);
+      const text = n.name.length > maxChars
+        ? n.name.slice(0, maxChars - 1) + "…" : n.name;
       const w = ctx.measureText(text).width + 10, h = 15;
       const spots = [
         { x: p.x - w / 2,    y: p.y - r - 19 },   // above
@@ -921,8 +1003,11 @@ function loop() {
 /* ==================================================================
    Interaction
    ================================================================== */
-function nodeAt(sx, sy) {
-  let best = null, bestD = 14;
+function nodeAt(sx, sy, slop = 14) {
+  // `slop` is the hit radius. A fingertip covers roughly 9mm and a cursor
+  // covers one pixel, so touch passes a bigger one -- otherwise every tap
+  // on a 3.4px version node misses and the graph feels dead.
+  let best = null, bestD = slop;
   for (const n of S.nodes) {
     const p = worldToScreen(n);
     const d = Math.hypot(p.x - sx, p.y - sy);
@@ -998,6 +1083,105 @@ cv.addEventListener("wheel", (e) => {
   S.cam.y += before.y - after.y;
   updateHud();
 }, { passive: false });
+
+/* ------------------------------------------------------------------
+   Touch
+
+   Everything above is mouse-only: mousedown/mousemove/wheel. On a
+   tablet or a phone that meant the canvas rendered perfectly and could
+   not be panned, zoomed, or interrogated at all -- the page loaded and
+   then did nothing, which is worse than not fitting.
+
+   Zoom around the pinch MIDPOINT rather than the canvas centre, using
+   the same before/after reprojection the wheel handler uses, so the
+   point under your fingers stays under your fingers. Anchoring to the
+   centre instead makes the graph slide away while you pinch, which is
+   the single thing that makes a touch canvas feel broken.
+   ------------------------------------------------------------------ */
+const TAP_SLOP = 12;      // px of travel still counted as a tap, not a drag
+let touch = null;
+
+const local = (t) => {
+  const r = cv.getBoundingClientRect();
+  return { x: t.clientX - r.left, y: t.clientY - r.top };
+};
+const spread = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+const midpoint = (a, b) => {
+  const r = cv.getBoundingClientRect();
+  return { x: (a.clientX + b.clientX) / 2 - r.left, y: (a.clientY + b.clientY) / 2 - r.top };
+};
+const toWorld = (p) => ({
+  x: (p.x - S.w / 2) / S.cam.k + S.cam.x,
+  y: (p.y - S.h / 2) / S.cam.k + S.cam.y,
+});
+
+cv.addEventListener("touchstart", (e) => {
+  if (e.touches.length === 1) {
+    const p = local(e.touches[0]);
+    // A finger is blunter than a cursor, so the node under it is found
+    // with a wider radius than nodeAt's default.
+    touch = { mode: "pan", ...p, moved: 0, node: nodeAt(p.x, p.y, 26) };
+  } else if (e.touches.length === 2) {
+    touch = {
+      mode: "pinch",
+      dist: spread(e.touches[0], e.touches[1]),
+      mid: midpoint(e.touches[0], e.touches[1]),
+      moved: TAP_SLOP + 1,          // a pinch is never a tap
+    };
+  }
+}, { passive: true });
+
+cv.addEventListener("touchmove", (e) => {
+  if (!touch) return;
+  e.preventDefault();                // stop the page rubber-banding
+
+  if (touch.mode === "pinch" && e.touches.length >= 2) {
+    const dist = spread(e.touches[0], e.touches[1]);
+    const mid = midpoint(e.touches[0], e.touches[1]);
+    const before = toWorld(mid);
+    S.cam.k = Math.max(0.12, Math.min(9, S.cam.k * (dist / (touch.dist || dist))));
+    const after = toWorld(mid);
+    S.cam.x += before.x - after.x;
+    S.cam.y += before.y - after.y;
+    // Two fingers travelling together pan as well as pinch, which is
+    // what every map does and what a hand expects.
+    S.cam.x -= (mid.x - touch.mid.x) / S.cam.k;
+    S.cam.y -= (mid.y - touch.mid.y) / S.cam.k;
+    touch.dist = dist; touch.mid = mid;
+    updateHud();
+    return;
+  }
+
+  if (e.touches.length !== 1) return;
+  const p = local(e.touches[0]);
+  const dx = p.x - touch.x, dy = p.y - touch.y;
+  touch.moved += Math.abs(dx) + Math.abs(dy);
+  if (touch.node) {
+    // Dragging a node pins it, exactly as the mouse path does.
+    touch.node.pinned = true;
+    touch.node.x += dx / S.cam.k;
+    touch.node.y += dy / S.cam.k;
+    S.alpha = Math.max(S.alpha, 0.35);
+  } else {
+    S.cam.x -= dx / S.cam.k;
+    S.cam.y -= dy / S.cam.k;
+  }
+  touch.x = p.x; touch.y = p.y;
+}, { passive: false });
+
+cv.addEventListener("touchend", (e) => {
+  if (!touch) return;
+  // A tap selects. There is no hover on a touch screen, so selection is
+  // the only way to identify a circle -- and the node panel is where
+  // that identification is written.
+  if (touch.mode === "pan" && touch.moved <= TAP_SLOP) {
+    if (touch.node) selectNode(touch.node);
+    else { S.selected = null; renderDetail(null); }
+  }
+  if (e.touches.length === 0) touch = null;
+}, { passive: true });
+
+cv.addEventListener("touchcancel", () => { touch = null; }, { passive: true });
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g,
@@ -1080,10 +1264,19 @@ async function loadGraph() {
     seedLayout();
     S.alpha = 1;
     S.cam = { x: 0, y: 0, k: 0.6 };
-    // Fit once the layout has had a moment to open out, so the first view
-    // frames the whole graph instead of the seed spiral.
-    setTimeout(fitToView, 1200);
-    setTimeout(fitToView, 4000);
+    /* Fit once the layout has had a moment to open out, so the first
+       view frames the whole graph instead of the seed spiral.
+
+       On a small canvas "the whole graph" fits at about 0.19x, where
+       830 nodes are a two-pixel haze and nothing is legible. There the
+       opening view frames the findings instead: it is the question the
+       page exists to answer, and "Fit all" is one button away. */
+    const openingView = () => {
+      if (S.w < 620 && S.wrong.size) focusOn([...S.wrong]);
+      else fitToView();
+    };
+    setTimeout(openingView, 1200);
+    setTimeout(openingView, 4000);
     el("gNodes").textContent = g.stats.nodes.toLocaleString();
     el("gEdges").textContent = g.stats.edges.toLocaleString();
     el("omitted").innerHTML = (g.omitted || [])
@@ -1547,6 +1740,25 @@ window.__blastRadius = {
     id, name: S.byId.get(id)?.name, label: S.byId.get(id)?.label,
   })),
 };
+
+/* The two rails, with different breakpoints because they are not equally
+   needed. The right one is reference -- the key, the last node clicked,
+   the feed -- and goes first. The left one is the controls that make
+   anything happen at all, so it holds its column for another 300px. */
+setupRail({
+  el: document.querySelector("section.right"),
+  side: "right", label: "Key and node detail", glyph: "◧", media: 1240,
+});
+setupRail({
+  el: document.querySelector("aside"),
+  side: "left", label: "Scan, watch and simulate", glyph: "☰", media: 940,
+});
+
+/* Framing a finding is the answer the panel was opened to get, and on a
+   narrow screen the panel is now standing on top of it. */
+el("wrongList").addEventListener("click", (e) => {
+  if (e.target.closest(".wrongrow")) closeRails();
+});
 
 buildLegend();
 resize();
