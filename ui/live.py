@@ -207,26 +207,41 @@ class LiveState:
     @staticmethod
     def describe_repo(path: Path) -> dict:
         """What a scan would find here, before committing to running one."""
+        from blastradius.ingest.ignore import IGNORE_FILE, is_ignored, load_ignores
         from blastradius.ingest.lockfile import find_lockfiles
 
-        locks = find_lockfiles(path)
+        patterns = load_ignores(path)
+        locks, ignored = find_lockfiles(path, with_skipped=True)
         sources = sum(
             1 for p in path.rglob("*")
             if p.suffix in (".ts", ".tsx", ".js", ".jsx", ".mjs")
-            and "node_modules" not in p.parts
+            and not is_ignored(p, path, patterns)
         )
+        note = ""
+        if not locks:
+            note = (
+                "No package-lock.json found. The package tier needs a resolved "
+                "lockfile; run `npm install --package-lock-only` in the repo "
+                "first, or pick a checkout that has one."
+            )
+            if ignored:
+                # The difference between "this repo has none" and "this repo
+                # told me to skip all of them" is the whole answer here.
+                note = (
+                    f"No usable package-lock.json: all {len(ignored)} found were "
+                    f"excluded by {IGNORE_FILE}."
+                )
         return {
             "path": str(path),
             "lockfiles": [str(p.relative_to(path)) for p in locks[:20]],
             "lockfile_count": len(locks),
+            # Shown before the scan runs, so nobody is surprised by the count
+            # afterwards and nobody has to guess why it is lower than `find`.
+            "ignored": [str(p.relative_to(path)) for p in ignored[:20]],
+            "ignored_count": len(ignored),
             "source_files": sources,
             "usable": bool(locks),
-            "note": (
-                "" if locks else
-                "No package-lock.json found. The package tier needs a resolved "
-                "lockfile; run `npm install --package-lock-only` in the repo "
-                "first, or pick a checkout that has one."
-            ),
+            "note": note,
         }
 
     # -- ingest ------------------------------------------------------------

@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import schema
+from ..ingest.ignore import IGNORE_FILE
 from .osv import OsvScan, load_osv_csv
 
 __all__ = [
@@ -223,6 +224,11 @@ class ScanRun:
     #: True when the scan read nothing at all. Zero findings from a blind scan
     #: is not a clean bill of health, and callers must be able to tell.
     blind: bool = False
+    #: Manifests skipped by `.blastradiusignore`, and the rows dropped with
+    #: them. Recorded rather than discarded: silently narrowing a scan is the
+    #: same failure as silently widening it, told backwards.
+    ignored_manifests: list[str] = field(default_factory=list)
+    ignored_rows: int = 0
 
     def render(self) -> str:
         eco = ", ".join(f"{k}={v}" for k, v in sorted(self.ecosystems.items()))
@@ -583,9 +589,20 @@ def scan_repository(
     # -- 1. what is there to scan -----------------------------------------
 
     def discover():
+        from ..ingest.ignore import load_ignores, split_ignored
+
+        patterns = load_ignores(repo)
         manifests = deps.find_manifests(repo)
-        found = {k: [str(p) for p in v] for k, v in manifests.items()}
+        found: dict[str, list[str]] = {}
+        dropped: list[Path] = []
+        for kind, paths in manifests.items():
+            kept, skipped = split_ignored(paths, repo, patterns)
+            found[kind] = [str(p) for p in kept]
+            dropped.extend(skipped)
+        run.ignored_manifests = [str(p) for p in dropped]
         counts = ", ".join(f"{k}={len(v)}" for k, v in sorted(found.items()))
+        if dropped:
+            counts += f", {len(dropped)} ignored"
         return found, counts
 
     run.manifests = timer.run("discover manifests", discover)
@@ -640,6 +657,44 @@ def scan_repository(
             "osv-scanner is not installed, so this ran against api.osv.dev over "
             "the versions the lockfiles resolve. Same advisories, one network "
             "hop; install the binary for the path that works offline."
+        )
+
+    # -- 2b. drop findings from directories this repo disowns ---------------
+    #
+    # Filtering discovery is not enough. `osv-scanner scan --recursive` walks
+    # the tree itself and has no idea about `.blastradiusignore`, so a demo
+    # corpus or a test fixture still comes back with findings attached. Left
+    # in, those advisories materialise PackageVersion nodes for packages no
+    # service resolved -- findings against code the repository does not ship,
+    # which is exactly what the ignore file was added to prevent.
+    #
+    # Rows are matched on their `source_file`. A row without one is kept: an
+    # unattributable finding is not evidence that it came from an ignored
+    # place, and dropping it would be the silent narrowing this guards against.
+
+    def filter_ignored():
+        from ..ingest.ignore import is_ignored, load_ignores
+
+        patterns = load_ignores(repo)
+        kept, dropped = [], 0
+        for row in rows:
+            source = row.get("source_file") or ""
+            if source and is_ignored(Path(source), repo, patterns):
+                dropped += 1
+                continue
+            kept.append(row)
+        return (kept, dropped), (
+            f"{dropped} row(s) from ignored paths dropped" if dropped
+            else "nothing ignored"
+        )
+
+    (rows, run.ignored_rows) = timer.run("apply .blastradiusignore", filter_ignored)
+    if run.ignored_manifests or run.ignored_rows:
+        run.notes.append(
+            f"{len(run.ignored_manifests)} manifest(s) and {run.ignored_rows} "
+            f"finding(s) were excluded by {IGNORE_FILE} at the scan root. They "
+            f"are on disk and were deliberately not treated as this project's "
+            f"code."
         )
 
     # -- 3. the CSV contract -----------------------------------------------

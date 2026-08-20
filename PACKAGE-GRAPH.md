@@ -654,6 +654,15 @@ defaults now agree, and a test pins the pairing itself rather than the generator
 - **The scale harness is synthetic.** It answers a complexity question, which does not need real names, and
   it drives the real writer and the real engine. It does not tell you how a 500k-node graph built from
   *actual* npm data would behave — dependency fan-out there is heavily skewed, and this generator's is not.
+- **`.blastradiusignore` is trusted, not verified.** A repository declares which of its directories are not
+  its own code, and the scan believes it. That is the right default — nobody else can know that `corpus/` is
+  a demo — but it means a mis-scoped ignore silently narrows the graph. Skips are reported everywhere they
+  happen (`repo/inspect`, `doctor`, the scan notes) precisely because the failure would otherwise look like
+  a small repo rather than a wrong one.
+- **The OSV binary scanner cannot be scoped, only filtered afterwards.** `osv-scanner scan --recursive`
+  walks the tree itself with no knowledge of the ignore file, so findings from ignored paths are dropped
+  *after* the scan by matching each row's `source_file`. A row with no source attribution is kept rather
+  than guessed at. It costs a little scan time on directories whose results are then discarded.
 - **"Not reached from code" is only as true as the code scan.** The Explorer's second section reads the
   micro tier, so a repository ingested *without* the AST scanner has zero functions and zero imports — and
   every finding then reports "installed only". That failure mode reads as good news and is not; the header

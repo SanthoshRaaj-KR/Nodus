@@ -615,10 +615,18 @@ def cmd_pipeline(args) -> int:
     print(f"  scanner         : {scanner}")
     print(f"  repository      : {repo}")
 
-    lockfiles = [
-        p for p in repo.rglob("package-lock.json") if "node_modules" not in p.parts
-    ]
+    from .ingest.lockfile import find_lockfiles
+
+    lockfiles, ignored = find_lockfiles(repo, with_skipped=True)
     print(f"  lockfiles       : {len(lockfiles)}")
+    if ignored:
+        # Named, not just counted. "3 lockfiles" when the tree holds fifteen
+        # is a number somebody will otherwise spend an afternoon on.
+        print(f"  ignored         : {len(ignored)} via .blastradiusignore")
+        for path in ignored[:4]:
+            print(DIM(f"                    {path.relative_to(repo)}"))
+        if len(ignored) > 4:
+            print(DIM(f"                    ... and {len(ignored) - 4} more"))
     if not lockfiles:
         print()
         print(YELLOW("  No package-lock.json under this path, so there is nothing"))
@@ -817,8 +825,12 @@ def cmd_doctor(args) -> int:
         print(f"  docker daemon   : {RED('not reachable')}  {DIM('start Docker Desktop')}")
         ok = False
 
+    # Pointed *at* the corpus, so the repo-root ignore does not apply -- which
+    # is the whole reason ignore patterns are resolved against the scan root.
+    from .ingest.lockfile import find_lockfiles
+
     corpus = root / "corpus"
-    locks = [p for p in corpus.rglob("package-lock.json") if "node_modules" not in p.parts]
+    locks = find_lockfiles(corpus)
     print(f"  corpus          : {len(locks)} lockfile(s) under {corpus.name}/")
 
     print()

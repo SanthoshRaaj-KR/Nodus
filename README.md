@@ -163,6 +163,35 @@ explorer. Keeping them apart means the demo surface can be restarted or
 re-skinned without touching what other tools depend on, and it reads HydraDB
 directly rather than proxying — one fewer moving part to fail on stage.
 
+### Scoping a scan: `.blastradiusignore`
+
+Discovery is a recursive walk for `package-lock.json`, and a walk cannot tell a
+service you deploy from a fixture committed to exercise the parser. Pointed at
+*this* repository it found fifteen — twelve of them a synthetic demo corpus and
+one a test fixture — and reported a fleet of fifteen for a project that ships
+two. Every derived number inherits that: "2 of 13 threats reach code" is a
+different sentence when eleven findings belong to fixtures.
+
+So a repo says what is not its own code, in a `.blastradiusignore` at the scan
+root:
+
+```
+corpus/            # generated demo fleet
+tests/fixtures/    # parser fixtures
+```
+
+A pattern with a slash is **relative to the scan root**, so `corpus/` hides
+`<root>/corpus` and nothing else — pointing the CLI *at* `corpus/` still scans
+it, which is what the demo does on purpose. Bare names (`node_modules`, `.git`)
+match any component at any depth and always apply.
+
+It scopes both tiers. The graph walk honours it directly; the OSV scan also
+filters its findings by source, because `osv-scanner --recursive` walks the
+tree itself and would otherwise raise advisories against packages no service
+resolves. Skips are always **reported, never silent** — `repo/inspect` returns
+the ignored list before you commit to a scan, and `doctor` names them. A scan
+that quietly dropped twelve manifests is indistinguishable from a small repo.
+
 Three pages, each answering a different question:
 
 | Page | Question |

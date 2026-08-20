@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..pkg.identity import InvalidPackageName, version_key
+from .ignore import load_ignores, split_ignored
 
 
 @dataclass(frozen=True)
@@ -225,11 +226,19 @@ def parse_package_lock(path: Path | str, repo: str | None = None) -> ParsedLock:
     return parsed
 
 
-def find_lockfiles(root: Path | str) -> list[Path]:
-    """Every package-lock.json under root, ignoring installed dependencies."""
+def find_lockfiles(root: Path | str, with_skipped: bool = False):
+    """Every package-lock.json under root that is this project's own code.
+
+    Installed output (`node_modules`) and history (`.git`) are always skipped.
+    Anything else the repository disowns is listed in `.blastradiusignore` at
+    the scan root -- see :mod:`blastradius.ingest.ignore` for why a walk cannot
+    work this out for itself, and why the patterns are root-relative.
+
+    ``with_skipped=True`` returns ``(kept, skipped)`` instead of just the kept
+    list. Callers that report to a human should use it: a scan that quietly
+    dropped twelve manifests looks exactly like a project that only had three.
+    """
     root = Path(root)
-    return [
-        p
-        for p in root.rglob("package-lock.json")
-        if "node_modules" not in p.parts and ".git" not in p.parts
-    ]
+    patterns = load_ignores(root)
+    kept, skipped = split_ignored(root.rglob("package-lock.json"), root, patterns)
+    return (kept, skipped) if with_skipped else kept
