@@ -9,17 +9,26 @@ is query time, not framework overhead.
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import schema
-from ..hydra_client import HydraClient, HydraError
+from ..hydra_client import (
+    DEFAULT_GRAPH,
+    DEFAULT_HTTP,
+    DEFAULT_NAMESPACE,
+    DEFAULT_TOKEN,
+    HydraClient,
+    HydraError,
+)
 from ..query import blast
 from ..query.advisory import Advisory
 
@@ -28,7 +37,24 @@ ADVISORIES = ROOT / "advisories"
 STATIC = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(title="Blast Radius", version="1.0.0")
-client = HydraClient()
+
+_cors_origins = os.environ.get("CORS_ALLOW_ORIGINS", "*")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=(
+        ["*"] if _cors_origins == "*" else [o.strip() for o in _cors_origins.split(",") if o.strip()]
+    ),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+client = HydraClient(
+    base_url=os.environ.get("HYDRA_HTTP", DEFAULT_HTTP),
+    token=os.environ.get("HYDRA_TOKEN", DEFAULT_TOKEN),
+    namespace=os.environ.get("HYDRA_NAMESPACE", DEFAULT_NAMESPACE),
+    graph=os.environ.get("HYDRA_GRAPH", DEFAULT_GRAPH),
+)
 
 
 class AdvisoryIn(BaseModel):

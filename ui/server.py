@@ -15,16 +15,25 @@ one fewer moving part to fail on stage.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from queue import Empty
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from blastradius import schema
-from blastradius.hydra_client import HydraClient, HydraError
+from blastradius.hydra_client import (
+    DEFAULT_GRAPH,
+    DEFAULT_HTTP,
+    DEFAULT_NAMESPACE,
+    DEFAULT_TOKEN,
+    HydraClient,
+    HydraError,
+)
 from blastradius.ids import IdAllocator
 from blastradius.pkg import graphview as pkgview
 from blastradius.pkg import incident as pkgincident
@@ -38,7 +47,24 @@ STATIC = HERE / "static"
 ADVISORIES = HERE.parent / "advisories"
 
 app = FastAPI(title="Blast Radius Explorer", version="1.0.0")
-client = HydraClient()
+
+_cors_origins = os.environ.get("CORS_ALLOW_ORIGINS", "*")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=(
+        ["*"] if _cors_origins == "*" else [o.strip() for o in _cors_origins.split(",") if o.strip()]
+    ),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+client = HydraClient(
+    base_url=os.environ.get("HYDRA_HTTP", DEFAULT_HTTP),
+    token=os.environ.get("HYDRA_TOKEN", DEFAULT_TOKEN),
+    namespace=os.environ.get("HYDRA_NAMESPACE", DEFAULT_NAMESPACE),
+    graph=os.environ.get("HYDRA_GRAPH", DEFAULT_GRAPH),
+)
 
 #: purl -> integer id, shared with the CLI. Held open for the process
 #: because every package-view request resolves a target through it, and

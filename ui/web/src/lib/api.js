@@ -1,9 +1,14 @@
+/* Empty by default so a same-origin deploy (FastAPI serving this build under
+ * /static/app) keeps working unchanged. Set VITE_API_URL at build time only
+ * when the UI is hosted separately from the API (e.g. on Vercel). */
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 /* Thin fetch wrapper. FastAPI reports failures as {detail: "..."}, and that
  * string is usually the actual HydraError — worth surfacing verbatim rather
  * than replacing with a generic "request failed", because "node is down" and
  * "no such package" need different reactions from whoever is looking. */
 export async function api(path, opts) {
-  const r = await fetch(path, opts);
+  const r = await fetch(`${API_BASE}${path}`, opts);
   if (!r.ok) {
     let detail = '';
     try {
