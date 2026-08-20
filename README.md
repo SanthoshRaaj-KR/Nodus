@@ -223,6 +223,25 @@ stops the auto-fit from fighting you on resize.
 
 ![Phone width](docs/screens/mobile.png)
 
+### The redesigned console (`/console`)
+
+A React rebuild of this same Explorer lives in `ui/web` (Vite + React 18).
+`npm run build` there compiles into `ui/static/app`, which `server.py` already
+mounts; the build output is gitignored on purpose (see `.gitignore`) so a
+stale bundle can never silently outrank the source it was built from. Until
+that build has been run once in a given checkout, `GET /console` falls back
+to the standalone `ui/static/console.html` rather than 404ing.
+
+Two gaps worth knowing about before demoing off this branch:
+
+- **`/api/repos` has no backend yet.** `ui/web/src/lib/api.js` already says so
+  in a comment — the Repos view degrades to `localStorage` and states that
+  rather than faking a queue.
+- **`frontier`, `anomalies`, and `scale`** (the CLI surfaces this branch adds —
+  see `python -m blastradius.pkg.cli --help`) are not exposed through
+  `ui/server.py` or either console yet. They're CLI-only for now; wiring them
+  up is follow-up work, not something this merge attempted.
+
 ### Making it fast
 
 Measured rather than guessed, and the answer was not where it looked:
@@ -319,7 +338,17 @@ python -m blastradius.pkg.cli compare lodash@4.17.21     # range-only leads vs l
 python -m blastradius.pkg.cli simulate lodash@4.17.21    # mark it compromised, print the report
 python -m blastradius.pkg.cli retract lodash@4.17.21     # take the mark back off
 python -m blastradius.pkg.cli bench lodash@4.17.21       # query latency
+python -m blastradius.pkg.cli frontier pino@10.2.1       # where the worm goes NEXT
+python -m blastradius.pkg.cli anomalies --offline        # publish-time signals
+python -m blastradius.pkg.cli scale --yes                # the scale experiment (destructive)
 ```
+
+`frontier` is the forward-looking half, and the one no scanner answers: given a
+compromise, which packages can the implicated credentials publish to *next*,
+ranked by how many of your services resolve each one today. See
+[PACKAGE-GRAPH.md §10b](PACKAGE-GRAPH.md). `anomalies` reads publish metadata
+for the worm's own signature — bursts, install scripts appearing, publishes from
+outside the maintainer list.
 
 `compare` is the one that states the case without any UI: it prints how many
 versions a declared range admits against how many a lockfile actually resolved.

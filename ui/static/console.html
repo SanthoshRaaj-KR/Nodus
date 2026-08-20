@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blast Radius Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ------------------------------------------------------------------ tokens
+   Lifted from the design handoff. The tier colours carry the argument:
+   red is filed against the node, amber is a traced path, yellow is build
+   scope only, green is checked-and-clear. Green is a result, not an absence. */
+:root{
+  --bg:#08080b; --panel:#0a0a0e; --panel-2:#0b0b10; --panel-3:#0e0e14;
+  --line:rgba(255,255,255,0.08); --line-2:rgba(255,255,255,0.07);
+  --line-3:rgba(255,255,255,0.06);
+  --fg:#eceef4; --fg-2:#cfd2de; --fg-3:#b6b9c8; --fg-4:#a8abbb;
+  --mut:#9a9db0; --mut-2:#82859a; --mut-3:#74778a; --mut-4:#6f7286; --mut-5:#5d6072;
+  --high:#ff5d5d; --mod:#ffb14d; --warn:#f2d05a; --safe:#48d597; --violet:#7c6bff;
+  --violet-fg:#b5a6ff;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:'Space Grotesk',system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg)}
+body{font-family:var(--sans);color:var(--fg);height:100vh;overflow:hidden}
+a{color:var(--violet-fg);text-decoration:none}
+a:hover{color:#d5ccff}
+button{font-family:var(--sans)}
+::-webkit-scrollbar{height:9px;width:9px}
+::-webkit-scrollbar-track{background:rgba(255,255,255,0.03)}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15);border-radius:6px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.26)}
+
+@keyframes brFlow{to{stroke-dashoffset:-36}}
+@keyframes brRise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes brDraw{from{stroke-dashoffset:620}to{stroke-dashoffset:0}}
+@keyframes brPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,177,77,.32)}55%{box-shadow:0 0 0 9px rgba(255,177,77,0)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ------------------------------------------------------------------ shell */
+#shell{display:grid;grid-template-columns:232px minmax(0,1fr);height:100vh;background:var(--bg);overflow:hidden}
+
+aside{border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+.brand-box{padding:18px 18px 16px;border-bottom:1px solid var(--line-2)}
+.brand{font-size:14.5px;font-weight:700;letter-spacing:-.01em}
+.brand-sub{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut-4);margin-top:4px}
+
+nav{padding:12px 10px;display:flex;flex-direction:column;gap:2px;border-bottom:1px solid var(--line-2)}
+.nav-btn{display:flex;align-items:center;gap:10px;text-align:left;cursor:pointer;border:0;border-radius:8px;
+  padding:9px 11px;background:transparent;color:var(--mut);font-size:13.5px;font-weight:500;transition:background .14s}
+.nav-btn:hover{background:rgba(255,255,255,.05)}
+.nav-btn.on{background:rgba(124,107,255,.16);color:var(--fg)}
+.nav-btn .g{font-family:var(--mono);font-size:11px;color:var(--mut-5);width:13px}
+.nav-btn.on .g{color:var(--violet)}
+.nav-btn .lbl{flex:1}
+.nav-btn .n{font-family:var(--mono);font-size:10.5px;color:var(--mut-5)}
+.nav-btn.on .n{color:var(--violet-fg)}
+
+.side-head{padding:14px 16px 8px;font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--mut-4)}
+#targets{flex:1;overflow-y:auto;padding:0 10px 12px;display:flex;flex-direction:column;gap:2px;min-height:0}
+.tgt{text-align:left;cursor:pointer;border:1px solid var(--line-2);background:transparent;border-radius:8px;
+  padding:9px 10px;transition:border-color .14s,background .14s}
+.tgt:hover{border-color:rgba(255,255,255,.24)}
+.tgt.on{background:rgba(124,107,255,.14);border-color:rgba(124,107,255,.5)}
+.tgt .row{display:flex;align-items:center;gap:8px}
+.tgt .gl{font-family:var(--mono);font-size:10px;flex:0 0 auto}
+.tgt .nm{font-family:var(--mono);font-size:11.5px;color:#e4e7ef;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tgt .mt{font-family:var(--mono);font-size:10px;color:var(--mut-3);margin-top:5px}
+.side-foot{border-top:1px solid var(--line-2);padding:12px 16px;font-family:var(--mono);
+  font-size:10.5px;color:var(--mut-4);line-height:1.7}
+
+/* ----------------------------------------------------------------- header */
+main{display:flex;flex-direction:column;min-width:0;min-height:0}
+header{display:flex;align-items:center;gap:16px;padding:12px 22px;border-bottom:1px solid var(--line);
+  background:var(--panel);flex-wrap:wrap;flex:0 0 auto}
+.view-title{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.view-sub{font-family:var(--mono);font-size:10.5px;color:var(--mut-4);margin-top:3px}
+.focus{display:flex;align-items:center;gap:9px;background:var(--panel-3);border:1px solid rgba(255,255,255,.11);
+  border-radius:8px;padding:8px 13px;min-width:300px}
+.focus .k{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut-4)}
+.focus .v{font-family:var(--mono);font-size:12.5px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.focus .q{font-family:var(--mono);font-size:10.5px;color:var(--mut-4)}
+.spacer{flex:1}
+.tiers{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.tiers .k{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut-4)}
+.tier-chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;
+  color:var(--mut);white-space:nowrap;cursor:default}
+.tier-chip .g{font-size:10px}
+.tier-chip .id{font-weight:700}
+.act{cursor:pointer;border:1px solid rgba(255,93,93,.35);background:rgba(255,93,93,.09);color:#ff9c9c;
+  border-radius:8px;padding:8px 14px;font-family:var(--mono);font-size:11.5px;white-space:nowrap;transition:background .14s}
+.act:hover{background:rgba(255,93,93,.17)}
+.act[disabled]{opacity:.45;cursor:not-allowed}
+.act.retract{border-color:rgba(72,213,151,.35);background:rgba(72,213,151,.09);color:#6fe0af}
+.act.retract:hover{background:rgba(72,213,151,.17)}
+
+/* ------------------------------------------------------------------- body */
+#body{flex:1;overflow:auto;min-height:0;padding:18px 22px 28px}
+
+.story{display:flex;align-items:flex-start;gap:16px;border:1px solid var(--line);
+  background:rgba(255,255,255,.025);border-radius:12px;padding:15px 17px}
+.story.p0{background:rgba(255,93,93,.06);border-color:rgba(255,93,93,.3)}
+.story .badge{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;font-weight:700;
+  letter-spacing:.06em;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);
+  border-radius:6px;padding:5px 9px;white-space:nowrap;flex:0 0 auto}
+.story .badge .g{font-size:10px}
+.story .sentence{font-size:14.5px;line-height:1.55;color:var(--fg);text-wrap:pretty}
+.story .sub{font-family:var(--mono);font-size:11px;color:var(--mut-2);margin-top:7px}
+
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:1px;background:var(--line);
+  border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:14px}
+.kpi{background:var(--panel-2);padding:13px 15px}
+.kpi .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut-4);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi .val{display:flex;align-items:baseline;gap:7px;margin-top:8px}
+.kpi .v{font-size:26px;font-weight:700;letter-spacing:-.02em}
+.kpi .u{font-family:var(--mono);font-size:10.5px;color:var(--mut-3)}
+
+.card{margin-top:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
+.card-head{display:flex;align-items:center;gap:16px;padding:11px 16px;border-bottom:1px solid var(--line-2);flex-wrap:wrap}
+.card-head .t{font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--fg-3)}
+.card-head .h{font-family:var(--mono);font-size:11px;color:var(--mut-3)}
+.edge-key{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10.5px;
+  color:var(--mut-2);white-space:nowrap}
+.edge-key i{width:14px;height:2px;display:inline-block}
+
+/* ------------------------------------------------------------------ graph */
+.graph-scroll{overflow:auto;padding:16px}
+.graph-plane{position:relative}
+.graph-plane svg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.lane{position:absolute;top:0}
+.lane .r{display:flex;align-items:baseline;gap:7px}
+.lane .step{font-family:var(--mono);font-size:10px;color:var(--mut-5)}
+.lane .title{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-2)}
+.lane .count{font-family:var(--mono);font-size:9.5px;color:var(--mut-4);margin-top:4px}
+.lane .rule{height:2px;margin-top:8px}
+.gnote{position:absolute;font-family:var(--mono);font-size:9px;letter-spacing:.08em;background:var(--panel);
+  padding:2px 5px;border-radius:4px;white-space:nowrap}
+.gnode{position:absolute;cursor:pointer;border:1px solid;border-radius:10px;padding:9px 11px;
+  transition:transform .16s ease,border-color .16s ease}
+.gnode:hover{transform:translateY(-2px);border-color:rgba(255,255,255,.36)}
+.gnode .r1{display:flex;align-items:center;gap:8px}
+.gnode .gl{font-family:var(--mono);font-size:10px;flex:0 0 auto}
+.gnode .nm{font-family:var(--mono);font-size:12px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gnode .r2{display:flex;align-items:center;gap:9px;margin-top:7px}
+.gnode .mt{font-family:var(--mono);font-size:9.5px;color:var(--mut-2);flex:1;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.gnode .tag{font-family:var(--mono);font-size:8.5px;font-weight:700;letter-spacing:.08em;border-radius:4px;
+  padding:2px 5px;white-space:nowrap;flex:0 0 auto}
+.tip{position:absolute;width:296px;z-index:5;border:1px solid rgba(255,255,255,.18);background:rgba(12,12,18,.97);
+  backdrop-filter:blur(8px);border-radius:10px;padding:13px 14px;box-shadow:0 18px 40px -18px rgba(0,0,0,.9);
+  pointer-events:none}
+.tip .r{display:flex;align-items:center;gap:8px}
+.tip .nm{font-family:var(--mono);font-size:12px;color:var(--fg)}
+.tip .tr{font-family:var(--mono);font-size:10px;font-weight:700}
+.tip .why{font-size:12.5px;line-height:1.5;color:#b8bbc9;margin-top:9px;text-wrap:pretty}
+.tip .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut-4);margin-top:11px}
+.tip .edges{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+.tip .e{font-family:var(--mono);font-size:9.5px;color:#d9c9a0;background:rgba(255,177,77,.1);
+  border:1px solid rgba(255,177,77,.28);border-radius:4px;padding:3px 6px}
+.tip .mt{font-family:var(--mono);font-size:10px;color:var(--mut-3);margin-top:11px;word-break:break-all}
+
+/* --------------------------------------------------------------- findings */
+.split{display:flex;flex-wrap:wrap;gap:14px;margin-top:14px;align-items:flex-start}
+.pane{flex:1 1 620px;min-width:0;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.pane-head{display:flex;align-items:center;gap:12px;padding:11px 16px;background:rgba(255,255,255,.03);
+  border-bottom:1px solid var(--line-2)}
+.pane-head .t{font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--fg-3)}
+.pane-head .h{font-family:var(--mono);font-size:10.5px;color:var(--mut-3)}
+.side-card{flex:1 1 260px;max-width:320px;border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--panel)}
+.side-card .k{font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--mut-4)}
+.hr{height:1px;background:var(--line);margin:16px 0}
+
+.finding{cursor:pointer;padding:13px 16px;border-bottom:1px solid var(--line-3);display:grid;
+  grid-template-columns:62px minmax(180px,240px) minmax(0,1fr) 118px;gap:14px;align-items:center;transition:background .14s}
+.finding:hover{background:rgba(255,255,255,.045)}
+.finding.on{background:rgba(124,107,255,.1)}
+.tier-badge{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;font-weight:700;
+  background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);border-radius:5px;padding:4px 6px;justify-self:start}
+.tier-badge .g{font-size:9px}
+.finding .pkg{font-family:var(--mono);font-size:12.5px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.finding .counts{font-family:var(--mono);font-size:10px;color:var(--mut-3);margin-top:5px}
+.finding .sentence{font-size:12.5px;color:var(--fg-4);line-height:1.45;text-wrap:pretty}
+.path{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap}
+.hop{font-family:var(--mono);font-size:10.5px;border-radius:5px;padding:3px 7px;white-space:nowrap;border:1px solid}
+.hop-edge{font-family:var(--mono);font-size:8.5px;letter-spacing:.06em;color:var(--mut-4);white-space:nowrap}
+.open-btn{cursor:pointer;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:#d5ccff;
+  border-radius:7px;padding:8px 10px;font-family:var(--mono);font-size:10.5px;white-space:nowrap;transition:background .14s,border-color .14s}
+.open-btn:hover{background:rgba(124,107,255,.16);border-color:rgba(124,107,255,.5)}
+.tier-def{display:flex;gap:10px}
+.tier-def .id{font-family:var(--mono);font-size:11px;font-weight:700;flex:0 0 46px}
+.tier-def .help{font-size:12.5px;color:var(--fg-4);line-height:1.45;flex:1;text-wrap:pretty}
+.edge-def .id{font-family:var(--mono);font-size:10.5px;color:#d9c9a0}
+.edge-def .help{font-size:12px;color:var(--mut-2);margin-top:3px;line-height:1.45}
+
+/* ------------------------------------------------------------- advisories */
+.adv-grid{display:grid;grid-template-columns:minmax(120px,190px) 110px minmax(0,1fr) 90px;gap:12px;
+  padding:12px 16px;align-items:center;border-top:1px solid var(--line-3)}
+.adv-head{display:grid;grid-template-columns:minmax(120px,190px) 110px minmax(0,1fr) 90px;gap:12px;padding:11px 16px;
+  background:rgba(255,255,255,.03);font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--mut-4)}
+.adv-grid .id{font-family:var(--mono);font-size:12px;color:var(--fg);cursor:pointer}
+.adv-grid .id:hover{color:var(--violet-fg)}
+.adv-grid .sev{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px}
+.adv-grid .vec{font-family:var(--mono);font-size:10.5px;color:var(--mut-3);overflow:hidden;text-overflow:ellipsis}
+.adv-grid .fix{font-family:var(--mono);font-size:11px;color:#6fe0af;text-align:right}
+.pill{font-family:var(--mono);font-size:11px;color:#6fe0af;background:rgba(72,213,151,.08);
+  border:1px solid rgba(72,213,151,.24);border-radius:6px;padding:4px 8px}
+
+/* ------------------------------------------------------------- repository */
+.repo-form{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start}
+.repo-input{flex:1 1 420px;min-width:0;display:flex;align-items:center;gap:9px;background:var(--panel-3);
+  border:1px solid rgba(255,255,255,.11);border-radius:8px;padding:10px 13px;transition:border-color .14s}
+.repo-input:focus-within{border-color:rgba(124,107,255,.55)}
+.repo-input .pre{font-family:var(--mono);font-size:10.5px;color:var(--mut-4);white-space:nowrap}
+.repo-input input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--fg);
+  font-family:var(--mono);font-size:12.5px}
+.repo-input input::placeholder{color:var(--mut-5)}
+.repo-submit{cursor:pointer;border:1px solid rgba(124,107,255,.5);background:rgba(124,107,255,.16);color:#d5ccff;
+  border-radius:8px;padding:10px 18px;font-family:var(--mono);font-size:11.5px;white-space:nowrap;transition:background .14s}
+.repo-submit:hover{background:rgba(124,107,255,.26)}
+.repo-submit[disabled]{opacity:.45;cursor:not-allowed}
+.repo-msg{font-family:var(--mono);font-size:11px;margin-top:11px;display:flex;align-items:center;gap:8px}
+.repo-msg.err{color:#ff9c9c}
+.repo-msg.ok{color:#6fe0af}
+.repo-msg.wait{color:var(--mod)}
+.spinner{width:11px;height:11px;border:1.5px solid rgba(255,177,77,.3);border-top-color:var(--mod);
+  border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
+.repo-row{display:grid;grid-template-columns:minmax(180px,1fr) 150px 110px 96px;gap:14px;padding:13px 16px;
+  border-top:1px solid var(--line-3);align-items:center}
+.repo-row .nm{font-family:var(--mono);font-size:12.5px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.repo-row .sub{font-family:var(--mono);font-size:10px;color:var(--mut-3);margin-top:5px}
+.repo-row .when{font-family:var(--mono);font-size:10.5px;color:var(--mut-3)}
+.status{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;
+  border-radius:999px;padding:4px 9px;justify-self:start;white-space:nowrap}
+.status .g{font-size:9px}
+.ghost{cursor:pointer;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:var(--mut);
+  border-radius:7px;padding:7px 10px;font-family:var(--mono);font-size:10.5px;transition:background .14s,color .14s}
+.ghost:hover{background:rgba(255,255,255,.09);color:var(--fg)}
+
+/* ------------------------------------------------------------ proof chain */
+.stage{display:grid;grid-template-columns:30px minmax(150px,210px) 128px minmax(0,1fr);gap:14px;padding:12px 16px;
+  border-bottom:1px solid var(--line-3);align-items:center}
+.stage .step{font-family:var(--mono);font-size:10.5px;color:var(--mut-5)}
+.stage .title{font-size:13.5px;font-weight:500;color:var(--fg)}
+.stage .blurb{font-size:12.5px;color:#90939f;line-height:1.45;text-wrap:pretty}
+
+/* --------------------------------------------------------------- inspector */
+.meta-row{display:flex;align-items:baseline;gap:12px;padding:9px 0;border-top:1px solid var(--line-2)}
+.meta-row .k{font-family:var(--mono);font-size:10.5px;color:var(--mut-3);flex:0 0 84px}
+.meta-row .v{font-family:var(--mono);font-size:11px;color:var(--fg);text-align:right;flex:1;word-break:break-all}
+.verdict-box{border:1px solid;border-radius:10px;padding:12px 13px;margin-top:14px}
+.verdict-box .t{font-size:13px;font-weight:600}
+.verdict-box .n{font-size:12.5px;color:var(--fg-4);margin-top:6px;line-height:1.5;text-wrap:pretty}
+.clear-box{border:1px dashed rgba(72,213,151,.28);background:rgba(72,213,151,.04);border-radius:9px;padding:12px 13px}
+.clear-box .t{font-family:var(--mono);font-size:11.5px;color:#6fe0af}
+.clear-box .n{font-size:12.5px;color:var(--fg-4);margin-top:6px;line-height:1.5;text-wrap:pretty}
+
+.empty{padding:44px 16px;text-align:center;font-family:var(--mono);font-size:11.5px;color:var(--mut-4);line-height:1.9}
+.banner{margin-top:14px;border:1px solid rgba(255,93,93,.3);background:rgba(255,93,93,.06);border-radius:12px;
+  padding:14px 16px;font-family:var(--mono);font-size:11.5px;color:#ff9c9c;line-height:1.7}
+</style>
+</head>
+<body>
+
+<div id="shell">
+  <aside>
+    <div class="brand-box">
+      <div class="brand">Blast Radius</div>
+      <div class="brand-sub">console · v2.4</div>
+    </div>
+    <nav id="nav"></nav>
+    <div class="side-head">trace targets</div>
+    <div id="targets"></div>
+    <div class="side-foot" id="sideFoot">
+      <div>connecting…</div>
+      <div>&nbsp;</div>
+    </div>
+  </aside>
+
+  <main>
+    <header>
+      <div style="min-width:190px">
+        <div class="view-title" id="viewTitle">Overview</div>
+        <div class="view-sub" id="viewSub">one narrative + the numbers behind it</div>
+      </div>
+      <div class="focus">
+        <span class="k">focus</span>
+        <span class="v" id="focusVal">—</span>
+        <span class="spacer"></span>
+        <span class="q">?target=</span>
+      </div>
+      <span class="spacer"></span>
+      <div class="tiers" id="tierLegend"></div>
+      <button class="act" id="markBtn"
+        title="Writes a synthetic Incident node against this version in our own database. Nothing is downloaded, nothing is executed, and no package is modified.">simulate compromise</button>
+    </header>
+    <div id="body"></div>
+  </main>
+</div>
+
+<script>
+/* =====================================================================
+   Blast Radius Console
+   ---------------------------------------------------------------------
+   Recreates the Claude Design handoff ("Blast Radius Console.dc.html")
+   against the real API rather than the prototype's fixture data. The
+   prototype's DCLogic/sc-for scaffolding is deliberately not reproduced --
+   only its visual output is.
+
+   Data sources, all live:
+     /api/pkg/project   -> overview graph + fleet-wide stats
+     /api/pkg/graph     -> one version's six-column propagation graph
+     /api/pkg/targets   -> the sidebar's trace targets
+     /api/graph?micro   -> call graph for the code-reach view
+     /api/advisories    -> published advisories
+     /api/pkg/incident  -> simulate / retract (POST / DELETE)
+     /api/repos         -> repository intake (frontend only; see REPO INTAKE)
+   ===================================================================== */
+
+const HIGH='#ff5d5d', MOD='#ffb14d', WARN='#f2d05a', SAFE='#48d597', VIOLET='#7c6bff';
+const G={p0:'■',p1:'▲',p2:'◆',p3:'●'};
+
+const TIERS={
+  P0:{color:HIGH,glyph:G.p0,label:'runtime exposed',help:'Installed, confirmed by the lockfile, and reachable from application code.'},
+  P1:{color:MOD ,glyph:G.p1,label:'reachable'     ,help:'Reachable through app code, but no confirmed exploit path to a user-facing entry point.'},
+  P2:{color:WARN,glyph:G.p2,label:'build only'    ,help:'Present in build or tooling scope only; never shipped to users.'},
+  P3:{color:SAFE,glyph:G.p3,label:'not reachable' ,help:'Installed somewhere in the tree, but no call path reaches it.'}
+};
+
+const TONES={
+  hot  :{dot:HIGH,glyph:G.p0,bg:'rgba(255,93,93,0.07)' ,border:'rgba(255,93,93,0.32)'},
+  path :{dot:MOD ,glyph:G.p1,bg:'rgba(255,177,77,0.08)',border:'rgba(255,177,77,0.36)'},
+  build:{dot:WARN,glyph:G.p2,bg:'rgba(242,208,90,0.06)',border:'rgba(242,208,90,0.26)'},
+  clean:{dot:SAFE,glyph:G.p3,bg:'rgba(72,213,151,0.04)',border:'rgba(255,255,255,0.1)'}
+};
+const EDGE_COLOR={hot:'rgba(255,93,93,0.5)',path:'rgba(255,177,77,0.62)',clean:'rgba(255,255,255,0.13)'};
+const TIER_OF_TONE={hot:'P0',path:'P1',build:'P2',clean:'P3'};
+
+const WHY={
+  hot:'Red because an advisory or incident is filed directly against this node.',
+  path:'Amber because a traced edge chain connects it to a compromised version.',
+  build:'Yellow because a declared range admits it, but no lockfile confirms it.',
+  clean:'Green because no traced edge chain reaches a compromised version.'
+};
+const WHY_EDGES={
+  hot:['ADVISORY_FOR','AFFECTS'],
+  path:['RESOLVES_VERSION','RESOLVED_IN'],
+  build:['REQUIRES','SATISFIED_BY'],
+  clean:['no exposing edge']
+};
+
+/* The server's node kinds, mapped onto the design's four tones. This is the
+   one place the two vocabularies meet, so it stays explicit rather than
+   being smeared through the renderer. */
+const KIND_TONE={
+  threat:'hot', advisory:'hot', compromised:'hot',
+  subject:'path', resolution:'path', exposed:'path',
+  possible:'build',
+  related:'clean'
+};
+
+/* Confidence -> tier. The engine's four confidence levels already encode
+   exactly the distinction the tiers draw, so this is a rename, not a
+   judgement call layered on top. */
+const TIER_OF_CONFIDENCE={
+  CERTAIN:'P0', HIGH:'P0', MEDIUM:'P1', LOW:'P2', INVESTIGATE:'P3'
+};
+
+const EDGE_TYPES=[
+  {id:'REQUIRES'        ,help:'A manifest names this package with a version range. A lead, not a finding.'},
+  {id:'SATISFIED_BY'    ,help:'The range provably admits this exact version, frozen at ingest.'},
+  {id:'RESOLVES_VERSION',help:'A lockfile actually selected this version. This is the confirmed claim.'},
+  {id:'RESOLVED_IN'     ,help:'Flattened transitive closure: this version reaches that project, at a known depth.'},
+  {id:'MAINTAINED_BY'   ,help:'Shared maintainer identity. Never a verdict on its own.'},
+  {id:'TYPOSQUAT_OF'    ,help:'Name sits within edit distance of a far more popular package.'}
+];
+
+const NAV=[
+  ['overview'  ,'Overview'    ,'◱'],
+  ['findings'  ,'Assessment'  ,'▤'],
+  ['supply'    ,'Supply chain','◈'],
+  ['code'      ,'Code reach'  ,'⌗'],
+  ['advisories','Advisories'  ,'⚑'],
+  ['repos'     ,'Repositories','◧']
+];
+
+const TITLES={
+  overview  :['Overview'    ,'one narrative + the numbers behind it'],
+  findings  :['Assessment'  ,'tiered findings with their evidence chain'],
+  supply    :['Supply chain','dependency propagation graph'],
+  code      :['Code reach'  ,'call-graph tracing from entry points'],
+  advisories:['Advisories'  ,'published advisories in this graph'],
+  repos     :['Repositories','submit a GitHub repo for scanning']
+};
+
+/* ------------------------------------------------------------------ state */
+const S={
+  /* Lands on `supply` rather than `overview` for latency: the project view is
+     several unpinned whole-graph sweeps plus a BFS (~2.6s cold), where a single
+     package query is one hop over the precomputed closure (~76ms). */
+  view:'supply',
+  targets:[], target:null,          // target = "name@version" currently focused
+  pkg:null, project:null, micro:null, advisories:[],
+  findingIdx:0, hover:null, sel:null,
+  loading:false, error:null,
+  marked:new Set(),
+  repos:[], repoMsg:null
+};
+
+const $=(s)=>document.querySelector(s);
+const esc=(s)=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function api(path,opts){
+  const r=await fetch(path,opts);
+  if(!r.ok){
+    let d='';
+    try{ d=(await r.json()).detail||''; }catch(e){}
+    throw new Error(d||(r.status+' '+r.statusText));
+  }
+  return r.json();
+}
+
+/* ------------------------------------------------------------------- boot */
+async function boot(){
+  renderNav();
+  renderTierLegend();
+  try{
+    const [targets,health]=await Promise.all([
+      api('/api/pkg/targets?limit=8').catch(()=>[]),
+      api('/api/health').catch(()=>null)
+    ]);
+    S.targets=targets||[];
+    if(S.targets.length) S.target=specOf(S.targets[0]);
+    if(health&&health.empty){
+      S.error='The graph is empty. Run:  python -m blastradius.cli pipeline corpus --reset';
+    }
+  }catch(e){ S.error=e.message; }
+
+  const q=new URLSearchParams(location.search);
+  if(q.get('target')) S.target=q.get('target');
+  if(q.get('view')&&TITLES[q.get('view')]) S.view=q.get('view');
+
+  loadRepos();
+  renderTargets();
+  await load();
+}
+
+function specOf(t){
+  if(!t) return null;
+  if(typeof t==='string') return t;
+  if(t.spec) return t.spec;
+  if(t.name&&t.version) return t.name+'@'+t.version;
+  return t.key||t.label||null;
+}
+
+/* Fetch whatever the active view needs, then paint. Each payload is cached on
+   S so switching tabs does not re-hit the node for data already in hand. */
+async function load(){
+  S.loading=true; render();
+  try{
+    if(S.view==='overview'&&!S.project) S.project=await api('/api/pkg/project');
+    if((S.view==='supply'||S.view==='findings')&&S.target)
+      S.pkg=await api('/api/pkg/graph?spec='+encodeURIComponent(S.target));
+    if(S.view==='code'&&!S.micro) S.micro=await api('/api/graph?mode=micro');
+    if(S.view==='advisories'&&!S.advisories.length) S.advisories=await api('/api/advisories');
+    S.error=null;
+  }catch(e){ S.error=e.message; }
+  S.loading=false; render();
+}
+
+function go(view){
+  S.view=view; S.hover=null;
+  try{ history.replaceState(null,'','?view='+view+(S.target?'&target='+encodeURIComponent(S.target):'')); }catch(e){}
+  load();
+}
+
+function pickTarget(spec){
+  S.target=spec; S.pkg=null; S.hover=null;
+  if(S.view!=='supply'&&S.view!=='findings') S.view='supply';
+  try{ history.replaceState(null,'','?view='+S.view+'&target='+encodeURIComponent(spec)); }catch(e){}
+  renderTargets(); load();
+}
+
+/* ------------------------------------------------------------- chrome bits */
+function renderNav(){
+  $('#nav').innerHTML=NAV.map(([id,label,glyph])=>{
+    const on=S.view===id;
+    const n=navCount(id);
+    return `<button class="nav-btn ${on?'on':''}" data-go="${id}">
+      <span class="g">${glyph}</span><span class="lbl">${label}</span><span class="n">${n}</span></button>`;
+  }).join('');
+}
+
+function navCount(id){
+  if(id==='findings') return S.pkg&&S.pkg.findings?S.pkg.findings.length:'';
+  if(id==='supply')   return S.pkg&&S.pkg.nodes?S.pkg.nodes.length:'';
+  if(id==='code')     return S.micro&&S.micro.nodes?S.micro.nodes.length:'';
+  if(id==='advisories')return S.advisories.length||'';
+  if(id==='repos')    return S.repos.length||'';
+  return '';
+}
+
+function renderTierLegend(){
+  $('#tierLegend').innerHTML='<span class="k">tiers</span>'+Object.keys(TIERS).map(id=>{
+    const t=TIERS[id];
+    return `<span class="tier-chip" title="${esc(t.help)}">
+      <span class="g" style="color:${t.color}">${t.glyph}</span>
+      <span class="id" style="color:${t.color}">${id}</span>${esc(t.label)}</span>`;
+  }).join('');
+}
+
+function renderTargets(){
+  const el=$('#targets');
+  if(!S.targets.length){ el.innerHTML='<div class="empty" style="padding:18px 6px">no targets yet</div>'; return; }
+  el.innerHTML=S.targets.map(t=>{
+    const spec=specOf(t);
+    const on=spec===S.target;
+    const tier=t.exposed_projects>0?'P0':(t.range_admits>0?'P2':'P3');
+    const meta=(t.range_admits!=null?t.range_admits+' admit · ':'')+
+               (t.projects!=null?t.projects+' installed':(t.exposed_projects||0)+' installed');
+    return `<button class="tgt ${on?'on':''}" data-target="${esc(spec)}">
+      <div class="row">
+        <span class="gl" style="color:${TIERS[tier].color}">${TIERS[tier].glyph}</span>
+        <span class="nm">${esc(spec)}</span>
+      </div>
+      <div class="mt">${esc(meta)}</div></button>`;
+  }).join('');
+}
+
+function renderFoot(){
+  const st=(S.pkg&&S.pkg.stats)||(S.project&&S.project.stats)||{};
+  const ms=st.query_ms!=null?st.query_ms+' ms':'—';
+  const ex=S.pkg?`${(S.pkg.exposure||{}).exposed||0} of ${(S.pkg.exposure||{}).total||0} in radius`
+                :(S.project?`${(S.project.exposure||{}).exposed||0} of ${(S.project.exposure||{}).total||0} in radius`:'');
+  $('#sideFoot').innerHTML=`<div>scan complete · ${esc(ms)}</div><div>${esc(ex)}</div>`;
+}
+
+/* ------------------------------------------------------------------ tones */
+function toneOf(n){
+  if(n.kind&&KIND_TONE[n.kind]) return KIND_TONE[n.kind];
+  return n.vuln?'path':'clean';
+}
+
+/* --------------------------------------------------------------- rendering */
+function render(){
+  renderNav(); renderTargets(); renderFoot();
+  const [t,sub]=TITLES[S.view]||TITLES.overview;
+  $('#viewTitle').textContent=t;
+  $('#viewSub').textContent=sub;
+  $('#focusVal').textContent=S.view==='code'?'src call graph':(S.target||'whole project');
+
+  const mk=$('#markBtn');
+  const isMarked=S.target&&S.marked.has(S.target);
+  mk.textContent=isMarked?'retract simulation':'simulate compromise';
+  mk.className='act'+(isMarked?' retract':'');
+  mk.disabled=!S.target||S.view==='repos'||S.view==='code';
+
+  const b=$('#body');
+  if(S.error&&!S.loading){ b.innerHTML=story()+`<div class="banner">${esc(S.error)}</div>`; bind(); return; }
+  if(S.loading){ b.innerHTML=story()+`<div class="card"><div class="empty"><span class="spinner"></span>  querying HydraDB…</div></div>`; bind(); return; }
+
+  let html=story()+kpis();
+  if(S.view==='overview')   html+=graphCard(S.project,'supply-chain propagation','hover a node to see why it is flagged');
+  if(S.view==='supply')     html+=graphCard(S.pkg,'supply-chain propagation','hover a node to see why it is flagged')+stages();
+  if(S.view==='code')       html+=graphCard(S.micro,'call graph · code reach','click to inspect · hover for the reason it is flagged')+inspector();
+  if(S.view==='findings')   html+=findings();
+  if(S.view==='advisories') html+=advisories();
+  if(S.view==='repos')      html+=repos();
+  b.innerHTML=html;
+  bind();
+}
+
+function bind(){
+  document.querySelectorAll('[data-go]').forEach(e=>e.onclick=()=>go(e.dataset.go));
+  document.querySelectorAll('[data-target]').forEach(e=>e.onclick=()=>pickTarget(e.dataset.target));
+  document.querySelectorAll('[data-finding]').forEach(e=>e.onclick=()=>{
+    S.findingIdx=+e.dataset.finding; S.hover=null; render();
+  });
+  document.querySelectorAll('[data-open]').forEach(e=>e.onclick=(ev)=>{
+    ev.stopPropagation(); pickTarget(e.dataset.open);
+  });
+  document.querySelectorAll('.gnode').forEach(e=>{
+    e.onmouseenter=()=>{
+      S.hover={name:e.dataset.nm,meta:e.dataset.mt,tone:e.dataset.tone,
+               x:Math.max(0,Math.min(+e.dataset.x,(+e.dataset.cw||1400)-300)),y:(+e.dataset.y)+62};
+      paintTip();
+    };
+    e.onmouseleave=()=>{ S.hover=null; paintTip(); };
+    e.onclick=()=>{ if(e.dataset.sel){ S.sel=e.dataset.sel; render(); } };
+  });
+  const rf=$('#repoForm'); if(rf) rf.onsubmit=submitRepo;
+  document.querySelectorAll('[data-repo-rm]').forEach(e=>e.onclick=()=>removeRepo(e.dataset.repoRm));
+}
+
+/* ------------------------------------------------------------------ story */
+function story(){
+  const d=storyData();
+  const t=TIERS[d.tier]||TIERS.P3;
+  return `<div class="story ${d.tier==='P0'?'p0':''}">
+    <span class="badge" style="color:${t.color}"><span class="g">${t.glyph}</span>${d.tier}</span>
+    <div style="flex:1;min-width:0">
+      <div class="sentence">${esc(d.sentence)}</div>
+      <div class="sub">${esc(d.sub)}</div>
+    </div></div>`;
+}
+
+function storyData(){
+  if(S.loading) return {tier:'P3',sentence:'Querying the graph…',sub:'one hop over the precomputed closure'};
+  if(S.view==='repos'){
+    return {tier:'P3',
+      sentence:'Submit a public GitHub repository and it is queued for lockfile resolution, OSV scanning, and blast-radius ingest.',
+      sub:S.repos.length+' repository(ies) submitted · nothing is cloned or executed from the browser'};
+  }
+  if(S.view==='advisories'){
+    const hi=S.advisories.filter(a=>(a.severity||'').toUpperCase()==='HIGH').length;
+    return {tier:hi?'P0':'P3',
+      sentence:S.advisories.length?`${S.advisories.length} advisories are filed against packages present in this graph.`
+                                  :'No advisories are loaded for this graph.',
+      sub:`${hi} high · ${S.advisories.length-hi} other`};
+  }
+  if(S.view==='code'&&S.micro){
+    const n=(S.micro.nodes||[]).length;
+    return {tier:'P3',sentence:'Call-graph reach from application entry points through to external package imports.',
+      sub:`${n} nodes traced`};
+  }
+  const g=S.view==='overview'?S.project:S.pkg;
+  if(g&&g.verdict){
+    const v=g.verdict;
+    const tier=v.compromised?'P0':(v.level&&v.level!=='clean'?'P1':'P3');
+    return {tier,sentence:[v.headline,v.reach].filter(Boolean).join(' — ')||'No known vulnerabilities.',
+      sub:(g.target?'focus '+g.target+' · ':'')+((g.stats||{}).query_ms!=null?(g.stats.query_ms+' ms'):'')};
+  }
+  return {tier:'P3',sentence:'Pick a trace target to run a blast-radius query.',sub:'nothing marked yet'};
+}
+
+/* ------------------------------------------------------------------- kpis */
+function kpis(){
+  let items=[];
+  if(S.view==='overview'&&S.project){
+    const s=S.project.stats||{};
+    items=[
+      {label:'Vulnerable versions',value:s.vulnerable_versions??0,unit:'seeds',color:s.vulnerable_versions?HIGH:SAFE},
+      {label:'In radius',value:s.in_radius??0,unit:'nodes',color:s.in_radius?MOD:SAFE},
+      {label:'Resolved versions',value:s.resolved_versions??0,unit:'lockfile',color:'#cfd2de'},
+      {label:'Drawn',value:s.drawn??0,unit:'nodes',color:'#cfd2de'},
+      {label:'Answered in',value:s.query_ms??'—',unit:'ms',color:'#cfd2de'}
+    ];
+  } else if((S.view==='supply'||S.view==='findings')&&S.pkg){
+    const s=S.pkg.stats||{};
+    items=[
+      {label:'Advisories',value:s.advisories??0,unit:'filed',color:s.advisories?HIGH:SAFE},
+      {label:'Range admits it',value:s.range_admits??0,unit:'range-only leads',color:s.range_admits?WARN:SAFE},
+      {label:'Lockfile resolves it',value:s.lockfile_entries??0,unit:'confirmed',color:s.lockfile_entries?MOD:SAFE},
+      {label:'Exposed projects',value:s.exposed_projects??0,unit:'of '+(s.exposed_projects??0),color:s.exposed_projects?MOD:SAFE},
+      {label:'Related by identity',value:s.related??0,unit:'identity only',color:s.related?WARN:SAFE},
+      {label:'Answered in',value:s.query_ms??'—',unit:'ms',color:'#cfd2de'}
+    ];
+  } else if(S.view==='code'&&S.micro){
+    const n=S.micro.nodes||[];
+    const imports=n.filter(x=>x.kind==='import').length;
+    const routes=n.filter(x=>x.kind==='route').length;
+    items=[
+      {label:'Nodes traced',value:n.length,unit:'total',color:'#cfd2de'},
+      {label:'External imports',value:imports,unit:'packages',color:imports?MOD:SAFE},
+      {label:'HTTP routes',value:routes,unit:'entry points',color:routes?MOD:SAFE},
+      {label:'Edges',value:(S.micro.edges||[]).length,unit:'calls',color:'#cfd2de'}
+    ];
+  } else if(S.view==='advisories'){
+    const hi=S.advisories.filter(a=>(a.severity||'').toUpperCase()==='HIGH').length;
+    items=[
+      {label:'High severity',value:hi,unit:'advisories',color:hi?HIGH:SAFE},
+      {label:'Other',value:S.advisories.length-hi,unit:'advisories',color:MOD},
+      {label:'Total',value:S.advisories.length,unit:'in graph',color:'#cfd2de'}
+    ];
+  } else if(S.view==='repos'){
+    const q=S.repos.filter(r=>r.status==='queued').length;
+    const d=S.repos.filter(r=>r.status==='scanned').length;
+    items=[
+      {label:'Submitted',value:S.repos.length,unit:'repos',color:'#cfd2de'},
+      {label:'Queued',value:q,unit:'awaiting scan',color:q?MOD:SAFE},
+      {label:'Scanned',value:d,unit:'ingested',color:d?SAFE:'#cfd2de'}
+    ];
+  }
+  if(!items.length) return '';
+  return `<div class="kpis">`+items.map(k=>`<div class="kpi">
+    <div class="lbl">${esc(k.label)}</div>
+    <div class="val"><span class="v" style="color:${k.color}">${esc(k.value)}</span>
+    <span class="u">${esc(k.unit)}</span></div></div>`).join('')+`</div>`;
+}
+
+/* ------------------------------------------------------------------ graph */
+const LANE_W=244, LANE_GAP=32, ROW_H=62, TOP=68;
+
+function graphCard(g,title,hint){
+  if(!g||!g.nodes||!g.nodes.length){
+    return `<div class="card"><div class="card-head"><span class="t">${esc(title)}</span></div>
+      <div class="empty">no graph to draw yet<br>pick a trace target, or run an ingest</div></div>`;
+  }
+  const cols=g.cols||[];
+  const byLayer={};
+  g.nodes.forEach(n=>{ const l=n.layer??0; (byLayer[l]=byLayer[l]||[]).push(n); });
+  const layers=Object.keys(byLayer).map(Number).sort((a,b)=>a-b);
+  const laneX={}; layers.forEach((l,i)=>laneX[l]=8+i*(LANE_W+LANE_GAP));
+  const cw=8+layers.length*(LANE_W+LANE_GAP);
+  const maxRows=Math.max(...layers.map(l=>byLayer[l].length),1);
+  const ch=Math.max(240,TOP+maxRows*ROW_H+40);
+
+  const pos={};
+  layers.forEach(l=>byLayer[l].forEach((n,i)=>{ pos[n.id]={x:laneX[l],y:TOP+i*ROW_H}; }));
+
+  /* lanes */
+  const lanes=layers.map((l,i)=>{
+    const c=byLayer[l].length;
+    const anyHot=byLayer[l].some(n=>toneOf(n)==='hot');
+    const anyPath=byLayer[l].some(n=>toneOf(n)==='path');
+    const rule=anyHot?'rgba(255,93,93,0.45)':anyPath?'rgba(255,177,77,0.45)':'rgba(72,213,151,0.35)';
+    return `<div class="lane" style="left:${laneX[l]}px;width:${LANE_W}px">
+      <div class="r"><span class="step">0${i+1}</span>
+      <span class="title">${esc(cols[l]||('layer '+l))}</span></div>
+      <div class="count">${c} node${c===1?'':'s'}</div>
+      <div class="rule" style="background:${rule}"></div></div>`;
+  }).join('');
+
+  /* edges */
+  let ei=0;
+  const paths=(g.edges||[]).map(e=>{
+    const a=pos[e[0]],b=pos[e[1]];
+    if(!a||!b) return '';
+    const na=g.nodes.find(n=>n.id===e[0]), nb=g.nodes.find(n=>n.id===e[1]);
+    const tone=(toneOf(na)==='hot'||toneOf(nb)==='hot')?'hot'
+              :(toneOf(nb)==='path'||toneOf(na)==='path')?'path':'clean';
+    const x1=a.x+LANE_W, y1=a.y+26, x2=b.x, y2=b.y+26;
+    const c=Math.max(26,(x2-x1)*0.5);
+    const i=ei++;
+    const anim=tone==='clean'
+      ? `brDraw 1s ease-out ${(0.12+i*0.02).toFixed(2)}s both`
+      : `brDraw .9s ease-out ${(0.1+i*0.03).toFixed(2)}s both, brFlow 1.5s linear ${(1+i*0.03).toFixed(2)}s infinite`;
+    return `<path d="M${x1},${y1} C${x1+c},${y1} ${x2-c},${y2} ${x2},${y2}"
+      fill="none" stroke="${EDGE_COLOR[tone]}" stroke-width="${tone==='clean'?1:1.6}"
+      stroke-dasharray="${tone==='clean'?'2 6':'7 7'}" stroke-linecap="round" style="animation:${anim}"></path>`;
+  }).join('');
+
+  /* nodes */
+  let ni=0;
+  const nodes=g.nodes.map(n=>{
+    const p=pos[n.id]; if(!p) return '';
+    const tone=toneOf(n), T=TONES[tone];
+    const i=ni++;
+    const delay=(0.06+i*0.03).toFixed(2);
+    let anim=`brRise .5s cubic-bezier(.2,.7,.3,1) ${delay}s both`;
+    const pulse=tone==='hot'||n.kind==='compromised';
+    if(pulse) anim+=`, brPulse 2.6s ease-out ${(+delay+0.7).toFixed(2)}s infinite`;
+    const tag=n.kind==='compromised'?'COMPROMISED':n.kind==='exposed'?'EXPOSED'
+             :n.kind==='resolution'?'CONFIRMED':n.kind==='possible'?'RANGE ONLY':null;
+    const tagBg=n.kind==='compromised'?'rgba(179,38,44,0.9)':n.kind==='possible'?'rgba(176,110,26,0.9)':MOD;
+    const tagFg=n.kind==='compromised'||n.kind==='possible'?'#fff':'#1a1206';
+    return `<div class="gnode" style="left:${p.x}px;top:${p.y}px;width:${LANE_W}px;
+      border-color:${T.border};background:${T.bg};animation:${anim}"
+      data-nm="${esc(n.label)}" data-mt="${esc(n.sub||'')}" data-tone="${tone}"
+      data-x="${p.x}" data-y="${p.y}" data-cw="${cw}"
+      ${n.kind==='fn'||n.kind==='import'?`data-sel="${esc(n.label)}"`:''}>
+      <div class="r1"><span class="gl" style="color:${T.dot}">${T.glyph}</span>
+        <span class="nm">${esc(n.label)}</span></div>
+      <div class="r2"><span class="mt">${esc(n.sub||'')}</span>
+      ${tag?`<span class="tag" style="color:${tagFg};background:${tagBg}">${tag}</span>`:''}</div>
+    </div>`;
+  }).join('');
+
+  return `<div class="card">
+    <div class="card-head">
+      <span class="t">${esc(title)}</span><span class="h">${esc(hint)}</span>
+      <span class="spacer"></span>
+      <span class="edge-key"><i style="background:rgba(255,93,93,0.6)"></i>advisory edge</span>
+      <span class="edge-key"><i style="background:rgba(255,177,77,0.75)"></i>confirmed path</span>
+      <span class="edge-key"><i style="background:rgba(255,255,255,0.22)"></i>checked, clear</span>
+    </div>
+    <div class="graph-scroll"><div class="graph-plane" id="plane" style="width:${cw}px;height:${ch}px">
+      <svg width="${cw}" height="${ch}">${paths}</svg>
+      ${lanes}${nodes}
+      <div id="tipHost"></div>
+    </div></div></div>`;
+}
+
+function paintTip(){
+  const host=document.getElementById('tipHost'); if(!host) return;
+  const h=S.hover;
+  if(!h){ host.innerHTML=''; return; }
+  const tier=TIER_OF_TONE[h.tone], T=TIERS[tier];
+  host.innerHTML=`<div class="tip" style="left:${h.x}px;top:${h.y}px">
+    <div class="r"><span class="gl" style="font-family:var(--mono);font-size:10px;color:${T.color}">${T.glyph}</span>
+      <span class="nm">${esc(h.name)}</span><span class="spacer"></span>
+      <span class="tr" style="color:${T.color}">${tier}</span></div>
+    <div class="why">${esc(WHY[h.tone])}</div>
+    <div class="k">edges that exposed it</div>
+    <div class="edges">${(WHY_EDGES[h.tone]||[]).map(e=>`<span class="e">${esc(e)}</span>`).join('')}</div>
+    <div class="mt">${esc(h.meta||'')}</div></div>`;
+}
+
+/* --------------------------------------------------------------- findings */
+function findings(){
+  const list=(S.pkg&&S.pkg.findings)||[];
+  if(!list.length){
+    return `<div class="card"><div class="card-head"><span class="t">findings</span></div>
+      <div class="empty">no findings for this target<br>a clean result is a result</div></div>`;
+  }
+  const rows=list.map((f,i)=>{
+    const tier=TIER_OF_CONFIDENCE[f.confidence]||'P3';
+    const T=TIERS[tier];
+    const tone=tier==='P0'?'hot':tier==='P1'?'path':tier==='P2'?'build':'clean';
+    const hops=(f.path||[]).length?f.path:[f.entity];
+    return `<div class="finding ${i===S.findingIdx?'on':''}" data-finding="${i}">
+      <span class="tier-badge" style="color:${T.color}"><span class="g">${T.glyph}</span>${tier}</span>
+      <div style="min-width:0">
+        <div class="pkg">${esc(f.entity)}</div>
+        <div class="counts">${esc(f.entity_type||'')} · ${esc(f.status||'')}</div>
+      </div>
+      <div style="min-width:0">
+        <div class="sentence">${esc(f.reason||'')}</div>
+        <div class="path">${hops.map((p,j)=>`
+          <span style="display:inline-flex;align-items:center;gap:6px">
+            <span class="hop" style="color:${TONES[tone].dot};background:${TONES[tone].bg};border-color:${TONES[tone].border}">${esc(p)}</span>
+            ${j<hops.length-1?`<span class="hop-edge">→</span>`:''}
+          </span>`).join('')}</div>
+      </div>
+      <button class="open-btn" data-open="${esc(f.entity)}">open in graph →</button>
+    </div>`;
+  }).join('');
+
+  return `<div class="split">
+    <div class="pane">
+      <div class="pane-head"><span class="t">findings</span>
+        <span class="h">tier · entity · evidence chain · action</span></div>
+      ${rows}
+    </div>
+    <div class="side-card">
+      <div class="k">tier meaning</div>
+      <div style="display:flex;flex-direction:column;gap:12px;margin-top:13px">
+        ${Object.keys(TIERS).map(id=>`<div class="tier-def">
+          <span class="id" style="color:${TIERS[id].color}">${TIERS[id].glyph} ${id}</span>
+          <span class="help">${esc(TIERS[id].help)}</span></div>`).join('')}
+      </div>
+      <div class="hr"></div>
+      <div class="k">edge types</div>
+      <div style="display:flex;flex-direction:column;gap:9px;margin-top:12px">
+        ${EDGE_TYPES.map(e=>`<div class="edge-def"><div class="id">${esc(e.id)}</div>
+          <div class="help">${esc(e.help)}</div></div>`).join('')}
+      </div>
+    </div></div>`;
+}
+
+/* ------------------------------------------------------------- advisories */
+function advisories(){
+  if(!S.advisories.length){
+    return `<div class="card"><div class="card-head"><span class="t">advisories</span></div>
+      <div class="empty">no advisories loaded</div></div>`;
+  }
+  const rows=S.advisories.map(a=>{
+    const hi=(a.severity||'').toUpperCase()==='HIGH';
+    return `<div class="adv-grid">
+      <span class="id" data-target="${esc(a.query||a.package)}">${esc(a.advisory_id)}</span>
+      <span class="sev" style="color:${hi?HIGH:MOD}"><span class="g">${hi?G.p0:G.p1}</span>${esc(a.severity||'—')}</span>
+      <span class="vec">${esc(a.package)}${a.range?' · '+esc(a.range):''}</span>
+      <span class="fix">${esc(a.source||'')}</span></div>`;
+  }).join('');
+  return `<div class="split">
+    <div class="pane">
+      <div class="adv-head"><span>identifier</span><span>severity</span><span>package · range</span>
+        <span style="text-align:right">source</span></div>
+      ${rows}
+    </div>
+    <div class="side-card">
+      <div class="k">what these are</div>
+      <div style="font-size:12.5px;color:var(--fg-4);line-height:1.55;margin-top:12px;text-wrap:pretty">
+        Published advisories loaded into the graph from the OSV scan. Clicking an identifier
+        focuses the affected version so you can see whether any lockfile actually resolved it —
+        an advisory existing is not the same as you being exposed.
+      </div>
+    </div></div>`;
+}
+
+/* ------------------------------------------------------------ proof chain */
+function stages(){
+  if(!S.pkg||!S.pkg.stats) return '';
+  const s=S.pkg.stats;
+  const mk=(v,onFg,onBg,onG,offTxt)=>v?{status:v+'',fg:onFg,bg:onBg,g:onG}:{status:offTxt,fg:SAFE,bg:'rgba(72,213,151,0.1)',g:G.p3};
+  const rows=[
+    ['01','Threat', mk(s.advisories,HIGH,'rgba(255,93,93,0.1)',G.p0,'none'),
+      'Published advisories and simulated incidents filed against this version.'],
+    ['02','Compromised version', S.pkg.compromised?{status:'1 match',fg:MOD,bg:'rgba(255,177,77,0.1)',g:G.p1}
+      :{status:'clear',fg:SAFE,bg:'rgba(72,213,151,0.1)',g:G.p3},
+      'The exact release the threat points at. Marking 4.17.21 never touches 4.17.20.'],
+    ['03','Range admits it', mk(s.range_admits,WARN,'rgba(242,208,90,0.1)',G.p2,'clear'),
+      'Declared ranges that provably admit it. A lead, not a finding — this is what a range-only tool would report in full.'],
+    ['04','Lockfile resolves it', mk(s.lockfile_entries,MOD,'rgba(255,177,77,0.1)',G.p1,'clear'),
+      'A lockfile actually selected this version. This is the confirmed claim.'],
+    ['05','Exposed projects', mk(s.exposed_projects,MOD,'rgba(255,177,77,0.1)',G.p1,'clear'),
+      'One hop over the precomputed RESOLVED_IN closure — no live traversal.'],
+    ['06','Related by identity', mk(s.related,WARN,'rgba(242,208,90,0.1)',G.p2,'clear'),
+      'Shared maintainer, repository, publisher, or a typosquat neighbour. Never a verdict on its own.']
+  ];
+  return `<div class="card">
+    <div class="card-head"><span class="t">proof chain · six checks</span>
+      <span class="h">each row is one graph question with its own witness</span></div>
+    ${rows.map(([step,title,st,blurb])=>`<div class="stage">
+      <span class="step">${step}</span>
+      <span class="title">${esc(title)}</span>
+      <span class="status" style="color:${st.fg};background:${st.bg}"><span class="g">${st.g}</span>${esc(st.status)}</span>
+      <span class="blurb">${esc(blurb)}</span></div>`).join('')}
+  </div>`;
+}
+
+/* --------------------------------------------------------------- inspector */
+function inspector(){
+  if(!S.micro) return '';
+  const n=(S.micro.nodes||[]).find(x=>x.label===S.sel);
+  const routes=(S.micro.nodes||[]).filter(x=>x.kind==='route').length;
+  const handlers=(S.micro.nodes||[]).filter(x=>x.kind==='handler').length;
+  const onPath=n?!!n.vuln:false;
+  return `<div class="split">
+    <div class="side-card" style="flex:1 1 380px;max-width:none">
+      <div class="k">unreached surface</div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:13px">
+        <div class="clear-box"><div class="t">HTTP routes · ${routes}</div>
+          <div class="n">${routes?'Network-facing routes exist; check which resolve to a flagged import.'
+            :'No network-facing routes in this project, so nothing is exploitable from outside.'}</div></div>
+        <div class="clear-box"><div class="t">Handlers · ${handlers} nodes</div>
+          <div class="n">${handlers?'Handlers bind to routes; the call graph shows what they reach.'
+            :'No route or event handlers bind to a flagged package.'}</div></div>
+      </div>
+    </div>
+    <div class="side-card" style="flex:1 1 320px;max-width:400px">
+      ${n?`
+      <div style="display:flex;align-items:center;gap:9px">
+        <span style="font-family:var(--mono);font-size:10px;color:${onPath?MOD:SAFE}">${onPath?G.p1:G.p3}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-family:var(--mono);font-size:14px;color:var(--fg);word-break:break-all">${esc(n.label)}</div>
+          <div style="font-family:var(--mono);font-size:10.5px;color:var(--mut-3);margin-top:4px">${esc(n.kind||'')}</div>
+        </div>
+      </div>
+      <div class="verdict-box" style="border-color:${onPath?'rgba(255,177,77,0.32)':'rgba(72,213,151,0.28)'};
+        background:${onPath?'rgba(255,177,77,0.08)':'rgba(72,213,151,0.07)'}">
+        <div class="t" style="color:${onPath?'#ffc478':'#6fe0af'}">
+          ${onPath?'A flagged import is reachable here':'No advisory reaches this node'}</div>
+        <div class="n">${onPath?'This node calls through to a package with an open advisory. Re-check it after the upgrade.'
+          :'Nothing on this call path imports a package with an open advisory.'}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;margin-top:8px">
+        ${[['id',n.id],['type',n.kind||''],['label',n.label],['detail',n.sub||'—']]
+          .map(([k,v])=>`<div class="meta-row"><span class="k">${esc(k)}</span>
+            <span class="v">${esc(v)}</span></div>`).join('')}
+      </div>`
+      :`<div class="k">inspector</div><div class="empty" style="padding:28px 4px">
+         click a node in the call graph<br>to inspect it</div>`}
+    </div></div>`;
+}
+
+/* =====================================================================
+   REPO INTAKE  (frontend only)
+   ---------------------------------------------------------------------
+   Accepts a GitHub repository URL, validates it in the browser, and POSTs
+   it to /api/repos. That endpoint does not exist yet — this is the frontend
+   half only, per the brief. Until the backend lands, submissions persist to
+   localStorage so the view is demonstrable end to end, and the UI says so
+   plainly rather than pretending the queue is real.
+
+   Backend contract this expects, when it is built:
+     POST   /api/repos   {url, owner, name}  -> {id, url, owner, name, status, submitted_at}
+     GET    /api/repos                       -> [ ...same shape ]
+     DELETE /api/repos?id=<id>               -> {removed: true}
+   ===================================================================== */
+const REPO_KEY='br.repos.pending';
+
+/* Accepts the forms people actually paste: full URL with or without scheme,
+   with or without .git, plus bare owner/name. Rejects anything else rather
+   than guessing, because a silently-wrong repo is worse than a rejected one. */
+function parseRepo(raw){
+  const s=(raw||'').trim().replace(/\s+/g,'');
+  if(!s) return {error:'Paste a GitHub repository URL.'};
+  let m=s.match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+  if(!m) m=s.match(/^git@github\.com:([\w.-]+)\/([\w.-]+?)(?:\.git)?$/i);
+  if(!m) m=s.match(/^([\w.-]+)\/([\w.-]+?)(?:\.git)?$/);
+  if(!m) return {error:'Not a GitHub repository. Try https://github.com/owner/name'};
+  const [,owner,name]=m;
+  if(owner==='.'||name==='.'||name==='..') return {error:'That owner/name pair is not valid.'};
+  return {owner,name,url:`https://github.com/${owner}/${name}`};
+}
+
+function loadRepos(){
+  try{ S.repos=JSON.parse(localStorage.getItem(REPO_KEY)||'[]'); }catch(e){ S.repos=[]; }
+  /* If the backend is live it is the source of truth; local entries are a
+     stand-in that gets replaced the moment the endpoint answers. */
+  api('/api/repos').then(list=>{
+    if(Array.isArray(list)){ S.repos=list; saveRepos(false); if(S.view==='repos') render(); }
+  }).catch(()=>{});
+}
+function saveRepos(repaint=true){
+  try{ localStorage.setItem(REPO_KEY,JSON.stringify(S.repos)); }catch(e){}
+  if(repaint) render();
+}
+
+async function submitRepo(ev){
+  ev.preventDefault();
+  const input=document.getElementById('repoUrl');
+  const p=parseRepo(input.value);
+  if(p.error){ S.repoMsg={kind:'err',text:p.error}; render(); return; }
+  if(S.repos.some(r=>r.url.toLowerCase()===p.url.toLowerCase())){
+    S.repoMsg={kind:'err',text:'That repository is already in the queue.'}; render(); return;
+  }
+  S.repoMsg={kind:'wait',text:'submitting '+p.owner+'/'+p.name+'…'}; render();
+
+  const entry={
+    id:'local-'+Date.now(), url:p.url, owner:p.owner, name:p.name,
+    status:'queued', submitted_at:new Date().toISOString(), local:true
+  };
+  try{
+    const saved=await api('/api/repos',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url:p.url,owner:p.owner,name:p.name})
+    });
+    S.repos.unshift(Object.assign(entry,saved,{local:false}));
+    S.repoMsg={kind:'ok',text:'queued '+p.owner+'/'+p.name+' for scanning'};
+  }catch(e){
+    /* No backend yet — say so rather than showing a fake success. */
+    S.repos.unshift(entry);
+    S.repoMsg={kind:'ok',text:'saved '+p.owner+'/'+p.name+' locally · backend endpoint /api/repos not live yet'};
+  }
+  saveRepos();
+}
+
+function removeRepo(id){
+  S.repos=S.repos.filter(r=>r.id!==id);
+  api('/api/repos?id='+encodeURIComponent(id),{method:'DELETE'}).catch(()=>{});
+  S.repoMsg=null; saveRepos();
+}
+
+function repos(){
+  const msg=S.repoMsg?`<div class="repo-msg ${S.repoMsg.kind}">
+    ${S.repoMsg.kind==='wait'?'<span class="spinner"></span>':''}${esc(S.repoMsg.text)}</div>`:'';
+
+  const rows=S.repos.length?S.repos.map(r=>{
+    const st=r.status==='scanned'
+      ? {fg:SAFE,bg:'rgba(72,213,151,0.1)',g:G.p3,t:'scanned'}
+      : r.status==='failed'
+      ? {fg:HIGH,bg:'rgba(255,93,93,0.1)',g:G.p0,t:'failed'}
+      : {fg:MOD,bg:'rgba(255,177,77,0.1)',g:G.p1,t:'queued'};
+    let when='—';
+    try{ when=new Date(r.submitted_at).toLocaleString(); }catch(e){}
+    return `<div class="repo-row">
+      <div style="min-width:0">
+        <div class="nm">${esc(r.owner)}/${esc(r.name)}</div>
+        <div class="sub">${esc(r.url)}${r.local?' · not yet sent to backend':''}</div>
+      </div>
+      <span class="when">${esc(when)}</span>
+      <span class="status" style="color:${st.fg};background:${st.bg}"><span class="g">${st.g}</span>${st.t}</span>
+      <button class="ghost" data-repo-rm="${esc(r.id)}">remove</button>
+    </div>`;
+  }).join('')
+  :`<div class="empty">no repositories submitted yet<br>paste a GitHub URL above to queue one</div>`;
+
+  return `<div class="card">
+    <div class="card-head"><span class="t">add a repository</span>
+      <span class="h">public GitHub repos · lockfile resolution + OSV scan + ingest</span></div>
+    <div style="padding:16px">
+      <form id="repoForm" class="repo-form" autocomplete="off">
+        <label class="repo-input">
+          <span class="pre">github.com/</span>
+          <input id="repoUrl" placeholder="owner/name  ·  or paste the full URL" spellcheck="false">
+        </label>
+        <button class="repo-submit" type="submit">queue scan</button>
+      </form>
+      ${msg}
+      <div style="font-size:12.5px;color:var(--mut-2);line-height:1.55;margin-top:14px;text-wrap:pretty;max-width:70ch">
+        The repository is read for its lockfiles only. Nothing is cloned, built, or executed from
+        the browser, and no package code is run — the scan resolves declared ranges against what
+        the lockfile actually pinned, then asks OSV about those exact versions.
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><span class="t">submitted</span>
+      <span class="h">repo · submitted · status</span></div>
+    ${rows}
+  </div>`;
+}
+
+/* ------------------------------------------------------- simulate / retract */
+$('#markBtn').onclick=async()=>{
+  if(!S.target) return;
+  const btn=$('#markBtn'); btn.disabled=true;
+  const marked=S.marked.has(S.target);
+  try{
+    if(marked){
+      await api('/api/pkg/incident?spec='+encodeURIComponent(S.target),{method:'DELETE'});
+      S.marked.delete(S.target);
+    }else{
+      await api('/api/pkg/incident?spec='+encodeURIComponent(S.target),{method:'POST'});
+      S.marked.add(S.target);
+    }
+    S.pkg=null; S.project=null;   // the graph changed; re-read it
+    await load();
+  }catch(e){ S.error=e.message; render(); }
+};
+
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){ S.hover=null; paintTip(); }
+});
+
+boot();
+</script>
+</body>
+</html>

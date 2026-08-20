@@ -328,9 +328,145 @@ Ingest 4.5 s warm (1.9 s writing, 23 statements).
 
 Full `simulate` run, every question answered: **310 ms**.
 
-Scale caveat, stated rather than buried: this is a 12-project, 3.3k-node graph. The L1 design means the
-headline query is a single-hop adjacency lookup whose cost tracks the number of projects resolving one
-version, not graph size — but that has not been measured at 100k nodes and is not claimed.
+### The scale claim, now measured
+
+That caveat used to end "has not been measured at 100k nodes and is not claimed". It has been measured.
+`blastradius/pkg/scale.py` builds synthetic graphs through the real writer and times Q5 through the real
+engine, asserting at every point that the query returned exactly the services attached to its probe — a
+fast wrong answer cannot pass.
+
+Two sweeps, because a flat line alone is unfalsifiable: it looks identical whether the query is genuinely
+O(answer) or the harness is just dominated by fixed HTTP overhead.
+
+**Sweep A — graph grows, answer held at 5 rows.** Versions and closure edges scale together:
+
+| versions | closure edges | Q5 p50 | p95 |
+|---:|---:|---:|---:|
+| 5,000 | 5,015 | 1.02 ms | 1.37 ms |
+| 50,000 | 50,015 | 1.59 ms | 1.91 ms |
+| 500,000 | 500,015 | **1.95 ms** | 3.06 ms |
+
+**Sweep B — one 500k graph, answer grows.** The control, and it must rise:
+
+| answer rows | Q5 p50 | p95 |
+|---:|---:|---:|
+| 1 | 1.42 ms | 1.50 ms |
+| 10 | 1.69 ms | 1.78 ms |
+| 100 | 10.17 ms | 13.65 ms |
+| 1,000 | 56.76 ms | 59.48 ms |
+
+Expressed as elasticity — `d(log latency) / d(log input)`, so the two sweeps can be compared despite moving
+different units over different spans:
+
+    cost elasticity to graph size    0.14
+    cost elasticity to answer size   0.53
+
+**Answer size costs 3.8x what graph size does.** A 100x larger graph costs 1.9x; a 1000x larger answer costs
+40x. The closure design holds. Reproduced independently at 100k and at 500k with the same two figures to two
+decimal places.
+
+**Graph size is not free, though**, and the honest form of the claim says so: 0.14 is above zero, so the
+single-hop lookup does pay something as the store grows. "Flat" would be a stronger claim than the
+experiment supports.
+
+**A harder limit found on the way.** Admission control rejects a label-index scan above 250,000 candidates:
+
+    MATCH (v:PackageVersion) RETURN v.name
+    -> resource_exhausted: actual 250001 exceeds limit 250000
+
+So past a quarter of a million versions, *any* query that is not id-pinned stops working — not slowly, but
+with an HTTP 429. This is the strongest argument yet for the L0 id map: `keys_with_prefix` answers the same
+question locally at any size, and every query on the read path is already pinned. It also means a label scan
+is not a thing to optimise later; it is a thing that stops existing.
+
+Run it with `python -m blastradius.pkg.cli scale --yes` — destructive, since each point needs a graph of a
+known size and the only way to get one is to drop the store.
+
+---
+
+## 10b. Looking forwards: the blast frontier
+
+Blast radius is backward-looking — a version is compromised, who already holds it. By the time that is
+answered the artifacts are published. The TanStack worm did not spread by being depended upon; it spread by
+**publishing**, and every one of its 42 packages was predictable the moment the first was known, because
+publish rights are a graph the registry gives away:
+
+```
+compromised artifact --PUBLISHED_BY--> account --> everything else that account can publish
+compromised package  --MAINTAINED_BY--> accounts with publish rights
+compromised version  --SOURCED_FROM--> repository whose CI publishes
+```
+
+`blastradius/pkg/frontier.py` answers it in three one-hop queries over edges the ingest already writes, and
+ranks the result by **fleet impact** — how many of your services resolve that package today — so the output
+is ordered by what it would cost you rather than by how many rows there are.
+
+```powershell
+python -m blastradius.pkg.cli frontier pino@10.2.1
+```
+
+```
+  34 package(s) reachable, 6 fleet service(s) behind them.
+
+  LOOKED FOR, NOT FOLLOWED  published by GitHub Actions, which is a CI
+  identity rather than an account. ...
+
+  readable-stream
+      fleet impact   3 service(s) resolve it today
+      via maintainer matteo.collina
+      confidence     INVESTIGATE
+```
+
+Every row is INVESTIGATE and cannot be anything else: all three routes map to relational atoms, and
+`derive_confidence` caps those. The frontier is a list of accounts to rotate, not a list of compromises.
+
+### The finding that shaped it: OIDC is not a shared credential
+
+The first working version returned **77** packages for `pino@10.2.1`, most of them via one publisher
+identity: `GitHub Actions`, email `npm-oidc-no-reply@github.com`. That is npm's OIDC trusted publishing
+pseudo-identity, and it is stamped on every artifact pushed from a GitHub Actions workflow anywhere on npm.
+`pino`, `cookie`, `semver` and `raw-body` all carry it and share no owner, no repository and no secret.
+
+Following it was wrong twice: it invented a frontier out of unrelated packages, and it did so by reading a
+*security improvement* as a risk — OIDC exists precisely so that no long-lived token is shared between
+projects. `identity.is_service_identity` now recognises these, the frontier declines to draw a publisher
+route from one, and says so as negative evidence. 77 rows became 34, all of them via real accounts.
+
+## 10c. Publish-time anomalies
+
+`blastradius/pkg/anomaly.py` reads metadata the ingest already fetches and nothing previously read back:
+`has_install_script`, `published_at`, `publisher`, `repository`. Between them they describe the TanStack
+compromise almost exactly — a burst of publishes, from an account outside the maintainer list, on packages
+that had never carried an install script.
+
+| signal | fires when |
+|---|---|
+| `INSTALL_SCRIPT_ADDED` | a version gains an install script its predecessor lacked |
+| `PUBLISHER_NOT_MAINTAINER` | pushed by an account not in the maintainer list |
+| `DORMANCY_BREAK` | published after a year of silence |
+| `PUBLISH_BURST` | 3+ versions of one package inside 15 minutes |
+| `REPOSITORY_REMOVED` / `_CHANGED` | provenance moved or disappeared |
+| `CORRELATED_BURST` | **one account, many packages, one window** — the worm shape |
+
+`CORRELATED_BURST` is the one no per-package check can see: each individual package looks like an ordinary
+release, and only grouping by publishing account and sorting by time reveals it.
+
+Two rules decide whether the output is usable, and both were learned by running it on real data:
+
+**Unknown is not "no".** The abbreviated packument carries no maintainers, no publish times and no
+repository. Treating missing data as a negative would report every package on a fast ingest as "published by
+an unknown account". Each check states its preconditions and declines when they are unmet — the same
+discipline `typosquat.py` applies to unknown download counts.
+
+**Current state cannot be compared against historical publishes.** `maintainers` is the list as it stands
+today; `chalk@0.5.1` was pushed in 2014 by `jbnicolai`, who was a maintainer then. Run without a recency
+horizon over six ordinary packages, that check alone produced **290 rows**, none actionable. With the
+90-day horizon (`RECENT_SECONDS`) the same six produced **one**. Over the full 398-package corpus it
+produces one.
+
+```powershell
+python -m blastradius.pkg.cli anomalies --offline
+```
 
 ---
 
@@ -350,3 +486,17 @@ version, not graph size — but that has not been measured at 100k nodes and is 
 - **Typosquat coverage depends on download data.** npm's bulk endpoint declines scoped packages; unknown
   popularity is treated as unknown, not zero, so scoped packages are not assessed for asymmetry. Correct,
   but it means scoped squats are currently out of reach.
+- **`PUBLISH_BURST` cannot tell a coordinated backport from a worm.** On the real corpus it fires on
+  `@types/node` shipping 22.x, 24.x and 25.x in the same second, and on `ws` publishing 5.2.5 / 6.2.4 /
+  7.5.11 within a minute — a security fix backported across maintained majors. The *shape* is exactly right
+  and the cause is benign, which is why it is INVESTIGATE rather than a finding. Distinguishing them needs
+  the diff, not the metadata.
+- **`CORRELATED_BURST` fires on monorepo releases.** `brianc` publishing `pg`, `pg-connection-string` and
+  `pg-protocol` together is one release, not propagation. A `SOURCED_FROM` check would suppress it — same
+  repository means one project — and is the obvious next refinement.
+- **The recency horizon means the tool has no memory.** A compromise older than 90 days is invisible to
+  the anomaly checks by default. That is the right default for incident response and the wrong one for
+  forensics; `horizon_seconds=None` assesses the whole history.
+- **The scale harness is synthetic.** It answers a complexity question, which does not need real names, and
+  it drives the real writer and the real engine. It does not tell you how a 500k-node graph built from
+  *actual* npm data would behave — dependency fan-out there is heavily skewed, and this generator's is not.

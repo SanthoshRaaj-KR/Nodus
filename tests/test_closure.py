@@ -23,6 +23,7 @@ import pytest
 from blastradius import schema
 from blastradius.ingest.lockfile import find_lockfiles, parse_package_lock
 from blastradius.pkg.ingest import compute_closure
+from blastradius.pkg.identity import package_key
 
 CORPUS = Path(__file__).resolve().parents[1] / "corpus" / "fleet"
 
@@ -136,13 +137,18 @@ def test_hoisting_does_not_make_a_transitive_dependency_look_direct():
         pytest.skip("cli-tool not generated")
     lock = parse_package_lock(lock_path)
     closure = compute_closure(lock, "cli-tool")
-    lodash = [k for k in closure if k.startswith("lodash@")]
+    # Closure keys are purls, and the prefix comes from the same key function
+    # the ingest uses. Spelling it `lodash@` inline is what this assertion used
+    # to do, and it silently matched nothing once keys became purls -- the
+    # exact "missing exposure looks like safety" failure this module exists to
+    # catch, reproduced in its own test.
+    lodash = [k for k in closure if k.startswith(package_key("lodash") + "@")]
     assert lodash, "cli-tool should reach lodash"
     exposure = closure[lodash[0]]
     assert exposure.depth > schema.DIRECT_DEPTH, (
         "lodash is hoisted to top level but is not a declared dependency"
     )
-    assert exposure.via_direct.startswith("inquirer@")
+    assert exposure.via_direct.startswith(package_key("inquirer") + "@")
 
 
 def test_production_path_beats_dev_only_path():
