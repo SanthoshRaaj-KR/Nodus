@@ -314,3 +314,16 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC / "index.html")
+
+
+#: The redesigned console. Built from ui/web (React + Vite) into static/app,
+#: which the /static mount above already serves -- so there is no second
+#: runtime in production, only a build step. Falls back to the standalone
+#: vanilla build when the bundle has not been built yet, because a 404 here
+#: looks like a broken route rather than a missing `npm run build`.
+@app.get("/console")
+def console() -> FileResponse:
+    bundled = STATIC / "app" / "index.html"
+    if bundled.exists():
+        return FileResponse(bundled)
+    return FileResponse(STATIC / "console.html")
