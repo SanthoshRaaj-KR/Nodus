@@ -6,3 +6,10 @@ uvicorn[standard]>=0.32
 # Version and requirement parsing for the dependency resolver in
 # osv_scanner_tool/, which the OSV API fallback path walks.
 packaging>=23.0
+
+# The chat agent. `openai` arrives as a dependency of openai-agents; it is not
+# pinned separately so the two cannot drift into an incompatible pair.
+openai-agents>=0.17
+# Reads .env at startup -- for the chat agent's key, and for the HYDRA_* vars
+# that .env.example has always documented but nothing actually loaded.
+python-dotenv>=1.0
