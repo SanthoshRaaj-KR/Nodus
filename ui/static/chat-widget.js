@@ -1,9 +1,10 @@
 /* =====================================================================
    The "ask the graph" popup: one floating button, bottom-right, on every
-   page. Talks to /api/chat/default -- the one workspace the chat router
-   auto-provisions over every service currently in the graph (there is no
-   per-repo picker here; these three pages already treat the graph as one
-   fleet, so the popup does too).
+   page. Talks to /api/chat/<ref>, where <ref> is whichever repository the
+   picker at / sent the browser here for (stored under WORKSPACE_KEY) --
+   falling back to /api/chat/default, the one workspace the chat router
+   auto-provisions over every service currently in the graph, for anyone
+   who lands on a page directly without going through the picker.
 
    Self-contained on purpose, like chrome.js: one file, injected on every
    page, owning its own markup and styles so the page templates stay free
@@ -14,6 +15,15 @@
 (function () {
   const STYLE_ID = "chatw-style";
   const SESSION_KEY = "blastradius.chat.session";
+  const WORKSPACE_KEY = "nodus.workspace";
+
+  function workspaceRef() {
+    try {
+      return localStorage.getItem(WORKSPACE_KEY) || "default";
+    } catch (e) {
+      return "default";
+    }
+  }
 
   function sessionId() {
     try {
@@ -176,7 +186,7 @@
       empty.textContent = "Ask about anything in the fleet's dependency graph -- what's exposed, what reaches production code, or what to patch first.";
       body.append(empty);
 
-      fetch("/api/chat/default/briefing")
+      fetch(`/api/chat/${workspaceRef()}/briefing`)
         .then((r) => (r.ok ? r.json() : Promise.reject(r)))
         .then((pack) => {
           const questions = (pack.suggestions || []).slice(0, 4);
@@ -211,7 +221,7 @@
       const pending = addMsg("bot pending", "Thinking…");
 
       try {
-        const res = await fetch("/api/chat/default/ask?stream=false", {
+        const res = await fetch(`/api/chat/${workspaceRef()}/ask?stream=false`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: trimmed, session_id: sessionId() }),
@@ -261,7 +271,7 @@
       if (!body.children.length) showEmptyState();
       if (!warmed) {
         warmed = true;
-        fetch("/api/chat/default/warm", { method: "POST" }).catch(() => {});
+        fetch(`/api/chat/${workspaceRef()}/warm`, { method: "POST" }).catch(() => {});
       }
       input.focus();
     }

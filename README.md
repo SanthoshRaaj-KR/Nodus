@@ -1,4 +1,4 @@
-# Blast Radius
+# Nodus
 
 **Track 2A / problem A — supply chain blast radius.**
 
@@ -75,7 +75,7 @@ python -m blastradius.cli up          # start the HydraDB container
 python -m blastradius.cli pipeline --reset
 
 python -m blastradius.cli status      # both tiers should be non-zero
-python -m blastradius.cli ui          # Blast Radius Explorer, port 8100
+python -m blastradius.cli ui          # Nodus, port 8100
 ```
 
 `pipeline` is the whole build: it scans the repository with `osv-scanner`,

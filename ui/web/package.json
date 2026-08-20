@@ -1,9 +1,9 @@
 {
-  "name": "blast-radius-console",
+  "name": "nodus-console",
   "private": true,
   "version": "2.4.0",
   "type": "module",
-  "description": "Blast Radius Console — React front end for the supply-chain blast-radius engine.",
+  "description": "Nodus Console — React front end for the supply-chain blast-radius engine.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

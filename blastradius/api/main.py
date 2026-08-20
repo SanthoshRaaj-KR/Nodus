@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 ADVISORIES = ROOT / "advisories"
 STATIC = Path(__file__).resolve().parent / "static"
 
-app = FastAPI(title="Blast Radius", version="1.0.0")
+app = FastAPI(title="Nodus", version="1.0.0")
 
 _cors_origins = os.environ.get("CORS_ALLOW_ORIGINS", "*")
 app.add_middleware(

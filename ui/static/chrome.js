@@ -68,7 +68,7 @@ function mountChrome() {
   lead.className = "bar-lead";
   lead.innerHTML =
     `<div class="brand"><span class="mark"></span>
-       <span class="name">Blast Radius <em>/ ${pageName(here)}</em></span></div>
+       <span class="name">Nodus <em>/ ${pageName(here)}</em></span></div>
      <nav class="tabs" aria-label="Views">${tabs}</nav>`;
   bar.prepend(lead);
 

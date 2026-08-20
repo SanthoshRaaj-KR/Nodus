@@ -745,12 +745,12 @@ def _free_port(preferred: int, span: int = 10) -> int:
 
 
 def cmd_ui(args) -> int:
-    """Run the Blast Radius Explorer frontend."""
+    """Run the Nodus frontend."""
     import uvicorn
 
     port = _free_port(args.port)
     print()
-    print(f"  Blast Radius Explorer -> http://127.0.0.1:{port}")
+    print(f"  Nodus -> http://127.0.0.1:{port}")
     print(DIM("  ctrl-c to stop"))
     print()
     uvicorn.run("ui.server:app", host="127.0.0.1", port=port, log_level="warning")
@@ -942,7 +942,7 @@ def main(argv: list[str] | None = None) -> int:
     srv.add_argument("--port", type=int, default=8000)
     srv.set_defaults(func=cmd_serve)
 
-    explorer = sub.add_parser("ui", help="run the Blast Radius Explorer frontend")
+    explorer = sub.add_parser("ui", help="run the Nodus frontend")
     explorer.add_argument("--port", type=int, default=8000)
     explorer.set_defaults(func=cmd_ui)
 

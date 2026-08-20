@@ -1,4 +1,4 @@
-"""The `ui` frontend server -- Blast Radius Explorer.
+"""The `ui` frontend server -- Nodus.
 
 Deliberately separate from `blastradius.api`. That one is the machine-facing
 assessment API a CI job would call; this one is the human-facing explorer, and
@@ -54,7 +54,7 @@ HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
 ADVISORIES = HERE.parent / "advisories"
 
-app = FastAPI(title="Blast Radius Explorer", version="1.0.0")
+app = FastAPI(title="Nodus", version="1.0.0")
 
 _cors_origins = os.environ.get("CORS_ALLOW_ORIGINS", "*")
 app.add_middleware(
@@ -613,6 +613,24 @@ def repo_ingest(path: str, reset: bool = True):
     return job.to_dict()
 
 
+@app.post("/api/repo/from-github")
+def repo_from_github(url: str):
+    """Clone a public GitHub repository, then run the same pipeline.
+
+    Backs the repo picker at `/`: `reset` is False here (unlike
+    `/api/repo/ingest`'s default) because the picker's whole point is that
+    more than one repository can be selectable at once, each with its own
+    chatbot -- see `blastradius/chat/workspaces.py`.
+    """
+    try:
+        job = livestate.start_ingest_from_github(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return job.to_dict()
+
+
 @app.get("/api/repo/status")
 def repo_status():
     return {
@@ -740,18 +758,18 @@ def _console_file() -> Path:
 
 @app.get("/")
 def index() -> FileResponse:
-    """The console is the front door.
+    """The repo picker is the front door.
 
-    There used to be two UIs on this server answering the same questions
-    differently -- the original Explorer at / and the redesigned console at
-    /console -- which meant whichever one you happened to open decided what
-    you learned. The console supersedes it, so it gets the root, and the
-    Explorer stays reachable at /explorer rather than being deleted: it is
-    still the only view of the micro/code graph that does not depend on the
-    bundle being built.
+    Every other page here answers questions about whatever is already in the
+    graph, and none of them can say *which* repository that is when more than
+    one has been ingested -- that context has to come from somewhere before
+    the console, not inside it. So `/` is the picker: choose an already-known
+    repository or clone a new one, and only then move on to /console. The
+    console itself is unmoved -- still at /console, still what /explorer and
+    /graph link back to -- this just stops being it.
     """
     return FileResponse(
-        _console_file(),
+        STATIC / "start.html",
         headers={"Cache-Control": "no-store, must-revalidate"},
     )
 

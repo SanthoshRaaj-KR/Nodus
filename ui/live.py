@@ -26,6 +26,9 @@ arrive then, and two sockets would leave that to chance.
 
 from __future__ import annotations
 
+import re
+import shutil
+import subprocess
 import threading
 import time
 import traceback
@@ -52,6 +55,22 @@ SUBSCRIBER_QUEUE = 512
 #: we will walk it" still deserves a floor: these hold nothing a dependency
 #: scan wants and everything an accident would regret.
 FORBIDDEN_ROOTS = ("/etc", "/sys", "/proc", "/dev", "/var/root", "/private/etc")
+
+#: Where a GitHub URL gets cloned to. Same directory the demo fixtures already
+#: live in (corpus/fleet, corpus/GenReal.ai), so a cloned repo is scannable by
+#: every code path that already knows how to point at a local checkout there.
+CORPUS_DIR = Path(__file__).resolve().parent.parent / "corpus"
+
+#: `https://github.com/<owner>/<repo>`, optionally with `.git` and a trailing
+#: slash. Deliberately narrow rather than "anything git can clone": the value
+#: is passed to a subprocess argument list (never a shell), so there is no
+#: injection risk from special characters, but a string starting with `-`
+#: could still be read as a git flag, and only GitHub is what "enter a GitHub
+#: link" means here -- an SSH remote or an arbitrary host would just fail
+#: `git clone` with a confusing error instead of a clear rejection.
+_GITHUB_URL_RE = re.compile(
+    r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(\.git)?/?$"
+)
 
 
 def _split(spec: str) -> tuple[str, str]:
@@ -270,18 +289,119 @@ class LiveState:
         self._job_thread.start()
         return job
 
+    # -- github ---------------------------------------------------------
+
+    @staticmethod
+    def parse_github_url(raw: str) -> tuple[str, str]:
+        """`https://github.com/owner/repo` -> `("owner", "repo")`, or raise."""
+        text = (raw or "").strip()
+        match = _GITHUB_URL_RE.match(text)
+        if not match:
+            raise ValueError(
+                f"expected a GitHub URL like https://github.com/owner/repo, got {raw!r}"
+            )
+        return match.group(1), match.group(2)
+
+    def start_ingest_from_github(self, url: str, reset: bool = False) -> IngestJob:
+        """Clone a GitHub repository, then run the same pipeline as a local path.
+
+        `reset` defaults to False here, unlike `start_ingest`'s default of True:
+        the picker's whole point is that more than one repository's chatbot can
+        exist at once (see `blastradius/chat/workspaces.py`), so adding a second
+        repo must not erase the first one's services out from under its
+        already-registered chatbot.
+        """
+        if self.job_running:
+            raise RuntimeError("an ingest is already running")
+
+        owner, name = self.parse_github_url(url)
+        target = CORPUS_DIR / f"{owner}-{name}"
+
+        job = IngestJob(repo=url, reset=reset, status="queued")
+        with self._job_lock:
+            self.job = job
+
+        self._job_thread = threading.Thread(
+            target=self._run_github_ingest, args=(job, url, target),
+            name="ingest-job", daemon=True,
+        )
+        self._job_thread.start()
+        return job
+
+    def _clone(self, url: str, target: Path) -> None:
+        """Fresh clone every time, rather than fetch-and-reset an existing one.
+
+        A shallow clone is one `git` invocation with no branch-tracking edge
+        cases to get wrong; re-running "Start" on the same repo just replaces
+        it. The cost is a re-download on every re-ingest, which for a picker
+        that is clicked rarely is cheaper than the failure modes of trying to
+        keep a checkout in sync.
+        """
+        CORPUS_DIR.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            shutil.rmtree(target)
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", url, str(target)],
+            capture_output=True, text=True, timeout=180,
+        )
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout or "git clone failed").strip())
+
+    def _run_github_ingest(self, job: IngestJob, url: str, target: Path) -> None:
+        job.status = "running"
+        job.started_at = time.time()
+        self._emit_job()
+
+        stage = Stage(name="clone")
+        job.stages.append(stage)
+        t0 = time.perf_counter()
+        try:
+            self._clone(url, target)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the browser
+            stage.status = "failed"
+            stage.seconds = time.perf_counter() - t0
+            job.status = "failed"
+            job.error = f"clone failed: {exc}"
+            self._emit_job()
+            return
+        stage.status = "ok"
+        stage.seconds = time.perf_counter() - t0
+
+        described = self.describe_repo(target)
+        if not described["usable"]:
+            job.status = "failed"
+            job.error = described["note"]
+            self._emit_job()
+            return
+
+        # From here the job is indistinguishable from a local-path ingest --
+        # `job.repo` now names the clone, which is what gets registered as the
+        # chatbot's `repo_path` once the pipeline finishes.
+        job.repo = str(target)
+        self._emit_job()
+        self._run_pipeline_stages(job)
+
     def _emit_job(self) -> None:
         if self.job is not None:
             self.bus.publish({"type": "ingest", "job": self.job.to_dict()})
 
     def _run_ingest(self, job: IngestJob) -> None:
-        from blastradius.pipeline import run_pipeline
-
         job.status = "running"
         job.started_at = time.time()
-        started = time.perf_counter()
         self._emit_job()
+        self._run_pipeline_stages(job)
 
+    def _run_pipeline_stages(self, job: IngestJob) -> None:
+        """Run the pipeline against `job.repo` -- a resolved local path.
+
+        Shared by both entry points. By the time this runs, `job.repo` is
+        always a local directory: `start_ingest` resolves it before creating
+        the job, and `_run_github_ingest` overwrites the URL with the clone
+        path once cloning succeeds.
+        """
+        from blastradius.pipeline import run_pipeline
+
+        started = time.perf_counter()
         current: dict[str, Any] = {"stage": None, "at": 0.0}
 
         def close_current(status: str = "ok") -> None:

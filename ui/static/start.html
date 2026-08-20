@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nodus</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/base.css">
+<style>
+/* ------------------------------------------------------------------
+   The repo picker. No app bar here on purpose -- the tabs it would
+   hold (Console / Explorer / Live graph) all answer questions about a
+   repository that has not been chosen yet, so showing them first would
+   point at destinations that are not ready. Everything else -- tokens,
+   .card, .btn, .field, .note -- is base.css; this file is only layout.
+   ------------------------------------------------------------------ */
+body {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100%; padding: 32px 16px;
+}
+.wrap { width: 100%; max-width: 560px; }
+.hero { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 28px; text-align: center; }
+.hero .brand { gap: 12px; }
+.hero .brand .mark { width: 34px; height: 34px; border-radius: 10px; }
+.hero .brand .mark::after { inset: 10px; }
+.hero .brand .name { font-size: 24px; }
+.hero p { margin: 0; color: var(--ink-3); font-size: 13px; max-width: 40ch; }
+
+.sheet {
+  background: var(--surface-0); border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-2);
+  padding: 22px 22px 20px;
+}
+
+.repolist { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; max-height: 260px; overflow-y: auto; }
+.repolist .card .title { font-size: 12.5px; }
+.repolist .card .meta b { color: var(--ink-2); font-weight: 500; }
+
+.or-rule { display: flex; align-items: center; gap: 10px; margin: 20px 0; color: var(--ink-3); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.or-rule::before, .or-rule::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+.entry-row { display: flex; gap: 8px; align-items: flex-start; }
+.entry-row .field { flex: 1; margin-bottom: 0; }
+
+.stagelist { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+.stagerow { display: flex; align-items: center; gap: 8px; font: 500 12px/1.3 var(--sans); color: var(--ink-2); }
+.stagerow .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--ink-3); }
+.stagerow[data-status="running"] .dot { background: var(--accent); animation: pulseDot 1s ease-in-out infinite; }
+.stagerow[data-status="ok"] .dot { background: var(--ok); }
+.stagerow[data-status="failed"] .dot { background: var(--threat); }
+.stagerow[data-status="ok"], .stagerow[data-status="failed"] { color: var(--ink-1); }
+@keyframes pulseDot { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="hero">
+    <div class="brand"><span class="mark"></span><span class="name">Nodus</span></div>
+    <p>Pick a repository to see its supply-chain exposure, or clone a new one from GitHub to get started.</p>
+  </div>
+
+  <div class="sheet">
+    <div id="repoSection">
+      <div class="panel-title">Your repositories</div>
+      <div id="repoList" class="repolist"></div>
+      <div id="repoEmpty" class="muted hidden">Nothing ingested yet -- add a repository below.</div>
+    </div>
+
+    <div class="or-rule">or</div>
+
+    <div id="entrySection">
+      <div class="panel-title">Add from GitHub</div>
+      <div class="entry-row">
+        <label class="field">
+          <span>Repository URL</span>
+          <input type="text" id="repoUrl" placeholder="https://github.com/owner/repo">
+        </label>
+        <button class="btn primary" id="startBtn" type="button" style="margin-top:20px;">Start</button>
+      </div>
+      <div id="entryError" class="note bad hidden" style="margin-top:10px;"></div>
+    </div>
+
+    <div id="progressSection" class="hidden">
+      <div class="panel-title" style="margin-top:16px;">Building the graph</div>
+      <div id="stageList" class="stagelist"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const WORKSPACE_KEY = "nodus.workspace";
+const repoList = document.getElementById("repoList");
+const repoEmpty = document.getElementById("repoEmpty");
+const repoUrl = document.getElementById("repoUrl");
+const startBtn = document.getElementById("startBtn");
+const entryError = document.getElementById("entryError");
+const entrySection = document.getElementById("entrySection");
+const progressSection = document.getElementById("progressSection");
+const stageList = document.getElementById("stageList");
+
+function openWorkspace(ref) {
+  try { localStorage.setItem(WORKSPACE_KEY, String(ref)); } catch (e) {}
+  location.href = "/console";
+}
+
+async function loadWorkspaces() {
+  try {
+    const res = await fetch("/api/chat/workspaces");
+    const data = await res.json();
+    const repos = (data.workspaces || []).filter((w) => w.slug !== "default");
+    repoList.innerHTML = "";
+    if (!repos.length) {
+      repoEmpty.classList.remove("hidden");
+      return;
+    }
+    repoEmpty.classList.add("hidden");
+    for (const w of repos) {
+      const card = document.createElement("div");
+      card.className = "card tappable";
+      card.setAttribute("role", "button");
+      card.setAttribute("tabindex", "0");
+      card.innerHTML = `
+        <div class="title">${escapeHtml(w.label)}</div>
+        <div class="meta"><b>${w.services}</b> service${w.services === 1 ? "" : "s"} · ${escapeHtml(w.repo_path)}</div>
+      `;
+      card.onclick = () => openWorkspace(w.id);
+      card.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); card.click(); } };
+      repoList.append(card);
+    }
+  } catch (e) {
+    repoEmpty.textContent = "Could not reach the server -- is it running?";
+    repoEmpty.classList.remove("hidden");
+  }
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function renderStages(job) {
+  stageList.innerHTML = "";
+  for (const s of job.stages || []) {
+    const row = document.createElement("div");
+    row.className = "stagerow";
+    row.dataset.status = s.status;
+    row.innerHTML = `<span class="dot"></span><span>${escapeHtml(s.name)}</span>`;
+    stageList.append(row);
+  }
+}
+
+async function registerWorkspace(repoPath) {
+  const res = await fetch("/api/chat/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repo_path: repoPath }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || "could not register the chatbot for this repository");
+  return data;
+}
+
+async function pollJob() {
+  const res = await fetch("/api/repo/status");
+  const data = await res.json();
+  const job = data.job;
+  if (!job) return;
+
+  renderStages(job);
+
+  if (job.status === "failed") {
+    entryError.textContent = job.error || "Ingest failed.";
+    entryError.classList.remove("hidden");
+    startBtn.disabled = false;
+    return;
+  }
+  if (job.status === "done") {
+    try {
+      const workspace = await registerWorkspace(job.repo);
+      openWorkspace(workspace.id);
+    } catch (e) {
+      entryError.textContent = e.message;
+      entryError.classList.remove("hidden");
+      startBtn.disabled = false;
+    }
+    return;
+  }
+  setTimeout(pollJob, 700);
+}
+
+async function start() {
+  const url = repoUrl.value.trim();
+  entryError.classList.add("hidden");
+  if (!url) {
+    entryError.textContent = "Enter a GitHub repository URL first.";
+    entryError.classList.remove("hidden");
+    return;
+  }
+  startBtn.disabled = true;
+  progressSection.classList.remove("hidden");
+  stageList.innerHTML = "";
+
+  try {
+    const res = await fetch(`/api/repo/from-github?url=${encodeURIComponent(url)}`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "could not start the ingest");
+    pollJob();
+  } catch (e) {
+    entryError.textContent = e.message;
+    entryError.classList.remove("hidden");
+    startBtn.disabled = false;
+    progressSection.classList.add("hidden");
+  }
+}
+
+startBtn.addEventListener("click", start);
+repoUrl.addEventListener("keydown", (e) => { if (e.key === "Enter") start(); });
+
+loadWorkspaces();
+</script>
+</body>
+</html>

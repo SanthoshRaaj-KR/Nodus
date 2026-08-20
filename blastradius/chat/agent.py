@@ -47,7 +47,7 @@ from .tools import Scope
 set_tracing_disabled(True)
 
 INSTRUCTIONS = """\
-You are the Blast Radius assistant. You answer questions about ONE repository's
+You are the Nodus assistant. You answer questions about ONE repository's
 software supply chain, using a dependency graph that has already been built from
 its lockfiles and (when available) its source code.
 
@@ -308,7 +308,7 @@ def build_agent(scope: Scope, cfg: ChatConfig | None = None) -> Agent:
     pack = briefing_mod.briefing(scope)
 
     return Agent(
-        name=f"blast-radius-{scope.workspace.id}",
+        name=f"nodus-{scope.workspace.id}",
         instructions=INSTRUCTIONS + pack.text,
         tools=build_tools(scope, cfg),
         model=cfg.model,
