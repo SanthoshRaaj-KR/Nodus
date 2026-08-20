@@ -765,6 +765,7 @@ function threatDetail(t) {
               style="margin-left:5px"><i></i>${esc(a.severity || "unrated")}</span>
       </div>
       ${a.summary ? `<div class="sum">${esc(a.summary)}</div>` : ""}
+      ${range(a)}
       ${a.cvss_vector ? `<div class="cvss">${esc(a.cvss_vector)}</div>` : ""}
     </div>`).join("");
 
@@ -782,6 +783,20 @@ function threatDetail(t) {
 
 function kv(key, value) {
   return `<div class="kv"><b>${esc(key)}</b><span>${esc(value)}</span></div>`;
+}
+
+/* The vulnerable range, both ends. "Fixed in 4.17.21" alone answers what to
+   upgrade to and leaves "when did this start" unanswerable — which is one of
+   the brief's six questions. Both come off the AFFECTS edge, so this is what
+   the advisory states rather than the earliest version we happen to hold. */
+function range(a) {
+  const from = a.introduced_label || "";
+  const to = a.fixed_version || "";
+  if (!from && !to) return "";
+  const parts = [];
+  if (from) parts.push(`introduced <b>${esc(from)}</b>`);
+  parts.push(to ? `fixed in <b>${esc(to)}</b>` : `<b>no fix published</b>`);
+  return `<div class="cvss" style="color:var(--text-2)">${parts.join(" · ")}</div>`;
 }
 
 /* Clicking empty space in the list clears a picked graph node, so the panel

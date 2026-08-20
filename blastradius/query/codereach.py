@@ -351,21 +351,35 @@ def threats(client: HydraClient, index: CodeIndex | None = None) -> list[Threat]
         return threat
 
     for row in client.query(
-        f"MATCH (a:{schema.ADVISORY})-[:{schema.AFFECTS}]->"
+        f"MATCH (a:{schema.ADVISORY})-[e:{schema.AFFECTS}]->"
         f"(v:{schema.PACKAGE_VERSION}) RETURN v.id AS vid, "
         "a.advisory_id AS advisory_id, a.severity AS severity, "
-        "a.summary AS summary, a.cvss_vector AS cvss_vector"
+        "a.summary AS summary, a.cvss_vector AS cvss_vector, "
+        # Both ends of the vulnerable range, read off the edge rather than
+        # guessed from the versions this graph happens to hold.
+        "e.introduced_version AS introduced_version, "
+        "e.fixed_version AS fixed_version"
     ).rows:
         version_id = _int(row.get("vid"))
         if version_id < 0:
             continue
         threat = entry(version_id, "vulnerable")
         severity = severity_word(row.get("severity"))
+        introduced = _text(row.get("introduced_version"))
         threat.advisories.append({
             "advisory_id": _text(row.get("advisory_id")),
             "severity": severity,
             "summary": _text(row.get("summary")),
             "cvss_vector": _text(row.get("cvss_vector")),
+            # OSV writes "0" for "since the first release". Rendering that as
+            # a version number would claim a release called 0 exists; saying
+            # so in words is both shorter and true.
+            "introduced_version": introduced,
+            "introduced_label": (
+                "since the first release" if introduced == "0"
+                else introduced
+            ),
+            "fixed_version": _text(row.get("fixed_version")),
         })
         # A version is as dangerous as the worst thing known about it.
         #

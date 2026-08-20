@@ -4,6 +4,63 @@ import subprocess
 import sys
 
 
+def _version_parts(text):
+    """A comparable tuple for a version string, best effort.
+
+    Deliberately tolerant rather than a full semver or PEP 440 parser. It is
+    used only to decide which of an advisory's ranges a version falls in, the
+    ranges of one advisory do not overlap, and a wrong answer degrades to
+    "report every range" rather than to a wrong range. Pre-release suffixes
+    sort below the release they precede, which is the one ordering rule that
+    matters here.
+    """
+    if not text:
+        return ()
+    head = str(text).split("+", 1)[0]
+    head, _, pre = head.partition("-")
+    out = []
+    for chunk in head.split("."):
+        digits = "".join(c for c in chunk if c.isdigit())
+        out.append(int(digits) if digits else 0)
+    # A release outranks any pre-release of the same number.
+    out.append(0 if pre else 1)
+    return tuple(out)
+
+
+def _range_for_version(affected_entries, version):
+    """The ranges of the `affected` entry that actually contains `version`.
+
+    The bug this replaces: the extractor read `affected[0]` and reported its
+    events regardless of which version was installed. An advisory covering a
+    package's 2.x, 5.x and 8.x lines has one `affected` entry per line, so a
+    scan of 5.4.21 reported the 8.x range -- "introduced 8.0.0, fixed 8.0.5"
+    against a 5.4.21 install. `fixed_version` had the same defect and has been
+    wrong in the CSV for as long as it has existed; upgrading to the version
+    it named would not have fixed anything.
+
+    Falls back to every entry when the version cannot be placed, because
+    reporting all the candidate ranges is honest and reporting one arbitrary
+    range is not.
+    """
+    if not affected_entries:
+        return []
+    target = _version_parts(version)
+    if target:
+        for entry in affected_entries:
+            for rng in entry.get("ranges") or []:
+                low, high = None, None
+                for event in rng.get("events") or []:
+                    if event.get("introduced") is not None:
+                        low = event["introduced"]
+                    if event.get("fixed") is not None:
+                        high = event["fixed"]
+                lo_ok = low in (None, "0") or target >= _version_parts(low)
+                hi_ok = high is None or target < _version_parts(high)
+                if lo_ok and hi_ok:
+                    return [rng]
+    return [r for entry in affected_entries for r in (entry.get("ranges") or [])]
+
+
 def _extract_details(data):
     details = []
     for group in data.get("results", []):
@@ -11,13 +68,28 @@ def _extract_details(data):
         for item in group.get("packages", []):
             pkg = item["package"]
             for vuln in item.get("vulnerabilities", []):
-                affected = vuln.get("affected", [{}])[0]
-                ranges = affected.get("ranges", [])
+                ranges = _range_for_version(
+                    vuln.get("affected") or [], pkg.get("version")
+                )
                 fixed_events = [
                     e.get("fixed")
                     for r in ranges
                     for e in r.get("events", [])
                     if e.get("fixed")
+                ]
+                # The other half of the same range, and the answer to "which
+                # version introduced it". OSV states it explicitly -- an
+                # `introduced` event opens every range -- so deriving it by
+                # sorting the versions we happen to hold would be guessing at
+                # something the advisory already says. `0` is OSV's "from the
+                # beginning of time"; it is kept verbatim rather than
+                # normalised, because "since the first release" is a real and
+                # different answer from a version number.
+                introduced_events = [
+                    e.get("introduced")
+                    for r in ranges
+                    for e in r.get("events", [])
+                    if e.get("introduced")
                 ]
                 severity = vuln.get("severity", [])
                 cvss = " | ".join(s.get("score", "") for s in severity)
@@ -37,6 +109,7 @@ def _extract_details(data):
                     "cvss_vector": cvss,
                     "severity_score": vuln.get("database_specific", {}).get("severity", ""),
                     "fixed_version": "; ".join(fixed_events),
+                    "introduced_version": "; ".join(introduced_events),
                     "published": vuln.get("published", ""),
                     "modified": vuln.get("modified", ""),
                     "details": vuln.get("details", "").replace("\n", " ").strip(),
@@ -110,7 +183,8 @@ def scan_repo(repo_path, respect_gitignore=False):
 CSV_FIELDS = [
     "package", "version", "ecosystem", "source_file", "osv_id",
     "aliases", "summary", "cvss_vector", "severity_score",
-    "fixed_version", "published", "modified", "details", "references",
+    "fixed_version", "introduced_version",
+    "published", "modified", "details", "references",
 ]
 
 

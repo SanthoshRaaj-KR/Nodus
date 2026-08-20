@@ -412,13 +412,26 @@ def _scan_with_api(
 
 def _row_from_osv_record(record: dict, ecosystem: str, name: str, version: str) -> dict:
     """One OSV record -> one CSV row, in the same shape ``scan.py`` emits."""
+    # Same range selection as the binary path, and shared rather than
+    # reimplemented: the two engines have to agree on what a finding is, or a
+    # result means something different depending on whether osv-scanner
+    # happened to be installed. A test pins the column set; this keeps the
+    # values honest too.
+    from osv_scanner_tool.scan import _range_for_version
+
     affected = record.get("affected") or [{}]
+    ranges = _range_for_version(affected, version)
     fixed = [
         event.get("fixed")
-        for entry in affected
-        for rng in (entry.get("ranges") or [])
+        for rng in ranges
         for event in (rng.get("events") or [])
         if event.get("fixed")
+    ]
+    introduced = [
+        event.get("introduced")
+        for rng in ranges
+        for event in (rng.get("events") or [])
+        if event.get("introduced")
     ]
     severity = record.get("severity") or []
     references = record.get("references") or []
@@ -437,6 +450,7 @@ def _row_from_osv_record(record: dict, ecosystem: str, name: str, version: str) 
         "cvss_vector": " | ".join(s.get("score", "") for s in severity),
         "severity_score": (record.get("database_specific") or {}).get("severity", ""),
         "fixed_version": "; ".join(dict.fromkeys(fixed)),
+        "introduced_version": "; ".join(dict.fromkeys(introduced)),
         "published": record.get("published", ""),
         "modified": record.get("modified", ""),
         "details": (record.get("details") or "").replace("\n", " ").strip(),

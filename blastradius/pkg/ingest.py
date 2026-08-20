@@ -591,8 +591,14 @@ def ingest(
                         f"{advisory.advisory_id}: {norm}@{version} (not in graph)"
                     )
                     continue
+                # Both ends of the vulnerable range on the same edge:
+                # `introduced` is where it opens, `fixed` where it closes.
+                # Reporting only the second answers "what do I upgrade to"
+                # and leaves "when did this start" unanswerable.
                 writer.edge(schema.AFFECTS, adv_id, target,
-                            fixed_version=fixed, source=config.source_osv)
+                            fixed_version=fixed,
+                            introduced_version=advisory.introduced.get(norm, ""),
+                            source=config.source_osv)
                 report.affects_edges += 1
 
     if scan:

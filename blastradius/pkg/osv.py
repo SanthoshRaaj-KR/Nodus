@@ -185,6 +185,13 @@ class Finding:
     #: whichever form it got rather than discarding the one it cannot cast.
     severity_label: str
     fixed_version: str
+    #: Where the vulnerable range opens. OSV states it as an `introduced`
+    #: event, so this is what the advisory says rather than the earliest
+    #: affected version we happen to hold -- the two differ whenever the
+    #: graph does not materialise a package's whole history, which is
+    #: always. OSV writes "0" for "since the first release"; that is kept
+    #: verbatim, because it is a real answer and not a missing one.
+    introduced_version: str
     published: int
     modified: int
     details: str
@@ -221,6 +228,11 @@ class Advisory:
     references: set[str] = field(default_factory=set)
     #: (normalized package name, version) -> fixed_version or ""
     affected: dict[tuple[str, str], str] = field(default_factory=dict)
+    #: normalized package name -> the version the vulnerable range opens at.
+    #: Per package, not per (package, version): "which version introduced it"
+    #: is a fact about the package's history, and every affected version of
+    #: one package shares the same answer.
+    introduced: dict[str, str] = field(default_factory=dict)
 
     @property
     def all_ids(self) -> list[str]:
@@ -254,6 +266,12 @@ class Advisory:
         key = (finding.package, finding.version)
         if finding.fixed_version or key not in self.affected:
             self.affected[key] = finding.fixed_version
+        # First non-empty wins rather than last. Rows for one advisory repeat
+        # the same range once per affected version, so they agree; when a feed
+        # omits it on some rows, keeping the first real answer beats letting a
+        # later blank overwrite it.
+        if finding.introduced_version and not self.introduced.get(finding.package):
+            self.introduced[finding.package] = finding.introduced_version
 
 
 @dataclass
@@ -380,6 +398,7 @@ def load_osv_csv(path: str | Path, normalize_npm_names: bool = True) -> OsvScan:
                 severity_score=score,
                 severity_label=label,
                 fixed_version=(row.get("fixed_version") or "").strip(),
+                introduced_version=(row.get("introduced_version") or "").strip(),
                 published=parse_timestamp(row.get("published")),
                 modified=parse_timestamp(row.get("modified")),
                 details=(row.get("details") or "").strip(),

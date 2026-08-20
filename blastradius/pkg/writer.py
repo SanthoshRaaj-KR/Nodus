@@ -107,7 +107,7 @@ EDGE_PROPS: dict[str, tuple[str, ...]] = {
     schema.TYPOSQUAT_OF: (
         "distance", "technique", "popularity_ratio", "source",
     ),
-    schema.AFFECTS: ("fixed_version", "source"),
+    schema.AFFECTS: ("fixed_version", "introduced_version", "source"),
     schema.COMPROMISES: ("source",),
 }
 
