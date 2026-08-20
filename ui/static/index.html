@@ -1,1474 +1,781 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Blast Radius Explorer</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='6' fill='%23ff5c47'/%3E%3Ccircle cx='16' cy='16' r='12' fill='none' stroke='%23ff5c47' stroke-opacity='.45' stroke-width='2'/%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<title>Blast Radius — Explorer</title>
 <style>
-  html, body { margin:0; padding:0; background:oklch(0.17 0.02 265); }
-  * { box-sizing:border-box; }
-  a { color:oklch(0.78 0.14 200); text-decoration:none; }
-  a:hover { color:oklch(0.86 0.14 200); }
-  @keyframes dashflow { to { stroke-dashoffset:-28; } }
-  @keyframes pulseGlow { 0%,100% { opacity:0.55; } 50% { opacity:1; } }
-  @keyframes riseIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
-  ::-webkit-scrollbar { width:10px; height:10px; }
-  ::-webkit-scrollbar-thumb { background:oklch(0.32 0.03 265); border-radius:10px; }
-  ::-webkit-scrollbar-track { background:transparent; }
-  input::placeholder { color:oklch(0.6 0.02 265); }
+/* ------------------------------------------------------------------
+   Colour is assigned by the job it does, and the assignment is the
+   output of scripts/validate_palette.js, not of taste.
 
-  #shell {
-    height:100vh; height:100dvh; width:100%; display:grid;
-    /* header, verdict bar, stage, footer. Each child names its own row below,
-       because the verdict bar is `display:none` when there is no finding to
-       state -- and a display:none element is not a grid item at all, so with
-       implicit placement the footer slid up into the stage's 1fr row and the
-       stage collapsed to nothing. Explicit rows make the layout independent
-       of how many children happen to be visible. */
-    grid-template-rows:auto auto 1fr auto; grid-template-columns:minmax(0,1fr);
-    max-width:100vw; overflow:hidden;
-    background:
-      radial-gradient(1200px 700px at 12% -10%, oklch(0.26 0.07 285) 0%, transparent 60%),
-      radial-gradient(900px 600px at 95% 110%, oklch(0.24 0.06 200) 0%, transparent 55%),
-      oklch(0.17 0.02 265);
-    color:oklch(0.95 0.01 265);
-    font-family:'Space Grotesk', system-ui, sans-serif;
-  }
-  #shell > header { grid-row:1; }
-  #shell > #verdict { grid-row:2; }
-  #shell > #stage  { grid-row:3; }
-  #shell > footer  { grid-row:4; }
-  header {
-    display:flex; align-items:center; gap:24px; flex-wrap:wrap; min-width:0;
-    padding:18px 26px; border-bottom:1px solid oklch(0.3 0.03 265);
-    background:oklch(0.19 0.025 265 / 0.72); backdrop-filter:blur(14px);
-  }
-  .brand      { font:600 17px 'Space Grotesk',sans-serif; letter-spacing:-0.01em; }
-  .brand-sub  { font:400 11px 'JetBrains Mono',monospace; color:oklch(0.7 0.02 265); letter-spacing:0.04em; }
-  .tabs { display:flex; gap:4px; padding:4px; border-radius:12px; background:oklch(0.23 0.03 265); border:1px solid oklch(0.32 0.03 265); flex:none; }
-  .tab {
-    cursor:pointer; padding:9px 15px; border-radius:9px;
-    font:500 12.5px 'Space Grotesk',sans-serif; letter-spacing:0.01em;
-    white-space:nowrap; transition:all 0.15s; background:transparent; color:oklch(0.75 0.02 265);
-  }
-  .tab.on { background:oklch(0.78 0.14 265); color:oklch(0.18 0.03 265); box-shadow:0 4px 18px oklch(0.6 0.16 265 / 0.4); }
-  .search {
-    display:flex; align-items:center; gap:10px; flex:1 1 260px; min-width:0; max-width:520px;
-    padding:0 14px; height:44px; border-radius:12px;
-    background:oklch(0.22 0.03 265); border:1px solid oklch(0.34 0.04 265);
-  }
-  .search .led { width:8px; height:8px; border-radius:50%; background:oklch(0.68 0.2 25); flex:none; }
-  .search input { flex:1; min-width:0; background:transparent; border:0; outline:0; color:oklch(0.95 0.01 265); font:500 14px 'JetBrains Mono',monospace; }
-  .search .clear { cursor:pointer; font:500 11px 'JetBrains Mono',monospace; color:oklch(0.68 0.02 265); padding:4px 6px; border-radius:6px; }
-  .search .clear:hover { background:oklch(0.3 0.03 265); }
-  .chips { display:flex; align-items:center; gap:8px; min-width:0; max-width:100%; }
-  #chips { display:flex; gap:8px; overflow-x:auto; padding-bottom:2px; }
-  .chips-label { font:400 11px 'JetBrains Mono',monospace; color:oklch(0.65 0.02 265); flex:none; }
-  .chip {
-    cursor:pointer; padding:6px 10px; border-radius:8px; white-space:nowrap;
-    font:500 11px 'JetBrains Mono',monospace;
-    background:oklch(0.24 0.03 265); border:1px solid oklch(0.34 0.03 265); color:oklch(0.8 0.01 265); flex:none;
-  }
-  .chip.on { background:oklch(0.32 0.1 25); border-color:oklch(0.6 0.16 25); color:oklch(0.9 0.09 25); }
-  .chip .n { display:block; font:400 9.5px 'JetBrains Mono',monospace; color:oklch(0.66 0.02 265); margin-top:2px; }
-  .chip.on .n { color:oklch(0.82 0.06 25); }
-  /* The mark control. Deliberately looks like a switch rather than a submit:
-     it toggles a fact in the graph, and the same button retracts it. */
-  /* The what-if control, deliberately quiet. It writes a synthetic incident
-     against a healthy package; a scanned CVE beside it is the real finding,
-     and the loudest thing on screen should never be the simulation. */
-  .act {
-    cursor:pointer; flex:none; padding:7px 12px; border-radius:9px; white-space:nowrap;
-    font:500 11px 'JetBrains Mono',monospace; letter-spacing:0.02em;
-    background:oklch(0.24 0.02 265); border:1px solid oklch(0.38 0.03 265);
-    color:oklch(0.78 0.02 265);
-    transition:all 0.15s;
-  }
-  .act:hover { background:oklch(0.3 0.04 265); color:oklch(0.9 0.02 265); }
-  .act.on { background:oklch(0.28 0.05 150); border-color:oklch(0.5 0.1 150); color:oklch(0.9 0.07 150); }
-  .act.busy { opacity:0.5; pointer-events:none; }
-  .safety {
-    font:400 10px 'JetBrains Mono',monospace; color:oklch(0.62 0.02 265);
-    flex:none; max-width:190px; line-height:1.35;
-  }
+   This is a node-link diagram, so any two classes can end up touching
+   and the palette has to survive ALL-PAIRS validation, not just
+   adjacent pairs. Under that rule the obvious four-way split -- red
+   threat, aqua package, orange import, blue function -- FAILS in both
+   modes: red vs orange lands at normal-vision dE 7.1, well under the
+   floor of 15, which means full-colour readers cannot reliably tell
+   them apart either. No amount of secondary encoding excuses that one.
 
-  #stage { position:relative; overflow:hidden; min-width:0; }
-  #scroll { position:absolute; inset:0; overflow:auto; padding:26px; }
-  #sizer  { position:relative; }
-  #canvas { position:relative; transform-origin:0 0; }
-  .colhead { position:absolute; padding-bottom:10px; }
-  .colhead .t { font:600 10px 'JetBrains Mono',monospace; letter-spacing:0.16em; }
-  .colhead .c { font:400 10px 'JetBrains Mono',monospace; color:oklch(0.55 0.02 265); margin-top:4px; }
-  /* Chevron in the gutter between headers: says which way the graph reads. */
-  .flowmark { position:absolute; font:600 15px 'JetBrains Mono',monospace; color:oklch(0.46 0.03 265); user-select:none; }
-  svg#wires { position:absolute; inset:0; overflow:visible; z-index:1; pointer-events:none; }
-  .node {
-    position:absolute; display:flex; align-items:center; gap:11px; padding:10px 12px;
-    border-radius:14px; cursor:pointer; z-index:2;
-    transition:opacity 0.25s, box-shadow 0.2s, transform 0.15s;
-  }
-  .node:hover { transform:translateY(-2px); opacity:1 !important; }
-  .node .dot { flex:none; width:10px; height:10px; border-radius:50%; }
-  .node .body { display:flex; flex-direction:column; gap:2px; min-width:0; flex:1; }
-  .node .lbl { font:600 13.5px 'Space Grotesk',sans-serif; letter-spacing:-0.005em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .node .sub { font:400 10.5px 'JetBrains Mono',monospace; color:oklch(0.68 0.02 265); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .node .flag { flex:none; font:600 9px 'JetBrains Mono',monospace; letter-spacing:0.08em; padding:3px 6px; border-radius:5px; }
+   So there are THREE hues, and the fourth distinction is carried by
+   FILLED vs RING inside a family:
 
-  #panel {
-    position:absolute; top:0; right:0; bottom:0; width:392px; z-index:20;
-    background:oklch(0.2 0.025 265); box-shadow:-24px 0 60px oklch(0.12 0.02 265 / 0.7);
-    border-left:1px solid oklch(0.33 0.04 265); display:flex; flex-direction:column;
-    animation:riseIn 0.22s ease-out;
-  }
-  #panel .head { display:flex; align-items:flex-start; gap:12px; padding:22px 22px 16px; border-bottom:1px solid oklch(0.29 0.03 265); }
-  #panel .title { font:600 16px 'Space Grotesk',sans-serif; letter-spacing:-0.01em; word-break:break-word; }
-  #panel .kind { font:400 11px 'JetBrains Mono',monospace; color:oklch(0.7 0.02 265); margin-top:4px; }
-  #panel .esc { cursor:pointer; padding:4px 9px; border-radius:8px; border:1px solid oklch(0.36 0.03 265); font:500 12px 'JetBrains Mono',monospace; color:oklch(0.8 0.01 265); }
-  #panel .esc:hover { background:oklch(0.3 0.03 265); }
-  #panel .body { padding:18px 22px; display:flex; flex-direction:column; gap:18px; overflow:auto; }
-  .sec-title { font:600 10px 'JetBrains Mono',monospace; letter-spacing:0.16em; color:oklch(0.68 0.02 265); }
-  .meta-row { display:flex; gap:12px; justify-content:space-between; padding:8px 11px; border-radius:9px; background:oklch(0.24 0.025 265); }
-  .meta-row .k { font:400 11.5px 'JetBrains Mono',monospace; color:oklch(0.7 0.02 265); }
-  .meta-row .v { font:500 11.5px 'JetBrains Mono',monospace; color:oklch(0.93 0.01 265); text-align:right; word-break:break-all; }
-  .stack-row { display:flex; gap:10px; align-items:flex-start; padding:9px 11px; border-radius:9px; background:oklch(0.23 0.025 265); }
-  .stack-row .i { font:500 10px 'JetBrains Mono',monospace; color:oklch(0.6 0.02 265); padding-top:2px; }
-  .stack-row .n { font:500 12px 'JetBrains Mono',monospace; color:oklch(0.94 0.01 265); word-break:break-all; }
-  /* Arrow between reachability steps: the panel reads as a chain, not a list. */
-  .chain-arrow { font:600 11px 'JetBrains Mono',monospace; color:oklch(0.5 0.03 265); margin:-11px 0 -11px 18px; }
-  .stack-row .l { font:400 10.5px 'JetBrains Mono',monospace; color:oklch(0.66 0.02 265); margin-top:2px; }
+       red    the affected version -- exactly one, always leftmost
+       aqua   packages: the bridge dependency (filled), the import (ring)
+       blue   your code: the function that uses it (filled), callers (ring)
 
-  footer { display:flex; align-items:center; gap:22px; min-width:0; padding:16px 26px; border-top:1px solid oklch(0.3 0.03 265); background:oklch(0.19 0.025 265); }
-  #metrics { display:flex; gap:12px; overflow-x:auto; min-width:0; padding-bottom:2px; }
-  .metric { padding:14px 18px; min-width:178px; flex:none; border-radius:16px; background:oklch(0.21 0.025 265 / 0.86); backdrop-filter:blur(12px); box-shadow:0 10px 30px oklch(0.12 0.02 265 / 0.5); }
-  .metric .l { font:400 10px 'JetBrains Mono',monospace; letter-spacing:0.12em; color:oklch(0.72 0.02 265); text-transform:uppercase; }
-  .metric .r { display:flex; align-items:flex-end; gap:8px; margin-top:6px; }
-  .metric .v { font:700 34px 'Space Grotesk',sans-serif; letter-spacing:-0.03em; line-height:1; }
-  .metric .o { font:400 11px 'JetBrains Mono',monospace; color:oklch(0.68 0.02 265); padding-bottom:4px; }
-  .metric.tight { min-width:126px; padding:11px 14px; }
-  .metric.tight .v { font-size:26px; }
-  .metric.tight .o { font-size:10px; }
-  .legend { display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin-left:auto; flex:none; }
-  /* Six swatches instead of five, next to four metrics instead of three. */
-  .legend.compact { gap:11px; }
-  .legend.compact .t { font-size:10px; }
-  .legend .item { display:flex; align-items:center; gap:7px; }
-  .legend .sw { width:9px; height:9px; border-radius:50%; }
-  .legend .t { font:400 11px 'JetBrains Mono',monospace; color:oklch(0.78 0.01 265); }
+   Red vs aqua sits at CVD dE 6.9 (light) / 6.5 (dark), inside the 6-8
+   floor band that is legal only with secondary encoding. It has four:
+   fixed column position, a text label on every node, different radii,
+   and a permanent legend. Aqua is under 3:1 on the light surface, so
+   the relief rule applies too -- which the same always-on labels serve.
 
-  /* The verdict bar. The columns below it carry the argument -- what a range
-     admits versus what a lockfile resolved -- and an argument is not an
-     answer. This is the answer, including the answer "nothing found", which
-     on a bare graph is indistinguishable from a view that failed to load. */
-  #verdict {
-    display:none; align-items:center; gap:14px; flex-wrap:wrap;
-    padding:11px 18px; border-bottom:1px solid oklch(0.28 0.03 265);
-    background:oklch(0.19 0.025 265);
-  }
-  #verdict.on { display:flex; }
-  #verdict .sev {
-    flex:none; padding:5px 11px; border-radius:8px;
-    font:700 11px 'Space Grotesk',sans-serif; letter-spacing:0.1em; text-transform:uppercase;
-  }
-  #verdict .head { font:600 14px 'Space Grotesk',sans-serif; color:oklch(0.95 0.01 265); }
-  #verdict .reach { font:400 12px 'JetBrains Mono',monospace; color:oklch(0.76 0.02 265); }
-  #verdict .ids {
-    font:400 11px 'JetBrains Mono',monospace; color:oklch(0.7 0.02 265);
-    margin-left:auto; text-align:right; line-height:1.5;
-  }
-  #verdict .fix { color:oklch(0.82 0.14 150); }
-  /* Severity drives the colour, so "critical" and "clean" can never be
-     mistaken for each other at a glance. */
-  .sev-critical { background:oklch(0.32 0.15 15);  color:oklch(0.93 0.12 15);  border:1px solid oklch(0.55 0.18 15); }
-  .sev-high     { background:oklch(0.32 0.13 35);  color:oklch(0.93 0.11 45);  border:1px solid oklch(0.55 0.16 35); }
-  .sev-moderate { background:oklch(0.3 0.1 75);    color:oklch(0.92 0.1 85);   border:1px solid oklch(0.52 0.12 75); }
-  .sev-low      { background:oklch(0.28 0.06 100); color:oklch(0.9 0.07 100);  border:1px solid oklch(0.48 0.08 100); }
-  .sev-clean    { background:oklch(0.27 0.07 150); color:oklch(0.9 0.09 150);  border:1px solid oklch(0.47 0.1 150); }
-  .sev-incident { background:oklch(0.3 0.1 25);    color:oklch(0.93 0.08 25);  border:1px solid oklch(0.55 0.15 25); }
-  .sev-advisory { background:oklch(0.28 0.05 265); color:oklch(0.88 0.03 265); border:1px solid oklch(0.45 0.05 265); }
+   Severity is a STATUS, not a series, so it never enters the hue scale.
+   It appears as a chip with a word in it, next to the finding.
+   ------------------------------------------------------------------ */
+:root {
+  color-scheme: light dark;
+  --surface-0: #ffffff;
+  --surface-1: #fcfcfb;
+  --surface-2: #f3f3f1;
+  --border:    #dcdcd6;
+  --text-1:    #0b0b0b;
+  --text-2:    #52514e;
+  --text-3:    #85847e;
 
-  .notice { margin:40px auto; max-width:560px; padding:22px 24px; border-radius:14px; background:oklch(0.22 0.03 265); border:1px solid oklch(0.36 0.04 265); font:400 13px 'JetBrains Mono',monospace; line-height:1.7; color:oklch(0.86 0.01 265); }
-  .notice.bad { background:oklch(0.24 0.06 25); border-color:oklch(0.45 0.12 25); }
-  .notice h3 { margin:0 0 10px; font:600 15px 'Space Grotesk',sans-serif; color:oklch(0.96 0.01 265); }
-  .notice pre { margin:10px 0 0; padding:11px 13px; border-radius:9px; background:oklch(0.16 0.02 265); color:oklch(0.85 0.12 200); overflow-x:auto; font-size:12px; }
-  .notice b { color:oklch(0.95 0.01 265); font-weight:600; }
-  .notice code { color:oklch(0.82 0.14 200); }
+  --threat:    #e34948;
+  --deps:      #1baf7a;
+  --code:      #2a78d6;
 
-  .more {
-    position:absolute; z-index:2; cursor:pointer; text-align:center;
-    padding:11px 10px; border-radius:12px;
-    font:500 11.5px 'JetBrains Mono',monospace; color:oklch(0.74 0.02 265);
-    background:oklch(0.22 0.02 265 / 0.6); border:1px dashed oklch(0.4 0.03 265);
-    transition:all 0.15s;
+  --ok:        #008300;
+  --warn:      #eda100;
+  --serious:   #eb6834;
+  --critical:  #e34948;
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --surface-2: #232322;
+    --border:    #33332f;
+    --text-1:    #ffffff;
+    --text-2:    #c3c2b7;
+    --text-3:    #8d8c84;
+
+    --threat:    #e66767;
+    --deps:      #199e70;
+    --code:      #3987e5;
+
+    --warn:      #c98500;
+    --serious:   #d95926;
+    --critical:  #e66767;
   }
-  .more:hover { color:oklch(0.95 0.01 265); border-color:oklch(0.62 0.04 265); background:oklch(0.26 0.03 265); }
-  .more.collapse { border-style:solid; color:oklch(0.66 0.02 265); }
+}
+:root[data-theme="dark"] {
+  --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #232322;
+  --border: #33332f; --text-1: #ffffff; --text-2: #c3c2b7; --text-3: #8d8c84;
+  --threat: #e66767; --deps: #199e70; --code: #3987e5;
+  --warn: #c98500; --serious: #d95926; --critical: #e66767;
+}
+:root[data-theme="light"] {
+  --surface-0: #ffffff; --surface-1: #fcfcfb; --surface-2: #f3f3f1;
+  --border: #dcdcd6; --text-1: #0b0b0b; --text-2: #52514e; --text-3: #85847e;
+  --threat: #e34948; --deps: #1baf7a; --code: #2a78d6;
+  --warn: #eda100; --serious: #eb6834; --critical: #e34948;
+}
 
-  #focus {
-    cursor:pointer; padding:9px 14px; border-radius:10px; white-space:nowrap; flex:none;
-    font:500 12px 'JetBrains Mono',monospace;
-    background:oklch(0.24 0.03 265); border:1px solid oklch(0.34 0.03 265); color:oklch(0.78 0.01 265);
-  }
-  #focus.on { background:oklch(0.3 0.09 200); border-color:oklch(0.6 0.13 200); color:oklch(0.92 0.09 200); }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--surface-1);
+  color: var(--text-1);
+  display: grid;
+  grid-template-columns: 372px 1fr;
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+}
 
-  #zoom {
-    position:absolute; right:18px; bottom:18px; z-index:15; display:flex; align-items:center; gap:2px;
-    padding:4px; border-radius:11px; background:oklch(0.21 0.025 265 / 0.92);
-    border:1px solid oklch(0.34 0.04 265); backdrop-filter:blur(10px);
-    box-shadow:0 8px 24px oklch(0.12 0.02 265 / 0.55);
-  }
-  #zoom button { cursor:pointer; border:0; background:transparent; color:oklch(0.85 0.01 265);
-    font:600 14px 'JetBrains Mono',monospace; width:30px; height:30px; border-radius:8px; }
-  #zoom button:hover { background:oklch(0.3 0.03 265); }
-  #zoom .fit { width:auto; padding:0 10px; font:500 11px 'JetBrains Mono',monospace; }
-  #zoom .pct { font:500 11px 'JetBrains Mono',monospace; color:oklch(0.68 0.02 265); min-width:38px; text-align:center; }
+/* -- header --------------------------------------------------------- */
+header {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: 18px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-0);
+}
+header h1 { font-size: 14px; margin: 0; letter-spacing: -0.01em; }
+header h1 span { color: var(--text-3); font-weight: 400; }
+nav { display: flex; gap: 4px; }
+nav a {
+  font-size: 12px; text-decoration: none; color: var(--text-2);
+  padding: 4px 10px; border-radius: 6px; border: 1px solid transparent;
+}
+nav a:hover { background: var(--surface-2); }
+nav a.here {
+  color: var(--text-1); border-color: var(--border); background: var(--surface-2);
+}
+.topstats { margin-left: auto; display: flex; gap: 16px; align-items: center; }
+.topstat { text-align: right; }
+.topstat b { display: block; font: 15px/1.2 var(--mono); }
+.topstat span { font-size: 10.5px; color: var(--text-3); text-transform: uppercase;
+  letter-spacing: 0.04em; }
 
-  @media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }
-  @keyframes sheetIn { from { opacity:0; transform:translateY(24px); } to { opacity:1; transform:none; } }
+/* -- section 1: the threat list ------------------------------------- */
+aside {
+  border-right: 1px solid var(--border);
+  background: var(--surface-0);
+  overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+.sechead {
+  position: sticky; top: 0; z-index: 5;
+  background: var(--surface-0);
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.sechead h2 {
+  margin: 0 0 2px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-2);
+}
+.sechead p { margin: 0; font-size: 11.5px; color: var(--text-3); }
+.filters { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 9px; }
+.filters button {
+  font: 11.5px/1 inherit; padding: 5px 9px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface-1);
+  color: var(--text-2); cursor: pointer;
+}
+.filters button:hover { border-color: var(--text-3); }
+.filters button.on {
+  background: var(--text-1); color: var(--surface-0); border-color: var(--text-1);
+}
 
-  /* Laptop: the legend goes first -- the node colours already repeat in the
-     column headers, so it is duplication before it is data. */
-  @media (max-width: 1180px) {
-    header { gap:16px; padding:14px 18px; }
-    .legend { display:none; }
-    footer { padding:12px 18px; }
-  }
+.list { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.card {
+  border: 1px solid var(--border); border-radius: 9px;
+  background: var(--surface-1); padding: 9px 11px; cursor: pointer;
+  border-left-width: 3px;
+}
+.card:hover { border-color: var(--text-3); }
+.card.on {
+  background: var(--surface-2);
+  border-color: var(--text-2); border-left-color: var(--threat);
+  box-shadow: inset 0 0 0 1px var(--surface-0);
+}
+.card .spec {
+  font: 12.5px/1.3 var(--mono); font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.card .meta {
+  margin-top: 3px; font-size: 11px; color: var(--text-3);
+  display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+}
+.card.reach     { border-left-color: var(--threat); }
+.card.installed { border-left-color: var(--border); }
 
-  /* Tablet: a 392px drawer on a 760px screen leaves no graph, so the detail
-     panel becomes a bottom sheet instead of eating the canvas. */
-  @media (max-width: 900px) {
-    .brand-sub { display:none; }
-    #scroll { padding:16px; }
-    .metric { min-width:132px; padding:10px 13px; }
-    .metric .v { font-size:26px; }
-    #panel {
-      top:auto; left:0; right:0; bottom:0; width:auto; max-height:62%;
-      border-left:0; border-top:1px solid oklch(0.33 0.04 265);
-      border-radius:16px 16px 0 0; box-shadow:0 -24px 60px oklch(0.12 0.02 265 / 0.7);
-      animation:sheetIn 0.24s ease-out;
-    }
-    #panel .head { padding:16px 18px 12px; }
-    #panel .body { padding:14px 18px 22px; }
-    #zoom { right:12px; bottom:12px; }
-  }
+/* Severity is a status, so it ships as a word, never as colour alone. */
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font: 10px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 3px 6px; border-radius: 4px;
+  border: 1px solid var(--border); color: var(--text-2);
+  background: var(--surface-0);
+}
+.chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
+.chip.critical i { background: var(--critical); }
+.chip.high i     { background: var(--serious); }
+.chip.moderate i, .chip.medium i { background: var(--warn); }
+.chip.low i      { background: var(--deps); }
+.chip.reach {
+  border-color: var(--threat); color: var(--threat); font-weight: 600;
+}
+.chip.quiet { color: var(--text-3); }
 
-  /* Phone: tabs and search each take a full row; chips scroll sideways. */
-  @media (max-width: 620px) {
-    header { gap:12px; padding:12px 14px; }
-    .brand { font-size:15px; }
-    .tabs { width:100%; }
-    .tab { flex:1; text-align:center; padding:9px 8px; font-size:12px; }
-    .search { flex:1 1 100%; max-width:none; height:40px; }
-    .chips { width:100%; }
-    .chips-label { display:none; }
-    footer { padding:10px 14px; gap:12px; }
-    .metric { min-width:118px; padding:9px 11px; }
-    .metric .v { font-size:22px; }
-    .metric .l { font-size:9px; letter-spacing:0.08em; }
-    #zoom .fit { display:none; }
-  }
+/* -- section 2: the reach graph ------------------------------------- */
+main { display: flex; flex-direction: column; overflow: hidden; }
+.mainhead {
+  padding: 12px 16px 10px; border-bottom: 1px solid var(--border);
+  background: var(--surface-0);
+}
+.mainhead h2 {
+  margin: 0 0 2px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-2);
+}
+.mainhead p { margin: 0; font-size: 11.5px; color: var(--text-3); }
+
+/* The diagram is sized to its content, which for a short trace is a good deal
+   less than the pane. Centring it beats pinning it to the top-left corner of
+   an otherwise empty rectangle. */
+#stage {
+  flex: 1; position: relative; overflow: auto; background: var(--surface-1);
+  display: grid; place-items: center;
+}
+#viz { display: block; }
+
+.legend {
+  position: absolute; left: 14px; bottom: 12px;
+  background: color-mix(in srgb, var(--surface-0) 92%, transparent);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 11px; color: var(--text-2);
+  display: flex; flex-direction: column; gap: 4px; pointer-events: none;
+}
+.legend div { display: flex; align-items: center; gap: 7px; }
+.legend i {
+  width: 11px; height: 11px; border-radius: 50%; flex: none;
+  background: var(--text-3);
+}
+.legend i.threat { background: var(--threat); }
+.legend i.deps   { background: var(--deps); }
+.legend i.depsr  { background: transparent; border: 2px solid var(--deps); }
+.legend i.code   { background: var(--code); }
+.legend i.coder  { background: transparent; border: 2px solid var(--code); }
+
+/* -- empty / note states -------------------------------------------- */
+.empty {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  padding: 30px; text-align: center;
+}
+.empty .box { max-width: 460px; }
+.empty h3 { margin: 0 0 7px; font-size: 15px; }
+.empty p { margin: 0; color: var(--text-2); font-size: 12.5px; }
+.empty .good { color: var(--deps); font-weight: 600; }
+
+/* -- detail strip ---------------------------------------------------- */
+#detail {
+  border-top: 1px solid var(--border); background: var(--surface-0);
+  max-height: 40%; overflow-y: auto; padding: 12px 16px 16px;
+}
+#detail h3 {
+  margin: 0 0 3px; font: 13px/1.4 var(--mono); overflow-wrap: anywhere;
+}
+#detail .sub { font-size: 11.5px; color: var(--text-3); margin-bottom: 10px; }
+.adv {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; margin-bottom: 6px; background: var(--surface-1);
+}
+.adv .id { font: 11.5px/1.3 var(--mono); font-weight: 600; }
+.adv .sum { font-size: 12px; color: var(--text-2); margin-top: 3px; }
+.adv .cvss {
+  font: 10px/1.3 var(--mono); color: var(--text-3); margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.kv { display: flex; gap: 8px; font-size: 12px; padding: 2px 0; }
+.kv b { color: var(--text-3); font-weight: 400; min-width: 92px; flex: none; }
+.kv span { color: var(--text-1); overflow-wrap: anywhere; }
+.note {
+  border: 1px solid var(--border); border-left: 3px solid var(--deps);
+  border-radius: 7px; padding: 9px 11px; font-size: 12px; color: var(--text-2);
+  background: var(--surface-1);
+}
+.note.bad { border-left-color: var(--threat); }
+.muted { color: var(--text-3); font-size: 12px; }
+.rule { height: 1px; background: var(--border); margin: 11px 0 9px; }
+
+/* -- the graph itself ------------------------------------------------ */
+#viz text { pointer-events: none; user-select: none; }
+.nlabel { font: 11.5px var(--mono); fill: var(--text-1); }
+.nsub   { font: 10px ui-sans-serif, system-ui, sans-serif; fill: var(--text-3); }
+.collabel {
+  font: 10px ui-sans-serif, system-ui, sans-serif; fill: var(--text-3);
+  text-transform: uppercase; letter-spacing: 0.07em;
+}
+.node { cursor: pointer; }
+.node circle { transition: none; }
+#viz.dim .node:not(.lit) { opacity: 0.22; }
+#viz.dim .link:not(.lit) { opacity: 0.07; }
+.link { fill: none; stroke: var(--text-3); stroke-opacity: 0.42; stroke-width: 1.4; }
+.link.lit { stroke: var(--text-2); stroke-opacity: 0.95; stroke-width: 2.2; }
+.node.sel circle { stroke: var(--text-1); stroke-width: 3; }
 </style>
 </head>
 <body>
-<div id="shell">
-  <header>
-    <div style="display:flex;flex-direction:column;gap:3px;min-width:210px">
-      <div class="brand">Blast Radius Explorer</div>
-      <div class="brand-sub">dependency + call-graph tracing</div>
-    </div>
 
-    <div class="tabs">
-      <div class="tab on" data-mode="macro">Macro · Supply Chain</div>
-      <div class="tab" data-mode="micro">Micro · Code Level</div>
-    </div>
-
-    <div id="focus" class="on" title="Show only the blast radius and one hop of context">focus</div>
-
-    <div class="search">
-      <div class="led"></div>
-      <input id="q" placeholder="trace a vulnerable package, e.g. ua-parser-js@0.7.29" autocomplete="off">
-      <div class="clear" id="clear">clear</div>
-    </div>
-
-    <div id="markWrap" style="display:none;align-items:center;gap:8px">
-      <div class="act" id="markBtn" title="Write a synthetic incident against this version to see what a live compromise would look like. Nothing is downloaded and no package is modified.">simulate compromise</div>
-    </div>
-
-    <div class="chips">
-      <span class="chips-label">advisories</span>
-      <div id="chips"></div>
-    </div>
-  </header>
-
-  <div id="verdict"></div>
-
-  <div id="stage">
-    <div id="scroll"><div id="sizer"><div id="canvas"></div></div></div>
-    <div id="zoom">
-      <button id="zoomOut" title="Zoom out">&minus;</button>
-      <span class="pct" id="zoomPct">100%</span>
-      <button id="zoomIn" title="Zoom in">+</button>
-      <button class="fit" id="zoomFit" title="Fit graph to window">fit</button>
-    </div>
-    <div id="panel" style="display:none"></div>
+<header>
+  <h1>Blast Radius <span>· Explorer</span></h1>
+  <nav>
+    <a href="/console">Console</a>
+    <a href="/explorer" class="here">Explorer</a>
+    <a href="/graph">Live graph</a>
+  </nav>
+  <div class="topstats">
+    <div class="topstat"><b id="sConfirmed">—</b><span>confirmed</span></div>
+    <div class="topstat"><b id="sInCode">—</b><span>reach code</span></div>
+    <div class="topstat"><b id="sScanned">—</b><span>versions scanned</span></div>
   </div>
+</header>
 
-  <footer>
-    <div id="metrics"></div>
-    <div class="legend" id="legend"></div>
-  </footer>
-</div>
+<!-- ============ SECTION 1 ============ -->
+<aside>
+  <div class="sechead">
+    <h2>1 · Confirmed threats</h2>
+    <p>Published advisories, recorded incidents and registry deprecations
+       against versions this graph actually holds.</p>
+    <div class="filters" id="filters">
+      <button data-f="all" class="on">All</button>
+      <button data-f="code">Reaches code</button>
+      <button data-f="compromised">Compromised</button>
+      <button data-f="deprecated">Deprecated</button>
+    </div>
+  </div>
+  <div class="list" id="list"><div class="muted" style="padding:10px">Loading…</div></div>
+</aside>
+
+<!-- ============ SECTION 2 ============ -->
+<main>
+  <div class="mainhead">
+    <h2>2 · Reached from your code</h2>
+    <p id="mainSub">Pick a threat on the left to trace it into this repository's source.</p>
+  </div>
+  <div id="stage">
+    <svg id="viz"></svg>
+    <div class="legend" id="legend" hidden>
+      <div><i class="threat"></i> the affected version</div>
+      <div><i class="deps"></i> package that pulls it in</div>
+      <div><i class="depsr"></i> the import in your source</div>
+      <div><i class="code"></i> function that uses it</div>
+      <div><i class="coder"></i> functions that call that one</div>
+    </div>
+    <div class="empty" id="empty">
+      <div class="box">
+        <h3 id="emptyTitle">Nothing selected</h3>
+        <p id="emptyBody">Choose a finding from the list to see which imports
+          pull it in and which functions would run its code.</p>
+      </div>
+    </div>
+  </div>
+  <div id="detail"><div class="muted">No finding selected.</div></div>
+</main>
 
 <script>
 "use strict";
 
-/* Kept identical to the source design so the two stay visually in step. */
-const KIND = {
-  /* `service` is still emitted -- project_graph gives a clean project card that
-     kind -- so it stays. The other three depth-column kinds (direct,
-     transitive, deep) went with the sweep that produced them and nothing emits
-     them now. */
-  service:    { hue: 265, label: 'project' },
-  entry:      { hue: 265, label: 'application entry point' },
-  route:      { hue: 200, label: 'http route' },
-  handler:    { hue: 300, label: 'route handler' },
-  fn:         { hue: 150, label: 'internal function' },
-  import:     { hue: 340, label: 'external package import' },
-  /* Macro view. The hues carry the argument: the confirmed chain is warm, the
-     range-only column is amber (a lead, not a finding), and identity relations
-     are cool because they never amount to a verdict. */
-  threat:     { hue: 25,  label: 'simulated incident' },
-  advisory:   { hue: 40,  label: 'published advisory' },
-  compromised:{ hue: 25,  label: 'compromised version' },
-  subject:    { hue: 200, label: 'package version under review' },
-  possible:   { hue: 75,  label: 'range admits it — unconfirmed' },
-  resolution: { hue: 200, label: 'lockfile resolution — confirmed' },
-  exposed:    { hue: 265, label: 'exposed project' },
-  related:    { hue: 320, label: 'related by identity only' }
-};
-const col = (h, l, c) => `oklch(${l} ${c} ${h})`;
-const cola = (h, l, c, a) => `oklch(${l} ${c} ${h} / ${a})`;
-
-/* A kind the server emits but this table does not know would otherwise throw
-   inside the render loop and blank the whole canvas. An unknown kind is a
-   missing legend entry, not a reason to show nothing. */
-const KIND_FALLBACK = { hue: 265, label: 'unclassified' };
-const kindOf = (n) => KIND[n && n.kind] || KIND_FALLBACK;
-
-/* ------------------------------------------------------------------ */
-/* the heat ramp — green when clean, red at the CVE, graded outward    */
-/* ------------------------------------------------------------------ */
-/* `heat` arrives from the server already combining both inputs the grading
-   needs: severity sets where a node starts on the ramp, and distance from the
-   advisory walks it down (blastradius/query/exposure.py). So a critical CVE
-   two hops away still outranks a low one at the source, which is the judgement
-   being asked for -- and which neither input alone can express.
-
-   The scale is deliberately not a traffic light with four buckets. Buckets
-   make two nodes one hop apart look identical, and the whole point of the
-   drawing is that distance is visible. Hue runs continuously from red at the
-   source to yellow at the edge of the radius, and clean nodes leave the ramp
-   entirely for green: "nothing reaches this" is a different statement from
-   "barely reaches this", and they should not be neighbouring shades. */
-const HUE_CLEAN = 150;   /* green  — no advisory reaches this node */
-const HUE_HOT   = 25;    /* red    — the advisory names this node  */
-const HUE_COOL  = 85;    /* yellow — the far edge of the radius    */
-
-function ramp(heat) {
-  const t = Math.max(0, Math.min(1, Number(heat) || 0));
-  if (t <= 0) {
-    return {
-      t: 0, hue: HUE_CLEAN,
-      accent: col(HUE_CLEAN, 0.74, 0.11),
-      ring:   cola(HUE_CLEAN, 0.74, 0.11, 0.14),
-      bg: `linear-gradient(140deg, ${col(HUE_CLEAN, 0.27, 0.035)} 0%, oklch(0.21 0.02 200) 100%)`,
-      border: col(HUE_CLEAN, 0.40, 0.05),
-      shadow: '0 4px 16px oklch(0.12 0.02 265 / 0.45)',
-      text:   col(HUE_CLEAN, 0.86, 0.08)
-    };
-  }
-  const hue = HUE_COOL + (HUE_HOT - HUE_COOL) * t;
-  return {
-    t, hue,
-    accent: col(hue, 0.70 + 0.04 * t, 0.10 + 0.12 * t),
-    ring:   cola(hue, 0.70, 0.10 + 0.12 * t, (0.12 + 0.10 * t).toFixed(2)),
-    bg: `linear-gradient(140deg, ${col(hue, 0.24 + 0.07 * t, 0.03 + 0.07 * t)} 0%, ${col(hue, 0.20 + 0.03 * t, 0.02 + 0.04 * t)} 100%)`,
-    border: col(hue, 0.40 + 0.22 * t, 0.05 + 0.13 * t),
-    shadow: t > 0.6
-      ? `0 8px 28px ${cola(hue, 0.55, 0.19, 0.35)}`
-      : '0 4px 16px oklch(0.12 0.02 265 / 0.45)',
-    text: col(hue, 0.90, 0.06 + 0.06 * t)
-  };
-}
-
-/* The nodes a viewer should look at first: on the ramp at all, hottest down. */
-const heatOf = (n) => (n && Number(n.heat)) || 0;
-
-const NW = 214, NH = 58, COLW = 300, ROWG = 22, TOP = 68;
-const MIN_ZOOM = 0.3, MAX_ZOOM = 1.6;
-
-const state = {
-  mode: 'macro',
-  query: '',
-  selected: null,
-  /* `macro` holds the package blast radius. It is the only graph here the
-     browser does not filter itself: the server scopes it to one version and
-     marks the exposed nodes, so it is replaced on every new target rather
-     than loaded once and searched. `micro` is still a whole-graph sweep. */
-  graphs: { macro: null, micro: null },
-  advisories: [],
-  /* Macro view only. The graph is scoped to one version server-side, so the
-     target is state rather than a filter over an already-loaded graph. */
-  pkgSpec: '',
-  pkgTargets: [],
-  pkgError: '',
-  serviceCount: 0,
-  zoom: 1,
-  autoFit: true,  // stays true until the user touches the zoom control
-  focus: true,    // draw the blast radius and its boundary, not the whole graph
-  expanded: new Set()   // layers the user has asked to see in full
+/* ==================================================================
+   State
+   ================================================================== */
+const S = {
+  threats: [],
+  filter: "all",
+  selected: null,     // the threat spec currently traced
+  reach: null,        // its /api/explorer/reach payload
+  nodeByKey: new Map(),
+  laidOut: [],
+  edges: [],
+  picked: null,       // a graph node clicked for detail
 };
 
-//: How many nodes a column shows when there is no query to focus on. Enough
-//: to read the shape of the layer, few enough to stay on one screen.
-const PEEK = 10;
-
-const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
-  (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-
-/* ------------------------------------------------------------------ */
-/* layout — same column maths as the design                            */
-/* ------------------------------------------------------------------ */
-function layout(visible, allLayers, edges) {
-  // Every layer keeps its column header even when nothing in it is drawn: an
-  // empty HTTP ROUTES column is a finding, not a rendering gap.
-  const byLayer = {};
-  allLayers.forEach((l) => { byLayer[l] = []; });
-  visible.forEach((n) => { (byLayer[n.layer] = byLayer[n.layer] || []).push(n); });
-  const layers = allLayers;
-  if (!layers.length) return { pos: {}, H: 200, W: 400, layers: [], byLayer, slotOf: {} };
-
-  // Slot, not raw layer, so the strip has no gaps. With every declared column
-  // now present this is usually the identity map; it still matters if a
-  // payload ever emits a layer past the columns it declared, which would
-  // otherwise leave a headerless 300px hole.
-  const slotOf = {};
-  layers.forEach((l, i) => { slotOf[l] = i; });
-
-  orderWithinLayers(layers, byLayer, edges);
-
-  const pos = {};
-  const maxCount = Math.max(1, ...layers.map((l) => byLayer[l].length));
-  // +90 leaves room for the "+N more" pill beneath the longest column.
-  const H = TOP + maxCount * (NH + ROWG) + 90;
-  layers.forEach((l) => {
-    // Top-aligned, not centred. Centring looks tidy when every column holds a
-    // similar count, but a real application has ~4 routes against ~170
-    // functions -- and centring then pushes the short columns entirely off
-    // screen, hiding exactly the entry points the view exists to show.
-    byLayer[l].forEach((n, i) => {
-      pos[n.id] = { x: slotOf[l] * COLW, y: TOP + i * (NH + ROWG) };
-    });
-  });
-  const W = (layers.length - 1) * COLW + NW;
-  return { pos, H, W, layers, byLayer, slotOf };
-}
-
-/**
- * Order the rows inside each column so the wires between them stop crossing.
- *
- * Without this the vertical position of a node is whatever order HydraDB
- * happened to return it in, so a child is never near its parent and the edge
- * bundle is a uniform mesh -- the single biggest reason the code graph did not
- * read as a hierarchy even once the columns were right.
- *
- * The median heuristic (Eades & Wells): a node wants to sit level with the
- * median of the nodes it connects to in the column beside it. Sweeping
- * forwards then backwards a few times converges quickly and cheaply; it does
- * not minimise crossings optimally, which is NP-hard and not worth it here.
- * Nodes with no neighbour in the reference column keep their previous
- * position, so an unconnected node does not get flung to the top.
- */
-function orderWithinLayers(layers, byLayer, edges) {
-  if (!edges || layers.length < 2) return;
-  const out = {}, inn = {};
-  edges.forEach(([a, b]) => {
-    (out[a] = out[a] || []).push(b);
-    (inn[b] = inn[b] || []).push(a);
-  });
-
-  const median = (node, adj, indexOf) => {
-    const rows = (adj[node.id] || [])
-      .map((id) => indexOf[id])
-      .filter((v) => v !== undefined)
-      .sort((x, y) => x - y);
-    return rows.length ? rows[(rows.length - 1) >> 1] : null;
-  };
-
-  const sweep = (order, adj) => {
-    const indexOf = {};
-    order.forEach((l) => byLayer[l].forEach((n, i) => { indexOf[n.id] = i; }));
-    order.slice(1).forEach((l, k) => {
-      const ref = order[k];
-      const refIndex = {};
-      byLayer[ref].forEach((n, i) => { refIndex[n.id] = i; });
-      const keyed = byLayer[l].map((n, i) => {
-        const m = median(n, adj, refIndex);
-        return { n, i, m: m === null ? i : m };
-      });
-      keyed.sort((a, b) => (a.m - b.m) || (a.i - b.i));
-      byLayer[l] = keyed.map((x) => x.n);
-    });
-  };
-
-  for (let pass = 0; pass < 3; pass++) {
-    sweep(layers, inn);                    // place children under their parents
-    sweep([...layers].reverse(), out);     // then parents over their children
-  }
-}
-
-/**
- * Pick the nodes worth rendering.
- *
- * A real application has hundreds of functions, and drawing all of them makes
- * a canvas metres tall that answers nobody's question. During an incident the
- * interesting set is small and specific: the nodes on a path to the
- * compromised package, plus one hop of context either side so the *boundary*
- * shows too -- what else calls this, what else it reaches. The rest collapses
- * behind a per-column "+N" the user can open.
- *
- * With no query there is no blast radius to compute, so each column falls back
- * to its most-connected nodes: the hubs are what is worth seeing first.
- */
-function selectVisible(g, hot) {
-  const byLayer = {};
-  g.nodes.forEach((n) => { (byLayer[n.layer] = byLayer[n.layer] || []).push(n); });
-  const counts = {};
-  Object.keys(byLayer).forEach((l) => { counts[l] = byLayer[l].length; });
-
-  if (!state.focus) return { visible: g.nodes, hidden: {}, counts };
-
-  let keep;
-  if (hot && hot.size) {
-    keep = new Set(hot);
-    g.edges.forEach(([a, b]) => {
-      if (hot.has(a)) keep.add(b);
-      if (hot.has(b)) keep.add(a);
-    });
-  } else {
-    const degree = {};
-    g.edges.forEach(([a, b]) => {
-      degree[a] = (degree[a] || 0) + 1;
-      degree[b] = (degree[b] || 0) + 1;
-    });
-    keep = new Set();
-    // Anything on the heat ramp is kept unconditionally. Peeking by degree
-    // alone is a popularity contest, and it happily hid the one vulnerable
-    // package in a column of 391 well-connected healthy ones -- which is the
-    // finding the whole view exists to show. Degree then fills the rest of
-    // the column with context.
-    g.nodes.forEach((n) => { if (heatOf(n) > 0) keep.add(n.id); });
-    g.edges.forEach(([a, b]) => {
-      if (keep.has(a) || keep.has(b)) { keep.add(a); keep.add(b); }
-    });
-    Object.keys(byLayer).forEach((l) => {
-      const room = PEEK - byLayer[l].filter((n) => keep.has(n.id)).length;
-      if (room <= 0) return;
-      [...byLayer[l]]
-        .filter((n) => !keep.has(n.id))
-        .sort((x, y) => (degree[y.id] || 0) - (degree[x.id] || 0))
-        .slice(0, room)
-        .forEach((n) => keep.add(n.id));
-    });
-  }
-
-  const hidden = {};
-  const visible = [];
-  Object.keys(byLayer).map(Number).sort((a, b) => a - b).forEach((l) => {
-    const list = byLayer[l];
-    if (state.expanded.has(l)) { list.forEach((n) => visible.push(n)); return; }
-    const shown = list.filter((n) => keep.has(n.id));
-    if (shown.length < list.length) hidden[l] = list.length - shown.length;
-    shown.forEach((n) => visible.push(n));
-  });
-  return { visible, hidden, counts };
-}
-
-/* ------------------------------------------------------------------ */
-/* blast radius — reverse BFS from whatever matches the query          */
-/* ------------------------------------------------------------------ */
-/* Focus is not the same thing as danger, and conflating the two is what made
-   this view unable to show a vulnerability.
-
-   `heat` says how exposed a node is. It comes from the server, it is true
-   before anyone types anything, and it drives colour.
-
-   The focus set says which nodes the viewer is currently asking about. It
-   drives dimming only. Returning null means "dim nothing" -- every node is
-   drawn at full strength in its own heat colour, which is what makes an
-   all-green graph legible as a clean result rather than an empty one. */
-function hotSet(g, query) {
-  const q = (query || '').trim().toLowerCase();
-
-  if (!q) {
-    // The single-version package view *is* one blast radius: the server
-    // scoped the whole graph to one target, so what it marked is the path and
-    // the rest is boundary context worth pushing back.
-    //
-    // The project view is not that. It holds the entire dependency tree, most
-    // of which is healthy, and dimming the clean majority would hide exactly
-    // the green baseline that makes "you have 21 vulnerable packages out of
-    // 774" readable at a glance.
-    if (g.serverHot && g.view !== 'project') {
-      const marked = g.nodes.filter((n) => n.hot);
-      if (!marked.length) return null;
-      return {
-        hot: new Set(marked.map((n) => n.id)),
-        seeds: new Set(g.nodes.filter((n) => n.kind === 'compromised').map((n) => n.id))
-      };
-    }
-    return null;
-  }
-  const at = q.lastIndexOf('@');
-  // A scoped name (@scope/pkg) has an @ at index 0 that is not a separator.
-  const name = at > 0 ? q.slice(0, at) : q;
-  const ver = at > 0 ? q.slice(at + 1) : '';
-  const matched = g.nodes.filter((n) =>
-    n.pkg && n.pkg.toLowerCase().includes(name) && (!ver || (n.version || '').startsWith(ver)));
-  if (!matched.length) return { hot: new Set(), seeds: new Set() };
-
-  const rev = {};
-  g.edges.forEach(([a, b]) => { (rev[b] = rev[b] || []).push(a); });
-  const hot = new Set(matched.map((n) => n.id));
-  const queue = [...hot];
-  while (queue.length) {
-    const cur = queue.shift();
-    (rev[cur] || []).forEach((p) => { if (!hot.has(p)) { hot.add(p); queue.push(p); } });
-  }
-  // The CVE badge belongs on whatever the query actually matched. Inferring it
-  // from "hot node with no outgoing edge" only works when the vulnerable
-  // package is a leaf -- ours has its own dependencies, so that rule would
-  // leave the badge on nothing at all.
-  return { hot, seeds: new Set(matched.map((n) => n.id)) };
-}
-
-function applyZoom(W, H) {
-  const z = state.zoom;
-  $('canvas').style.transform = `scale(${z})`;
-  $('sizer').style.width = (W * z) + 'px';
-  $('sizer').style.height = (H * z) + 'px';
-  $('zoomPct').textContent = Math.round(z * 100) + '%';
-}
-
-function fitZoom(W) {
-  const avail = $('scroll').clientWidth - 32;
-  if (avail <= 0 || !W) return 1;
-  // Only ever shrink to fit. Blowing a four-node graph up to fill a wide
-  // monitor makes it look like there is more here than there is.
-  return Math.max(MIN_ZOOM, Math.min(1, avail / W));
-}
-
-function setZoom(z, manual) {
-  state.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
-  if (manual) state.autoFit = false;
-  render();
-}
-
-/* ------------------------------------------------------------------ */
-/* render                                                              */
-/* ------------------------------------------------------------------ */
-/* The finding, stated. Everything below is the evidence for it, and evidence
-   alone never told anyone whether they are affected. A clean result is a
-   result and gets said out loud -- silence here reads as a broken page. */
-function paintVerdict(g) {
-  const bar = $('verdict');
-  const v = g && g.verdict;
-  if (!v || state.mode !== 'macro') { bar.className = ''; bar.innerHTML = ''; return; }
-
-  const level = v.compromised ? 'incident' : (v.severity || (v.level === 'clean' ? 'clean' : 'advisory'));
-  const badge = v.compromised ? 'SIMULATED' : (v.severity || (v.level === 'clean' ? 'clear' : 'advisory'));
-  const right = [];
-  if (v.advisory_ids && v.advisory_ids.length) {
-    // Capped. The project view legitimately carries 96 advisory ids, and
-    // printing them all pushed the graph itself below the fold -- the ids are
-    // reference material, the graph is the answer.
-    const MAX_IDS = 12;
-    const ids = v.advisory_ids.slice(0, MAX_IDS);
-    const rest = v.advisory_ids.length - ids.length;
-    right.push(esc(ids.join(' · ')) + (rest > 0 ? ` <span class="fix">+${rest} more</span>` : ''));
-  }
-  if (v.fixed_versions && v.fixed_versions.length) {
-    right.push('<span class="fix">fixed in ' + esc(v.fixed_versions.join(', ')) + '</span>');
-  }
-  bar.className = 'on';
-  bar.innerHTML =
-    `<div class="sev sev-${esc(level)}">${esc(badge)}</div>` +
-    `<div class="head">${esc(v.headline)}</div>` +
-    `<div class="reach">${esc(v.reach)}</div>` +
-    (right.length ? `<div class="ids">${right.join('<br>')}</div>` : '');
-}
-
-function render() {
-  const g = state.graphs[state.mode];
-  const canvas = $('canvas');
-  if (state.mode === 'macro') {
-    const marked = !!(g && g.compromised);
-    $('markBtn').textContent = marked ? 'retract simulation' : 'simulate compromise';
-    $('markBtn').classList.toggle('on', marked);
-  }
-  paintVerdict(g);
-  if (!g) {
-    if (state.mode === 'macro') {
-      notice(state.pkgError
-        ? `<b>${esc(state.pkgError)}</b>`
-        : 'Pick a target below, or type <code>name@version</code> and press Enter.');
-      paintPkgFooter({ stats: {} });
-    } else {
-      canvas.innerHTML = '';
-    }
-    return;
-  }
-  if (!g.nodes.length) {
-    $('sizer').style.width = 'auto'; $('sizer').style.height = 'auto';
-    canvas.style.transform = 'none';
-    notice('<h3>Nothing in the graph yet</h3>' +
-      'The database is reachable but holds no data for this view. ' +
-      'Scan a repository and build both tiers:' +
-      '<pre>python -m blastradius.cli pipeline --reset</pre>' +
-      'Then reload this page.');
-    paintFooter(g, null, []);
-    return;
-  }
-
-  // The macro tab's box names a *target*, not a filter -- `state.query`
-  // belongs to the micro tab and is pre-filled at boot from the advisory
-  // chips. Passing it here made the package view dim every node that did not
-  // happen to match a query the user never typed on this tab.
-  const found = hotSet(g, state.mode === 'macro' ? '' : state.query);
-  const hot = found ? found.hot : null;
-  const seedIds = found ? found.seeds : new Set();
-  const nodeById = {}; g.nodes.forEach((n) => { nodeById[n.id] = n; });
-
-  // Every column the payload *declares* is drawn, occupied or not. An empty
-  // one is a finding: "RANGE ADMITS - UNCONFIRMED, 0 nodes" says nothing else
-  // in the corpus would even accept this version, and "HTTP ROUTES, 0 nodes"
-  // says this app serves none. Deriving the layer list from the nodes present
-  // instead deleted those columns silently -- on axios@1.12.0 it turned the
-  // six-column argument into four and made an answer look like a missing
-  // feature.
-  const declared = (g.cols && g.cols.length) ? g.cols.length - 1 : 0;
-  const occupied = g.nodes.map((n) => n.layer);
-  const maxLayer = Math.max(declared, ...(occupied.length ? occupied : [0]));
-  const allLayers = Array.from({ length: maxLayer + 1 }, (_, i) => i);
-  const { visible, hidden, counts } = selectVisible(g, hot);
-  const visibleIds = new Set(visible.map((n) => n.id));
-  const drawnEdges = g.edges.filter(([a, b]) => visibleIds.has(a) && visibleIds.has(b));
-  const { pos, H, W, layers, byLayer, slotOf } = layout(visible, allLayers, drawnEdges);
-  if (state.autoFit) state.zoom = fitZoom(W);
-
-  canvas.style.width = W + 'px';
-  canvas.style.height = H + 'px';
-
-  let html = '';
-
-  // Colour comes from the whole graph, not the visible subset: a column can
-  // legitimately have nothing in it once focus is on, and an empty HTTP ROUTES
-  // column still needs its header.
-  const kindByLayer = {};
-  g.nodes.forEach((n) => { if (!(n.layer in kindByLayer)) kindByLayer[n.layer] = n.kind; });
-
-  layers.forEach((l, i) => {
-    const kh = kindOf({ kind: kindByLayer[l] }).hue;
-    const accent = col(kh, 0.78, 0.14);
-    html += `<div class="colhead" style="left:${slotOf[l] * COLW}px;top:0;width:${NW}px;border-bottom:1px solid ${col(kh, 0.4, 0.06)}">
-      <div class="t" style="color:${accent}">${esc(g.cols[l] || '')}</div>
-      <div class="c">${(() => {
-        // `counts` is keyed off the nodes that exist, so a declared-but-empty
-        // column has no entry and read "0 of undefined". It is a real answer,
-        // so it gets a real number.
-        const total = counts[l] || 0;
-        const shown = byLayer[l].length;
-        return shown === total ? total + ' nodes' : shown + ' of ' + total;
-      })()}</div></div>`;
-    // The graph reads left to right; a column layout with no arrows does not
-    // say so on its own.
-    if (i < layers.length - 1) {
-      html += `<div class="flowmark" style="left:${slotOf[l] * COLW + NW + 20}px;top:1px">&rsaquo;</div>`;
-    }
-  });
-
-  // An arrowhead per stroke colour: a marker cannot portably inherit the
-  // path's stroke, so they are emitted per colour and referenced by index.
-  const markerFor = new Map();
-  const hotEdges = [];
-  let wires = '';
-
-  g.edges.forEach(([a, b]) => {
-    const s = pos[a], t = pos[b];
-    if (!s || !t) return;
-    const inFocus = hot && hot.has(a) && hot.has(b);
-    const dim = hot && !inFocus;
-    if (inFocus) hotEdges.push([a, b]);
-    // An edge is as hot as its cooler end. Taking the hotter end would paint
-    // the whole tree red the moment one leaf is vulnerable; the cooler end is
-    // what the exposure actually had to travel through to get here, so the
-    // wire fades in step with the nodes it joins.
-    const edgeHeat = Math.min(heatOf(nodeById[a]), heatOf(nodeById[b]));
-    const r = ramp(edgeHeat);
-    const live = edgeHeat >= 0.55;
-    const stroke = edgeHeat > 0
-      ? col(r.hue, 0.72, 0.08 + 0.10 * r.t)
-      : col(kindOf(nodeById[a]).hue, 0.72, 0.10);
-    if (!markerFor.has(stroke)) markerFor.set(stroke, 'm' + markerFor.size);
-    const y1 = s.y + NH / 2, y2 = t.y + NH / 2;
-    const opacity = dim ? 0.07 : (0.3 + 0.6 * r.t);
-    const width = 1.3 + 1.3 * r.t;
-    let d;
-    if (t.x > s.x) {
-      // Forward: leave the right edge, enter the left edge. Stop short of the
-      // card so the arrowhead lands in the gutter, not under it.
-      const x1 = s.x + NW, x2 = t.x - 8;
-      d = `M ${x1} ${y1} C ${x1 + 70} ${y1}, ${x2 - 70} ${y2}, ${x2} ${y2}`;
-    } else {
-      // Same column or backwards. npm dependency depth is shortest-path from
-      // the root, so a package at depth 2 legitimately depends on another at
-      // depth 2 -- 42% of the edges in the project view are like this.
-      //
-      // Drawn forwards, such an edge runs from x+NW back to x-8: a 222px
-      // loop travelling *under* every card in the column, which is most of
-      // what made the old drawing unreadable. Arced over the top instead, so
-      // it is visible as what it is -- a sideways or upward dependency --
-      // and crosses nothing it does not have to.
-      const x1 = s.x + NW * 0.5, x2 = t.x + NW * 0.5;
-      const span = Math.abs(y2 - y1) + Math.abs(x2 - x1);
-      const bow = Math.min(TOP - 8, 26 + span * 0.14);
-      const top = Math.min(y1, y2) - bow;
-      d = `M ${x1} ${y1 - NH / 2} C ${x1} ${top}, ${x2} ${top}, ${x2} ${y2 - NH / 2}`;
-    }
-    wires += `<path d="${d}"
-      fill="none" stroke="${stroke}" stroke-width="${width}" stroke-linecap="round"
-      stroke-dasharray="${live ? '8 8' : '0'}" marker-end="url(#${markerFor.get(stroke)})"
-      style="opacity:${opacity.toFixed(2)};animation:${live && !dim ? 'dashflow 0.75s linear infinite' : 'none'};transition:opacity 0.25s"></path>`;
-  });
-
-  let defs = '';
-  markerFor.forEach((id, stroke) => {
-    defs += `<marker id="${id}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6"
-      orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="${stroke}"></path></marker>`;
-  });
-  html += `<svg id="wires" width="${W}" height="${H}"><defs>${defs}</defs>${wires}</svg>`;
-
-  visible.forEach((n) => {
-    const k = kindOf(n), p = pos[n.id];
-    if (!p) return;
-    const heat = heatOf(n);
-    const r = ramp(heat);
-    const inFocus = hot && hot.has(n.id);
-    // A seed is a node an advisory names outright -- the origin of a radius,
-    // not a passenger in it. It keeps the pulse and the solid badge.
-    const isSeed = seedIds.has(n.id) || (n.hops === 0 && n.vuln);
-    const dim = hot && !inFocus;
-    const sel = state.selected === n.id;
-    // The card is coloured by heat; the kind keeps a stripe down its left
-    // edge, so "what is this" and "how bad is this" are two readable channels
-    // instead of one overloaded one.
-    const border = sel ? 'oklch(0.9 0.02 265)' : r.border;
-    const shadow = sel ? '0 8px 28px oklch(0.1 0 0 / 0.5)' : r.shadow;
-    // The package view names its own badges: 'CVE' would be wrong on a node
-    // flagged by a simulated supply-chain incident with no CVE attached.
-    const flag = n.flag || (isSeed ? 'CVE' : inFocus ? 'ON PATH' : null);
-    const hotFlag = heat >= 0.6;
-
-    html += `<div class="node" data-id="${esc(n.id)}"
-      style="left:${p.x}px;top:${p.y}px;width:${NW}px;min-height:${NH}px;background:${r.bg};
-             border:1px solid ${border};border-left:3px solid ${col(k.hue, 0.60, 0.12)};
-             box-shadow:${shadow};opacity:${dim ? 0.34 : 1}">
-      <div class="dot" style="background:${r.accent};box-shadow:0 0 0 4px ${r.ring}${isSeed ? ';animation:pulseGlow 1.4s ease-in-out infinite' : ''}"></div>
-      <div class="body">
-        <div class="lbl" style="color:${dim ? 'oklch(0.78 0.01 265)' : 'oklch(0.97 0.01 265)'}">${esc(n.label)}</div>
-        <div class="sub">${esc(n.sub)}</div>
-      </div>
-      ${flag ? `<div class="flag" style="background:${isSeed ? r.accent : cola(r.hue, 0.32, 0.09, 1)};color:${isSeed ? col(r.hue, 0.16, 0.03) : col(r.hue, 0.88, 0.10)}">${esc(flag)}</div>` : ''}
-    </div>`;
-  });
-
-  // "+N more" under any column that is holding something back. Clicking it
-  // opens that column alone -- expanding everything at once is what we are
-  // trying to avoid.
-  layers.forEach((l) => {
-    const n = hidden[l];
-    if (!n) return;
-    const y = TOP + byLayer[l].length * (NH + ROWG);
-    html += `<div class="more" data-layer="${l}" style="left:${slotOf[l] * COLW}px;top:${y}px;width:${NW}px">
-      +${n} more &middot; show all</div>`;
-  });
-  layers.forEach((l) => {
-    if (!state.expanded.has(l)) return;
-    const y = TOP + byLayer[l].length * (NH + ROWG);
-    html += `<div class="more collapse" data-collapse="${l}" style="left:${slotOf[l] * COLW}px;top:${y}px;width:${NW}px">
-      collapse back to the blast radius</div>`;
-  });
-
-  canvas.innerHTML = html;
-  canvas.querySelectorAll('.node').forEach((el) => {
-    el.onclick = () => { state.selected = el.dataset.id; render(); };
-  });
-  canvas.querySelectorAll('.more[data-layer]').forEach((el) => {
-    el.onclick = () => {
-      state.expanded.add(Number(el.dataset.layer));
-      state.autoFit = true;
-      render();
-    };
-  });
-  canvas.querySelectorAll('.more[data-collapse]').forEach((el) => {
-    el.onclick = () => {
-      state.expanded.delete(Number(el.dataset.collapse));
-      state.autoFit = true;
-      render();
-    };
-  });
-
-  applyZoom(W, H);
-  paintPanel(g, nodeById, hot, seedIds);
-  paintFooter(g, hot, hotEdges);
-}
-
-/* ------------------------------------------------------------------ */
-/* detail panel                                                        */
-/* ------------------------------------------------------------------ */
-function paintPanel(g, nodeById, hot, seedIds) {
-  const panel = $('panel');
-  const sn = nodeById[state.selected];
-  if (!sn) { panel.style.display = 'none'; return; }
-  panel.style.display = 'flex';
-
-  const k = kindOf(sn);
-  const isHot = hot && hot.has(sn.id);
-  // Read off the payload, not off state.mode: the panel describes the graph it
-  // was handed, and the two disagree for one frame while a tab switch is in
-  // flight and the new graph has not arrived yet.
-  const pkgView = g.mode === 'package';
-  const parents = g.edges.filter(([, b]) => b === sn.id).map(([a]) => nodeById[a] && nodeById[a].label).filter(Boolean);
-  const children = g.edges.filter(([a]) => a === sn.id).map(([, b]) => nodeById[b] && nodeById[b].label).filter(Boolean);
-
-  const chain = [];
-  if (isHot) {
-    // Walk forward along hot edges: this is the path from here to the CVE.
-    let cur = sn.id, guard = 0;
-    while (cur && guard++ < 12) {
-      const n2 = nodeById[cur];
-      chain.push({
-        idx: String(chain.length + 1).padStart(2, '0'),
-        name: n2.label,
-        loc: n2.file || (n2.pkg ? 'node_modules/' + n2.pkg : '—'),
-        color: ramp(heatOf(n2)).accent
-      });
-      const nxt = g.edges.filter(([a, b]) => a === cur && hot.has(b))[0];
-      cur = nxt ? nxt[1] : null;
-    }
-  } else {
-    children.forEach((c, i) => chain.push({
-      idx: String(i + 1).padStart(2, '0'), name: c, loc: sn.file || '—', color: col(k.hue, 0.7, 0.13)
-    }));
-  }
-
-  const snRamp = ramp(heatOf(sn));
-  const isSeed = seedIds.has(sn.id) || (sn.hops === 0 && sn.vuln);
-  // In the package view the verdict is the server's, not the renderer's: it is
-  // a function of which evidence atoms fired, and deciding that twice -- once
-  // where the evidence is and once here -- is how the two drift apart.
-  // Spoken from `heat`, not from the query highlight: what this node's
-  // exposure *is* does not depend on what is currently typed in the box.
-  const status = sn.verdict || (sn.vuln
-    ? (sn.hops === 0
-        ? `Vulnerable — ${esc(sn.advisory || 'an advisory')} names this exact version`
-        : `In the blast radius of ${esc(sn.vulnSource || 'a vulnerable package')}, ${sn.hops} hop(s) away`)
-    : (isHot ? 'On the queried path; no advisory reaches it'
-             : 'No advisory reaches this node'));
-  const alarmed = sn.verdict ? !!sn.alarm : !!sn.vuln;
-  const ring = snRamp.ring;
-
-  const meta = [
-    ['id', sn.id],
-    ['type', sn.kind],
-    // The macro view's nodes carry a confidence from the evidence model;
-    // 'scope: internal' described the old depth columns and means nothing
-    // about a threat, a project, or an identity relation.
-    sn.version ? ['version', sn.version]
-      : pkgView ? ['confidence', sn.conf || '—']
-      : ['scope', 'application'],
-    ['location', sn.file || (sn.pkg ? 'node_modules/' + sn.pkg : '—')],
-    ['dependents', parents.length ? parents.join(', ') : 'none (root)'],
-    ['depends on', children.length ? children.join(', ') : 'leaf']
-  ];
-
-  panel.innerHTML = `
-    <div class="head">
-      <div style="flex:none;width:12px;height:12px;border-radius:50%;margin-top:5px;background:${snRamp.accent};box-shadow:0 0 0 5px ${ring}"></div>
-      <div style="flex:1;min-width:0">
-        <div class="title">${esc(sn.label)}</div>
-        <div class="kind">${esc(k.label)}${sn.version ? ' · ' + esc(sn.version) : ''}</div>
-      </div>
-      <div class="esc" id="closePanel">close</div>
-    </div>
-    <div class="body">
-      <div style="padding:11px 13px;border-radius:11px;font:500 12px 'JetBrains Mono',monospace;line-height:1.5;
-                  background:${alarmed ? 'oklch(0.3 0.09 25)' : 'oklch(0.28 0.06 150)'};
-                  border:1px solid ${alarmed ? 'oklch(0.6 0.16 25)' : 'oklch(0.55 0.13 150)'};
-                  color:${alarmed ? 'oklch(0.93 0.07 25)' : 'oklch(0.93 0.06 150)'}">${esc(status)}</div>
-      ${evidenceBlock(sn)}
-
-      <div style="display:flex;flex-direction:column;gap:9px">
-        <div class="sec-title">METADATA</div>
-        ${meta.map(([kk, vv]) => `<div class="meta-row"><span class="k">${esc(kk)}</span><span class="v">${esc(vv)}</span></div>`).join('')}
-      </div>
-
-      <div style="display:flex;flex-direction:column;gap:9px">
-        <div class="sec-title">${isHot ? 'REACHABILITY PATH' : (pkgView ? 'DEPENDENCY DETAIL' : 'CALL STACK')}</div>
-        ${chain.length
-          ? chain.map((s, i) => `${i ? '<div class="chain-arrow">&darr;</div>' : ''}
-            <div class="stack-row" style="border-left:2px solid ${s.color}">
-              <span class="i">${esc(s.idx)}</span>
-              <div style="min-width:0"><div class="n">${esc(s.name)}</div><div class="l">${esc(s.loc)}</div></div>
-            </div>`).join('')
-          : '<div class="l" style="font:400 11.5px \'JetBrains Mono\',monospace;color:oklch(0.66 0.02 265)">leaf node — nothing downstream</div>'}
-      </div>
-    </div>`;
-  $('closePanel').onclick = () => { state.selected = null; render(); };
-}
-
-/* Evidence, and what was looked for and not found.
- *
- * The negative half is the part that stops this being a scoreboard. A finding
- * that only says what fired invites the reader to assume everything else fired
- * too; naming the checks that came back empty is what makes an INVESTIGATE
- * verdict safe to act on. */
-function evidenceBlock(sn) {
-  if (!sn.why && !sn.neg && !sn.detail) return '';
-  const pills = (sn.why || []).map((a) =>
-    `<span style="display:inline-block;padding:3px 8px;border-radius:6px;margin:0 5px 5px 0;
-       font:500 10px 'JetBrains Mono',monospace;background:oklch(0.3 0.05 265);
-       border:1px solid oklch(0.42 0.05 265);color:oklch(0.88 0.03 265)">${esc(a)}</span>`).join('');
-  const negs = (sn.neg || []).map((t) =>
-    `<div style="font:400 11px 'JetBrains Mono',monospace;color:oklch(0.7 0.02 265);
-       padding-left:12px;border-left:2px solid oklch(0.42 0.03 265);margin-bottom:5px">${esc(t)}</div>`).join('');
-  return `
-    ${sn.detail ? `<div style="font:400 11.5px 'JetBrains Mono',monospace;color:oklch(0.74 0.02 265);line-height:1.5">${esc(sn.detail)}</div>` : ''}
-    ${pills ? `<div style="display:flex;flex-direction:column;gap:7px">
-      <div class="sec-title">EVIDENCE</div><div>${pills}</div></div>` : ''}
-    ${negs ? `<div style="display:flex;flex-direction:column;gap:7px">
-      <div class="sec-title">LOOKED FOR, NOT FOUND</div>${negs}</div>` : ''}`;
-}
-
-/* ------------------------------------------------------------------ */
-/* footer metrics + legend                                             */
-/* ------------------------------------------------------------------ */
-/* The ramp, stated. A gradient nobody can decode is decoration; this says
-   which end is which and that green means "checked, nothing reaches it"
-   rather than "not checked". */
-function heatLegend(g) {
-  const stops = [
-    [1.0, 'at the CVE'],
-    [0.7, '1-2 hops'],
-    [0.4, 'further out'],
-    [0, 'no advisory reaches it']
-  ];
-  const exp = (g && g.exposure) || {};
-  const head = exp.advisories
-    ? `<span class="t" style="opacity:0.75">${exp.exposed} of ${exp.total} exposed &middot; </span>`
-    : `<span class="t" style="opacity:0.75">no known vulnerabilities &middot; </span>`;
-  return head + stops.map(([h, label]) => {
-    const r = ramp(h);
-    return `<div class="item"><div class="sw" style="background:${r.accent};box-shadow:0 0 0 3px ${r.ring}"></div><span class="t">${esc(label)}</span></div>`;
-  }).join('');
-}
-
-function paintFooter(g, hot, hotEdges) {
-  // The macro tab is the package blast radius; 'package' is the engine's
-  // own name for the payload it builds, kept so blastradius/pkg stays the
-  // one place that decides what that shape is called.
-  if (g && g.mode === 'package') return paintPkgFooter(g);
-  $('legend').classList.remove('compact');
-  const countHot = (kinds) => hot ? g.nodes.filter((n) => hot.has(n.id) && kinds.includes(n.kind)).length : 0;
-  const total = (kinds) => g.nodes.filter((n) => kinds.includes(n.kind)).length;
-
-  // Micro only. The macro view returned above, and it counts what the graph
-  // knows rather than what is lit up -- see paintPkgFooter.
-  // Counted from `vuln`, not from the query highlight. The old version
-  // reported 0 vulnerable imports on a graph full of them whenever the search
-  // box was empty, which is the same picture as "you are fine".
-  const countVuln = (kinds) => g.nodes.filter((n) => n.vuln && kinds.includes(n.kind)).length;
-  const defs = [['Exposed routes', ['route'], 25],
-                ['Exposed functions', ['fn', 'handler', 'entry'], 150],
-                ['Vulnerable imports', ['import'], 340]];
-
-  $('metrics').innerHTML = defs.map(([label, kinds, hue]) => {
-    const v = hot ? countHot(kinds) : countVuln(kinds);
-    const of = (hot ? 'on path, of ' : 'of ') + total(kinds);
-    return `<div class="metric" style="border:1px solid ${col(hue, 0.42, 0.08)}">
-      <div class="l">${esc(label)}</div>
-      <div class="r">
-        <div class="v" style="color:${v > 0 ? col(hue, 0.8, 0.16) : 'oklch(0.6 0.01 265)'}">${v}</div>
-        <div class="o">${esc(of)}</div>
-      </div></div>`;
-  }).join('');
-
-  $('legend').innerHTML = heatLegend(g);
-}
-
-/* The package view counts what the graph knows, not what is lit up.
- *
- * Counting highlighted nodes would report 0 for the range-only column, since
- * nothing there is exposed -- and 0 is exactly the wrong number: the whole
- * claim is that a range-only tool reports *many* of them. */
-function paintPkgFooter(g) {
-  const st = g.stats || {};
-  const defs = g.view === 'project'
-    ? [
-        ['Vulnerable packages', st.vulnerable_versions || 0, 'named by an advisory', 25],
-        ['In the blast radius', st.in_radius || 0, 'of ' + (st.resolved_versions || 0) + ' resolved', 40],
-        ['Advisories', (g.verdict && g.verdict.advisory_ids || []).length, 'published', 75],
-        ['Answered in', Math.round(st.query_ms || 0), 'ms', 150]
-      ]
-    : [
-        ['Range admits it', st.range_admits || 0, 'range-only leads', 75],
-        ['Lockfile resolves it', st.lockfile_entries || 0, 'confirmed', 200],
-        ['Exposed projects', st.exposed_projects || 0, 'of ' + (state.serviceCount || '?'), 265],
-        ['Answered in', Math.round(st.query_ms || 0), 'ms', 150]
-      ];
-  $('metrics').innerHTML = defs.map(([label, v, of, hue]) =>
-    `<div class="metric tight" style="border:1px solid ${col(hue, 0.42, 0.08)}">
-      <div class="l">${esc(label)}</div>
-      <div class="r">
-        <div class="v" style="color:${v > 0 ? col(hue, 0.8, 0.16) : 'oklch(0.6 0.01 265)'}">${v}</div>
-        <div class="o">${esc(of)}</div>
-      </div></div>`).join('');
-
-  $('legend').classList.add('compact');
-  $('legend').innerHTML = heatLegend(g);
-}
-
-/* ------------------------------------------------------------------ */
-/* data + wiring                                                       */
-/* ------------------------------------------------------------------ */
-async function loadGraph(mode) {
-  if (mode === 'macro') return loadPackageGraph();
-  if (state.graphs[mode]) return;
-  const r = await fetch('/api/graph?mode=' + mode);
-  if (!r.ok) {
-    const e = await r.json().catch(() => ({ detail: r.statusText }));
-    $('sizer').style.width = 'auto'; $('sizer').style.height = 'auto';
-    $('canvas').style.transform = 'none';
-    $('canvas').innerHTML = `<div class="notice"><b>Cannot reach the graph.</b><br><br>${esc(e.detail || r.statusText)}</div>`;
-    return;
-  }
-  state.graphs[mode] = await r.json();
-}
-
-function notice(html, bad) {
-  $('sizer').style.width = 'auto'; $('sizer').style.height = 'auto';
-  $('canvas').style.transform = 'none';
-  $('canvas').innerHTML = `<div class="notice${bad ? ' bad' : ''}">${html}</div>`;
-}
-
-async function loadPackageGraph(force) {
-  // No target selected means "show me the repo", not "show me nothing". The
-  // project view is the landing state: after a scan the question is what is
-  // wrong with this codebase, and picking a package first requires already
-  // knowing the answer.
-  if (!state.pkgSpec) return loadProjectGraph(force);
-  if (state.graphs.macro && state.graphs.macro.target === state.pkgSpec
-      && state.graphs.macro.view !== 'project' && !force) return;
-  const r = await fetch('/api/pkg/graph?spec=' + encodeURIComponent(state.pkgSpec));
-  if (!r.ok) {
-    const e = await r.json().catch(() => ({ detail: r.statusText }));
-    state.graphs.macro = null;
-    state.pkgError = e.detail || r.statusText;
-    return;
-  }
-  state.pkgError = '';
-  const g = await r.json();
-  // A version the corpus has never seen is not an error and not an empty
-  // graph -- it is a different answer, and saying so beats drawing nothing.
-  if (!g.exists) state.pkgError = state.pkgSpec + ' is not in the graph. Ingest it, or pick a suggestion below.';
-  state.graphs.macro = g.exists ? g : null;
-}
-
-/* The whole repository: every package an advisory reaches, and the dependency
-   chain that carries it there. Cached server-side against the read epoch, so
-   returning here after a drill-down costs one round trip and no recompute. */
-async function loadProjectGraph(force) {
-  if (state.graphs.macro && state.graphs.macro.view === 'project' && !force) return;
-  const r = await fetch('/api/pkg/project');
-  if (!r.ok) {
-    const e = await r.json().catch(() => ({ detail: r.statusText }));
-    state.graphs.macro = null;
-    state.pkgError = e.detail || r.statusText;
-    return;
-  }
-  state.pkgError = '';
-  const g = await r.json();
-  state.graphs.macro = g.exists ? g : null;
-  if (!g.exists) state.pkgError = 'Nothing ingested yet. Run: blastradius pipeline';
-}
-
-async function loadPkgTargets() {
-  const r = await fetch('/api/pkg/targets?limit=6');
-  if (!r.ok) return;
-  state.pkgTargets = await r.json();
-  // Deliberately not auto-selecting a target any more: doing so opened the
-  // Explorer on one arbitrary package's blast radius, which looks like the
-  // whole answer. The project view opens instead, and the chips stay as the
-  // way in to a specific version.
-}
-
-/* Mark, or retract. The same button does both, because a demo that can only
-   arm the alarm cannot show that the alarm is version-specific. */
-async function toggleMark() {
-  const g = state.graphs.macro;
-  if (!state.pkgSpec) return;
-  const btn = $('markBtn');
-  btn.classList.add('busy');
-  btn.textContent = g && g.compromised ? 'retracting…' : 'marking…';
-  const r = await fetch('/api/pkg/incident?spec=' + encodeURIComponent(state.pkgSpec), {
-    method: g && g.compromised ? 'DELETE' : 'POST'
-  });
-  btn.classList.remove('busy');
-  if (!r.ok) {
-    const e = await r.json().catch(() => ({ detail: r.statusText }));
-    state.pkgError = e.detail || r.statusText;
-  } else {
-    const t = state.pkgTargets.find((x) => x.spec === state.pkgSpec);
-    if (t) t.marked = !(g && g.compromised);
-  }
-  await loadPackageGraph(true);
-  state.selected = null;
-  render();
-  paintChips();
-}
-
-async function setPkgTarget(spec) {
-  // '' is meaningful: it is the way back out to the whole project.
-  state.pkgSpec = spec || '';
-  state.selected = null;
-  state.autoFit = true;
-  $('q').value = spec;
-  await loadPackageGraph();
-  render();
-  paintChips();
-}
-
-async function loadAdvisories() {
-  const r = await fetch('/api/advisories');
-  if (!r.ok) return;
-  // Sorted here rather than at render: the chip elements carry their index
-  // into this array, so rendering from a sorted *copy* would hand every click
-  // the wrong advisory.
-  state.advisories = sortAdvisories(await r.json());
-  paintChips();
-}
-
-const SEVERITY_RANK = { critical: 0, high: 1, moderate: 2, medium: 2, low: 3, unknown: 4 };
-
-/* Worst first, so the chip row leads with the advisory most worth clicking.
-   Nothing opens on a query any more -- see boot -- but the ordering still
-   decides which chip a viewer reaches for first. */
-function sortAdvisories(list) {
-  return [...list].sort((a, b) =>
-    (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9));
-}
-
-function paintChips() {
-  document.querySelector('.chips-label').textContent =
-    state.mode === 'macro' ? 'targets' : 'advisories';
-
-  if (state.mode === 'macro') {
-    // Each chip states the gap it will demonstrate before it is clicked: how
-    // many versions a range admits against how many projects installed it.
-    // The way back out. Without it, drilling into a package is a one-way trip
-    // and the project view is only reachable by clearing the box by hand.
-    const g = state.graphs.macro;
-    const onProject = !state.pkgSpec;
-    const exp = (g && g.exposure) || {};
-    $('chips').innerHTML =
-      `<div class="chip${onProject ? ' on' : ''}" data-i="-1" title="the whole repository">whole project
-        <span class="n">${exp.advisories != null
-          ? exp.advisories + ' vulnerable · ' + exp.exposed + ' in radius'
-          : 'every exposed package'}</span></div>` +
-      state.pkgTargets.map((t, i) =>
-        `<div class="chip${t.spec === state.pkgSpec ? ' on' : ''}" data-i="${i}" title="${esc(t.spec)}">${esc(t.spec)}
-          <span class="n">${t.range_admits} admit · ${t.projects} installed${t.marked ? ' · MARKED' : ''}</span></div>`
-      ).join('');
-    $('chips').querySelectorAll('.chip').forEach((el) => {
-      const i = +el.dataset.i;
-      el.onclick = () => setPkgTarget(i < 0 ? '' : state.pkgTargets[i].spec);
-    });
-    return;
-  }
-
-  $('chips').innerHTML = state.advisories.map((a, i) =>
-    `<div class="chip" data-i="${i}" title="${esc(a.advisory_id)} · ${esc(a.severity)}">${esc(a.query)}</div>`
-  ).join('');
-  $('chips').querySelectorAll('.chip').forEach((el) => {
-    el.onclick = () => {
-      const a = state.advisories[+el.dataset.i];
-      state.query = a.query;
-      $('q').value = a.query;
-      syncChips();
-      render();
-    };
-  });
-  syncChips();
-}
-
-function syncChips() {
-  $('chips').querySelectorAll('.chip').forEach((el) => {
-    const a = state.advisories[+el.dataset.i];
-    el.classList.toggle('on', a && state.query.trim() === a.query);
-  });
-}
-
-async function setMode(mode) {
-  state.mode = mode;
-  state.selected = null;
-  state.expanded.clear();
-  state.autoFit = true;   // the views are different widths
-  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.dataset.mode === mode));
-
-  const pkg = mode === 'macro';
-  // In the micro view the box filters an already-loaded graph on every
-  // keystroke. Here it names the target of a server-side query, so it commits
-  // on Enter instead -- filtering per keystroke would fire one blast-radius
-  // analysis per character typed.
-  $('markWrap').style.display = pkg ? 'flex' : 'none';
-  $('clear').style.display = pkg ? 'none' : 'block';
-  $('q').placeholder = pkg
-    ? 'whole project — or target one version, e.g. lodash@4.17.21, then Enter'
-    : 'trace a vulnerable package, e.g. vulnerable-pkg@1.0.5';
-  $('q').value = pkg ? state.pkgSpec : state.query;
-
-  if (pkg && !state.pkgTargets.length) await loadPkgTargets();
-  // Open on the six-column evidence view for the worst target the graph knows
-  // about, rather than the project overview. The overview answers "what is
-  // wrong with this repo"; this answers "and why should I believe you", which
-  // is the argument the six columns exist to make -- RANGE ADMITS holds the
-  // leads a range-only tool would report, LOCKFILE RESOLVES holds what was
-  // actually installed, and the gap between the two is the point.
-  // `suggested_targets` already ranks by advisories first, so [0] is the
-  // strongest case. The `whole project` chip goes back to the overview.
-  if (pkg && !state.pkgSpec && state.pkgTargets.length) {
-    state.pkgSpec = state.pkgTargets[0].spec;
-  }
-  if (pkg) $('q').value = state.pkgSpec;
-
-  await loadGraph(mode);
-  paintChips();
-  render();
-}
-
-document.querySelectorAll('.tab').forEach((t) => { t.onclick = () => setMode(t.dataset.mode); });
-$('q').oninput = (e) => {
-  if (state.mode === 'macro') return;   // committed on Enter, see setMode
-  state.query = e.target.value;
-  // A new query means a new blast radius; columns opened for the old one are
-  // not what the user is looking at any more.
-  state.expanded.clear();
-  state.autoFit = true;
-  syncChips();
-  render();
-};
-$('q').onkeydown = (e) => {
-  if (e.key === 'Enter' && state.mode === 'macro') setPkgTarget($('q').value.trim());
-};
-$('markBtn').onclick = toggleMark;
-$('clear').onclick = () => { state.query = ''; $('q').value = ''; syncChips(); render(); };
-$('focus').onclick = () => {
-  state.focus = !state.focus;
-  state.expanded.clear();
-  state.autoFit = true;
-  $('focus').classList.toggle('on', state.focus);
-  render();
-};
-$('zoomIn').onclick = () => setZoom(state.zoom + 0.15, true);
-$('zoomOut').onclick = () => setZoom(state.zoom - 0.15, true);
-$('zoomFit').onclick = () => { state.autoFit = true; render(); };
-
-let resizeTimer = null;
-addEventListener('resize', () => {
-  clearTimeout(resizeTimer);
-  // Re-fit on rotate or window drag, but only while the user has not taken
-  // manual control of the zoom.
-  resizeTimer = setTimeout(() => { if (state.autoFit) render(); }, 150);
-});
-
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && state.selected) { state.selected = null; render(); }
-});
-
-(async function boot() {
-  // Health is checked before anything else and its failure is fatal to the
-  // page, not swallowed. Every fetch below depends on the node being up, so
-  // a dead database used to render as an empty canvas with no explanation --
-  // identical to "you have no vulnerabilities", which is the worst thing this
-  // page could imply.
-  let health = null;
+const el = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => (
+  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+/* ==================================================================
+   Section 1 — the threat list
+   ================================================================== */
+async function loadThreats() {
+  let data;
   try {
-    const r = await fetch('/api/health');
-    health = await r.json();
+    const r = await fetch("/api/explorer/threats");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    data = await r.json();
   } catch (e) {
-    health = { ok: false, error: String(e) };
-  }
-
-  if (!health || !health.ok) {
-    notice('<h3>Cannot reach the database</h3>' +
-      'The Explorer is running, but HydraDB is not answering on ' +
-      '<code>127.0.0.1:8443</code>, so nothing can be shown. This is a ' +
-      'connection problem, <b>not</b> a clean scan result.' +
-      '<pre>python -m blastradius.cli up</pre>' +
-      (health && health.error ? '<br>' + esc(String(health.error)) : '') +
-      '<br>Then reload this page.', true);
+    el("list").innerHTML =
+      `<div class="note bad" style="margin:8px">Could not read the graph:
+       ${esc(String(e))}. Is the HydraDB node up and a repo ingested?</div>`;
     return;
   }
 
-  // The exposed-projects metric reads "n of N"; N is the number of projects in
-  // the graph, and without it the denominator would be a guess.
-  if (health.counts) state.serviceCount = health.counts.Service || 0;
+  S.threats = data.threats || [];
+  const c = data.counts || {}, sc = data.scanned || {};
+  el("sConfirmed").textContent = c.total ?? 0;
+  el("sInCode").textContent = c.in_code ?? 0;
+  el("sScanned").textContent = (sc.versions ?? 0).toLocaleString();
 
-  if (health.empty) {
-    notice('<h3>The graph is empty</h3>' +
-      'HydraDB is up but nothing has been ingested. Scan a repository and ' +
-      'build both tiers:' +
-      '<pre>python -m blastradius.cli pipeline --reset</pre>' +
-      'Then reload this page.');
+  // The denominator is the finding. "2 of 13" is a different morning from
+  // "13 findings", and only one of those two numbers tells you where to start.
+  el("mainSub").textContent =
+    `${c.in_code ?? 0} of ${c.total ?? 0} confirmed threats are reachable from ` +
+    `the ${sc.functions ?? 0} function(s) scanned in this repository.`;
+
+  renderList();
+}
+
+function passesFilter(t) {
+  if (S.filter === "all") return true;
+  if (S.filter === "code") return t.in_code;
+  return t.kind === S.filter;
+}
+
+function renderList() {
+  const rows = S.threats.filter(passesFilter);
+  const box = el("list");
+  if (!rows.length) {
+    box.innerHTML = `<div class="muted" style="padding:10px">
+      Nothing matches this filter.</div>`;
+    return;
+  }
+  box.innerHTML = rows.map((t) => {
+    const sev = (t.severity || "unknown").toLowerCase();
+    const bits = [];
+    if (t.in_code) {
+      bits.push(`<span class="chip reach">reaches ${t.function_count}
+        function${t.function_count === 1 ? "" : "s"}</span>`);
+    } else {
+      bits.push(`<span class="chip quiet">installed only</span>`);
+    }
+    if (t.kind === "compromised") {
+      const sim = t.incident && t.incident.simulated;
+      bits.push(`<span class="chip ${sim ? "quiet" : "critical"}">
+        <i></i>${sim ? "drill" : "compromised"}</span>`);
+    }
+    if (t.kind === "deprecated") bits.push(`<span class="chip quiet"><i></i>deprecated</span>`);
+    const n = t.advisories.length;
+    if (n) bits.push(`<span class="muted">${n} advisor${n === 1 ? "y" : "ies"}</span>`);
+    if (t.services.length) {
+      bits.push(`<span class="muted">${esc(t.services.length === 1
+        ? t.services[0] : t.services.length + " services")}</span>`);
+    }
+    return `<div class="card ${t.in_code ? "reach" : "installed"}
+                 ${S.selected === t.spec ? "on" : ""}" data-spec="${esc(t.spec)}">
+      <div class="spec">${esc(t.spec)}</div>
+      <div class="meta">
+        <span class="chip ${esc(sev)}"><i></i>${esc(sev)}</span>
+        ${bits.join("")}
+      </div>
+    </div>`;
+  }).join("");
+
+  for (const card of box.querySelectorAll(".card")) {
+    card.onclick = () => select(card.dataset.spec);
+  }
+}
+
+el("filters").onclick = (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  S.filter = b.dataset.f;
+  for (const other of el("filters").querySelectorAll("button")) {
+    other.classList.toggle("on", other === b);
+  }
+  renderList();
+};
+
+/* ==================================================================
+   Section 2 — trace one threat into the code
+   ================================================================== */
+async function select(spec) {
+  S.selected = spec;
+  S.picked = null;
+  renderList();
+  showEmpty("Tracing…", `Walking the graph from ${spec} to source.`);
+
+  const threat = S.threats.find((t) => t.spec === spec);
+  try {
+    const r = await fetch(`/api/explorer/reach?spec=${encodeURIComponent(spec)}`);
+    S.reach = await r.json();
+    if (!r.ok) throw new Error(S.reach.detail || `HTTP ${r.status}`);
+  } catch (e) {
+    S.reach = null;
+    showEmpty("Could not trace it", String(e));
     return;
   }
 
-  // Advisories first: they still drive the micro search box, and the opening
-  // query is picked from them even though the macro tab does not use it.
-  await loadAdvisories();
-  // Deliberately no opening query. It made sense when the code view had no
-  // colour of its own and an empty box meant an undifferentiated grey graph:
-  // pre-filling the worst advisory at least showed something. The graph now
-  // carries its own exposure, and pre-filling instead dimmed 500 nodes down
-  // to a query the user never typed -- most damagingly for an advisory on a
-  // package no source file imports, which lit nothing and reported "0 of 500"
-  // over a graph with sixteen exposed functions in it.
+  if (!S.reach.found) {
+    drawGraph([], []);
+    // Not a false positive, and the wording has to say so: the package is
+    // installed and the advisory does apply. Nothing here imports it, which
+    // is the difference between "patch now" and "patch Tuesday".
+    showEmpty(
+      "Installed, but not reached from your source",
+      S.reach.note || "",
+      true,
+    );
+  } else {
+    hideEmpty();
+    drawGraph(S.reach.nodes, S.reach.edges);
+  }
+  renderDetail(threat);
+}
 
-  // Then hand the opening tab to setMode rather than loading the graph here.
-  // The macro view is scoped to one version, so it cannot be fetched until a
-  // target has been chosen -- asking for both at once, as this did while macro
-  // was a whole-graph sweep, raced the target list and opened on the empty
-  // state. setMode already sequences that, and wires the header controls the
-  // tab needs, so it is the one path in and boot stops being a second one.
-  await setMode('macro');
+function showEmpty(title, body, good) {
+  el("emptyTitle").textContent = title;
+  el("emptyBody").innerHTML = good
+    ? `<span class="good">${esc(body)}</span>`
+    : esc(body);
+  el("empty").style.display = "grid";
+}
+function hideEmpty() { el("empty").style.display = "none"; }
 
-  // Warm the other view so switching tabs is instant on stage.
-  loadGraph('micro');
-})();
+/* -- layout ---------------------------------------------------------
+   A fixed layered layout, not a force solver. The columns ARE the
+   semantics -- affected version, what pulls it in, the import, the
+   function that uses it, who calls that -- so letting a physics
+   simulation decide left-to-right order would scramble the one thing
+   the picture is for. */
+const COL_W = 208, ROW_H = 74, PAD_X = 92, PAD_Y = 58;
+const RADIUS = { threat: 25, bridge: 19, import: 17, uses: 16, caller: 13 };
+const COL_TITLE = {
+  threat: "affected version", bridge: "pulled in by", import: "imported in source",
+  uses: "used by", caller: "called from",
+};
+
+function drawGraph(nodes, edges) {
+  const svg = el("viz");
+  S.nodeByKey = new Map(nodes.map((n) => [n.key, n]));
+  S.edges = edges;
+  // A legend keyed to five node kinds, floating over a blank pane, describes
+  // nothing that is on screen.
+  el("legend").hidden = !nodes.length;
+  if (!nodes.length) { svg.innerHTML = ""; S.laidOut = []; return; }
+
+  // Columns arrive sparse -- a direct import has no bridge, so it jumps
+  // 0 -> 2. Compact them so the picture has no empty lane.
+  const used = [...new Set(nodes.map((n) => n.column))].sort((a, b) => a - b);
+  const lane = new Map(used.map((c, i) => [c, i]));
+  const cols = used.map((c) => nodes.filter((n) => n.column === c));
+
+  // Two barycentre passes: order each column by the mean position of the
+  // neighbours already placed beside it. Cheap, and it removes most of the
+  // edge crossings a naive stack produces.
+  const order = cols.map((c) => c.slice());
+  const pos = new Map();
+  const reindex = () => order.forEach((c) => c.forEach((n, i) => pos.set(n.key, i)));
+  reindex();
+  const neighbours = (key, back) => edges
+    .filter((e) => (back ? e.dst === key : e.src === key))
+    .map((e) => pos.get(back ? e.src : e.dst))
+    .filter((v) => v !== undefined);
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 1; i < order.length; i++) {
+      order[i].sort((a, b) => mean(neighbours(a.key, true)) - mean(neighbours(b.key, true)));
+      reindex();
+    }
+    for (let i = order.length - 2; i >= 0; i--) {
+      order[i].sort((a, b) => mean(neighbours(a.key, false)) - mean(neighbours(b.key, false)));
+      reindex();
+    }
+  }
+
+  const tallest = Math.max(...order.map((c) => c.length));
+  const H = PAD_Y * 2 + Math.max(1, tallest) * ROW_H;
+  const W = PAD_X * 2 + Math.max(1, order.length) * COL_W;
+
+  const placed = [];
+  order.forEach((column, i) => {
+    const span = column.length * ROW_H;
+    column.forEach((n, j) => {
+      placed.push({
+        ...n,
+        x: PAD_X + i * COL_W,
+        y: (H - span) / 2 + j * ROW_H + ROW_H / 2,
+        r: RADIUS[n.kind] || 14,
+      });
+    });
+  });
+  S.laidOut = placed;
+  const at = new Map(placed.map((n) => [n.key, n]));
+
+  const links = edges.map((e) => {
+    const a = at.get(e.src), b = at.get(e.dst);
+    if (!a || !b) return "";
+    // Callers point right-to-left (a caller sits further out than what it
+    // calls), so the curve is drawn between rim points either way round.
+    const dir = b.x >= a.x ? 1 : -1;
+    const x1 = a.x + a.r * dir, x2 = b.x - b.r * dir;
+    const mx = (x1 + x2) / 2;
+    return `<path class="link" data-src="${esc(e.src)}" data-dst="${esc(e.dst)}"
+      d="M${x1},${a.y} C${mx},${a.y} ${mx},${b.y} ${x2},${b.y}"></path>`;
+  }).join("");
+
+  const heads = order.map((column, i) => {
+    if (!column.length) return "";
+    return `<text class="collabel" x="${PAD_X + i * COL_W}" y="26"
+      text-anchor="middle">${esc(COL_TITLE[column[0].kind] || "")}</text>`;
+  }).join("");
+
+  const circles = placed.map((n) => {
+    const style = fillFor(n.kind);
+    const label = clip(n.label, 26);
+    const subShort = clip(n.sub || "", 32);
+    return `<g class="node" data-key="${esc(n.key)}"
+              transform="translate(${n.x},${n.y})">
+      <circle r="${n.r}" fill="${style.fill}" stroke="${style.stroke}"
+              stroke-width="${style.width}"></circle>
+      <text class="nlabel" y="${n.r + 15}" text-anchor="middle">${esc(label)}</text>
+      <text class="nsub" y="${n.r + 27}" text-anchor="middle">${esc(subShort)}</text>
+    </g>`;
+  }).join("");
+
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("width", W);
+  svg.setAttribute("height", H);
+  svg.style.width = W + "px";
+  svg.style.height = H + "px";
+  svg.innerHTML = heads + links + circles;
+
+  for (const g of svg.querySelectorAll(".node")) {
+    g.onmouseenter = () => highlight(g.dataset.key);
+    g.onmouseleave = () => highlight(null);
+    g.onclick = () => { S.picked = g.dataset.key; renderDetail(); markSelected(); };
+  }
+  markSelected();
+}
+
+function mean(xs) { return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0; }
+
+/* Middle-truncation, because both ends of these strings carry meaning and
+   neither one-sided cut keeps them. `vite.config.js · blast-radius-console`
+   loses the filename if you keep the tail; `src/components/Findings.jsx:120`
+   loses the file and the line if you keep the head. */
+function clip(text, max) {
+  if (text.length <= max) return text;
+  const head = Math.ceil((max - 1) / 2);
+  return text.slice(0, head) + "…" + text.slice(text.length - (max - 1 - head));
+}
+
+/* Filled vs ring is the fourth distinction, standing in for the hue that
+   all-pairs validation would not allow. See the note at the top. */
+function fillFor(kind) {
+  if (kind === "threat") return { fill: "var(--threat)", stroke: "var(--threat)", width: 2 };
+  if (kind === "bridge") return { fill: "var(--deps)", stroke: "var(--deps)", width: 2 };
+  if (kind === "import") return { fill: "var(--surface-1)", stroke: "var(--deps)", width: 2.6 };
+  if (kind === "uses")   return { fill: "var(--code)", stroke: "var(--code)", width: 2 };
+  return { fill: "var(--surface-1)", stroke: "var(--code)", width: 2.6 };
+}
+
+function highlight(key) {
+  const svg = el("viz");
+  if (!key) {
+    svg.classList.remove("dim");
+    svg.querySelectorAll(".lit").forEach((n) => n.classList.remove("lit"));
+    return;
+  }
+  const keep = new Set([key]);
+  for (const e of S.edges) {
+    if (e.src === key) keep.add(e.dst);
+    if (e.dst === key) keep.add(e.src);
+  }
+  svg.classList.add("dim");
+  svg.querySelectorAll(".node").forEach((n) =>
+    n.classList.toggle("lit", keep.has(n.dataset.key)));
+  svg.querySelectorAll(".link").forEach((l) =>
+    l.classList.toggle("lit", l.dataset.src === key || l.dataset.dst === key));
+}
+
+function markSelected() {
+  el("viz").querySelectorAll(".node").forEach((n) =>
+    n.classList.toggle("sel", n.dataset.key === S.picked));
+}
+
+/* ==================================================================
+   Detail strip
+   ================================================================== */
+function renderDetail(threatArg) {
+  const box = el("detail");
+  const threat = threatArg || S.threats.find((t) => t.spec === S.selected);
+  if (!threat) { box.innerHTML = `<div class="muted">No finding selected.</div>`; return; }
+
+  // A clicked graph node wins over the threat summary: the user just asked a
+  // more specific question than the one the list answered.
+  if (S.picked) {
+    const n = S.nodeByKey.get(S.picked);
+    if (n) { box.innerHTML = nodeDetail(n, threat); return; }
+  }
+  box.innerHTML = threatDetail(threat);
+}
+
+function nodeDetail(n, threat) {
+  const rows = [];
+  const title = {
+    threat: "The affected version", bridge: "Pulls the affected version in",
+    import: "Import site in your source", uses: "Runs the imported code",
+    caller: "Calls the function that runs it",
+  }[n.kind] || "";
+
+  if (n.kind === "import") {
+    rows.push(kv("file", n.file));
+    rows.push(kv("service", n.service));
+    rows.push(kv("imported", (n.names || []).join(", ") || "(namespace import)"));
+    rows.push(kv("distance", n.hops === 0
+      ? "names the affected package directly"
+      : `${n.hops} hop(s) above the affected version`));
+  } else if (n.kind === "uses" || n.kind === "caller") {
+    // Module scope has no line to open -- the scanner records it as line 0,
+    // and printing "file.js:0" sends a reader to a line that is not there.
+    rows.push(kv("function", n.name === "<module>" ? "top-level module scope" : n.name + "()"));
+    rows.push(kv("file", n.name === "<module>" ? n.file : `${n.file}:${n.line}`));
+    rows.push(kv("service", n.service));
+  } else if (n.kind === "threat") {
+    rows.push(kv("services", (n.services || []).join(", ") || "none resolved it"));
+  } else if (n.kind === "bridge") {
+    rows.push(kv("relationship", n.sub || ""));
+  }
+
+  return `<h3>${esc(n.label)}</h3>
+    <div class="sub">${esc(title)}</div>
+    ${rows.join("")}
+    <div class="rule"></div>
+    <div class="muted">Part of the trace for <b>${esc(threat.spec)}</b>.
+      Click the background of the list to go back to the finding.</div>`;
+}
+
+function threatDetail(t) {
+  const sev = (t.severity || "unknown").toLowerCase();
+  const head = `<h3>${esc(t.spec)}</h3>
+    <div class="sub">
+      <span class="chip ${esc(sev)}"><i></i>${esc(sev)}</span>
+      &nbsp;${t.in_code
+        ? `reached by ${t.import_count} import(s), running in ${t.function_count} function(s)`
+        : "installed, not imported from source here"}
+    </div>`;
+
+  const rows = [];
+  rows.push(kv("services", t.services.join(", ") || "none resolved it"));
+  if (t.deprecated_reason) rows.push(kv("deprecated", t.deprecated_reason));
+
+  let incident = "";
+  if (t.incident) {
+    const sim = t.incident.simulated;
+    incident = `<div class="note ${sim ? "" : "bad"}" style="margin:9px 0">
+      <b>${esc(t.incident.incident_id)}</b> — ${esc(t.incident.status)}<br>
+      ${esc(t.incident.summary)}
+      ${sim ? "<br><b>This is a drill, not a live compromise.</b>" : ""}
+    </div>`;
+  }
+
+  const advisories = t.advisories.map((a) => `
+    <div class="adv">
+      <div class="id">${esc(a.advisory_id)}
+        <span class="chip ${esc((a.severity || "").toLowerCase())}"
+              style="margin-left:5px"><i></i>${esc(a.severity || "unrated")}</span>
+      </div>
+      ${a.summary ? `<div class="sum">${esc(a.summary)}</div>` : ""}
+      ${a.cvss_vector ? `<div class="cvss">${esc(a.cvss_vector)}</div>` : ""}
+    </div>`).join("");
+
+  const trailer = (!t.in_code && S.reach && S.reach.note)
+    ? `<div class="note" style="margin-top:9px">${esc(S.reach.note)}</div>`
+    : (S.reach && S.reach.truncated_callers
+        ? `<div class="note" style="margin-top:9px">
+             ${S.reach.truncated_callers} further caller(s) exist beyond the two
+             hops drawn, and are counted rather than shown.</div>`
+        : "");
+
+  return head + rows.join("") + incident +
+    (advisories ? `<div class="rule"></div>${advisories}` : "") + trailer;
+}
+
+function kv(key, value) {
+  return `<div class="kv"><b>${esc(key)}</b><span>${esc(value)}</span></div>`;
+}
+
+/* Clicking empty space in the list clears a picked graph node, so the panel
+   goes back to describing the finding rather than one circle in it. */
+el("list").addEventListener("click", (e) => {
+  if (!e.target.closest(".card")) { S.picked = null; renderDetail(); markSelected(); }
+});
+
+loadThreats();
 </script>
 </body>
 </html>

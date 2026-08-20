@@ -28,7 +28,7 @@ from blastradius.hydra_client import HydraClient, HydraError
 from blastradius.ids import IdAllocator
 from blastradius.pkg import graphview as pkgview
 from blastradius.pkg import incident as pkgincident
-from blastradius.query import blast, graphview
+from blastradius.query import blast, codereach, graphview
 from blastradius.query.advisory import Advisory
 
 from .live import state as livestate
@@ -412,6 +412,82 @@ def graph_node(node_id: int):
     }
 
 
+# -- the Explorer: confirmed threats, and how far into the code they reach ---
+#
+# One index serves both routes. Building it costs a sweep of every
+# PackageVersion (~800ms here), which is fine once and absurd per click, so it
+# is cached on the same read epoch /api/graph uses: a fresh ingest bumps the
+# epoch and the next request rebuilds, and nothing else can serve a stale
+# answer.
+
+_reach_cache: tuple[int | None, codereach.CodeIndex | None] = (None, None)
+
+
+def _code_index() -> codereach.CodeIndex:
+    global _reach_cache
+
+    epoch = _read_epoch()
+    cached_epoch, cached_index = _reach_cache
+    if cached_index is not None and epoch is not None and cached_epoch == epoch:
+        return cached_index
+
+    try:
+        index = codereach.build_index(client)
+    except HydraError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+    if epoch is not None:
+        _reach_cache = (epoch, index)
+    return index
+
+
+@app.get("/api/explorer/threats")
+def explorer_threats():
+    """Every confirmed threat, ranked by whether code here can reach it.
+
+    Confirmed, not suspected: published advisories, incidents somebody wrote
+    down, and registry deprecations. The heuristic publish-time leads live on
+    the live console and top out at INVESTIGATE, and mixing the two would put
+    a guess and a CVE in one list under one heading.
+    """
+    index = _code_index()
+    try:
+        found = codereach.threats(client, index)
+    except HydraError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+    rows = [t.to_dict() for t in found]
+    return {
+        "threats": rows,
+        "counts": {
+            "total": len(rows),
+            "in_code": sum(1 for r in rows if r["in_code"]),
+            "compromised": sum(1 for r in rows if r["kind"] == "compromised"),
+            "vulnerable": sum(1 for r in rows if r["kind"] == "vulnerable"),
+            "deprecated": sum(1 for r in rows if r["kind"] == "deprecated"),
+        },
+        # The denominator matters as much as the count: "2 of 13 reach code"
+        # is a different morning from "13 findings".
+        "scanned": {
+            "versions": len(index.versions),
+            "imports": len(index.imports),
+            "functions": len(index.functions),
+        },
+    }
+
+
+@app.get("/api/explorer/reach")
+def explorer_reach(spec: str):
+    """The path from one threatened version to the functions that run it."""
+    name, version = _split_spec(spec)
+    index = _code_index()
+    try:
+        reach = codereach.code_reach(client, name, version, index)
+    except HydraError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    return reach.to_dict()
+
+
 @app.post("/api/repo/inspect")
 def repo_inspect(path: str):
     """What a scan would find here, without committing to running one.
@@ -592,8 +668,23 @@ def console() -> FileResponse:
 
 @app.get("/explorer")
 def explorer() -> FileResponse:
-    """The original Explorer, still served but no longer the default."""
-    return FileResponse(STATIC / "index.html")
+    """Confirmed threats, and how far each one reaches into this code.
+
+    Two questions, in order: what is definitely wrong with what we installed,
+    and which of those can actually be reached from a line of source here. The
+    second is what the package graph is for -- 1,703 resolved versions and 8
+    external imports means almost nothing in the tree is named by this code,
+    and a list that cannot say which is which is the flat scan this project
+    exists to beat.
+
+    Served no-store for the same reason /graph is: FileResponse sends a
+    Last-Modified that browsers honour from memory cache within a session, so
+    an edited page keeps rendering the previous build until a hard reload.
+    """
+    return FileResponse(
+        STATIC / "index.html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
 
 
 @app.get("/graph")

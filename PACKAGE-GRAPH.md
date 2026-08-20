@@ -209,10 +209,15 @@ Different projects. If those ever return the same set, the version-awareness is 
 
 ---
 
-## 8. Seeing it: the Explorer
+## 8. Seeing it: the console's package view
 
-`python -m blastradius.cli ui` serves the Explorer on port 8100. It already had two tabs, both owned by the
-code-graph half. **Package · Blast Radius** is the third, and it does not work the way they do.
+> **Where this lives now.** This section describes the **Package · Blast Radius** view, which is served by
+> `/console` (and by the React build in `ui/web`). It used to share a page with `/explorer`; `/explorer` has
+> since been rebuilt around confirmed threats and code reach — see §10f. The six-column argument below is
+> unchanged, it is just reached from the console tab rather than the Explorer.
+
+`python -m blastradius.cli ui` serves the pages on port 8100. The console already had two tabs, both owned
+by the code-graph half. **Package · Blast Radius** is the third, and it does not work the way they do.
 
 The other two fetch the whole graph and compute the highlight in the browser by walking edges backwards from
 whatever you typed. That is right for them. It would be wrong here: exposure is a fact already stored on an
@@ -550,6 +555,67 @@ is executed, and no package is modified.
 
 ---
 
+## 10f. The Explorer: the last mile, from a threat to a function
+
+`/explorer` answers two questions in order, and it exists because the second one is the one that decides
+what you do on the morning of an incident.
+
+**1 · What is confirmed wrong?** Published advisories, recorded incidents, registry deprecations — grouped
+by *version*, not by advisory. Three CVEs on `lodash@4.17.20` are one thing to go and fix, and listing them
+as three findings triples the apparent size of the problem without adding an action.
+
+**2 · Can any of it be reached from a line of code here?** This repository resolves **1,703 package
+versions** and contains **8 external imports**. Almost nothing in the tree is named by source. So the walk
+continues past "installed":
+
+```
+Advisory -> PackageVersion -> (dependency chain) -> ExternalImport -> Function -> callers
+```
+
+Measured against this repository: **2 of 13** confirmed threats are reachable from its 180 scanned
+functions. `vite@5.4.21` (CVE-2026-53571, high) is reached twice — directly as `import { defineConfig } from
+"vite"`, and again one hop down through `@vitejs/plugin-react@4.7.0` — both landing in `vite.config.js`.
+`esbuild@0.21.5` is reached through the same file at one and two hops. The other eleven are installed and
+never imported.
+
+**"Not reached" is not "not affected", and the wording has to carry that.** The package really is installed
+and the advisory really does apply; nothing here imports it. That is the difference between *patch now* and
+*patch Tuesday*, and a list that cannot draw it is the flat lockfile scan this project exists to improve on.
+A test asserts the phrasing never says "false positive" or "not affected".
+
+**Ordering puts reachability above severity.** A moderate finding a route handler calls is a worse Monday
+than a critical one on a transitive dev dependency nothing imports. Sorting on severity alone buries the
+finding that has a file to open, so `Threat.rank` sorts on code reach first and severity second.
+
+**Why the diagram has three hues and not four.** The obvious split — red threat, aqua package, orange
+import, blue function — **fails all-pairs validation in both modes**: red against orange lands at
+normal-vision ΔE 7.1, well under the floor of 15, meaning full-colour readers cannot reliably separate them
+either. No amount of secondary encoding excuses that. Orange was dropped and the fourth distinction is
+carried by filled-versus-ring within a family. Red against aqua sits at ΔE 6.9 (light) / 6.5 (dark), inside
+the 6–8 band that is legal *with* secondary encoding, and it has four: fixed column position, a text label
+on every node, distinct radii, and a permanent legend.
+
+Layout is a fixed layered DAG, not a force solver: the columns *are* the semantics, and letting physics
+decide left-to-right order would scramble the one thing the picture is for. Within a column, two barycentre
+passes cut edge crossings.
+
+### The bug this surfaced: a drill that could not be retracted
+
+Building the threat list turned up eight packages marked `SIMULATED_COMPROMISED` by one incident node whose
+summary named only the last of them.
+
+`create_incident` defaulted its `incident_id` to a shared literal `"SYNTHETIC-001"`. `clear_incident`
+defaulted to `incident_id_for(package, version)` — the per-version id. The two defaults disagreed, silently
+and cumulatively: every drill hung another `COMPROMISES` edge off the one shared node and overwrote its
+summary, while every *Reset* looked up an id that had never been written, found nothing, and reported
+success. Eight drills against this repository left eight packages permanently compromised in the graph.
+
+`incident_id_for` was correct, and had been unit-tested since it was written. That was not enough, because
+the generator was never the part that was wrong — nothing pinned that `create_incident` *used* it. The
+defaults now agree, and a test pins the pairing itself rather than the generator.
+
+---
+
 ## 11. Known gaps
 
 - **CVSS base score is not derived from the vector.** The OSV CSV leaves `severity_score` empty while
@@ -588,3 +654,13 @@ is executed, and no package is modified.
 - **The scale harness is synthetic.** It answers a complexity question, which does not need real names, and
   it drives the real writer and the real engine. It does not tell you how a 500k-node graph built from
   *actual* npm data would behave — dependency fan-out there is heavily skewed, and this generator's is not.
+- **"Not reached from code" is only as true as the code scan.** The Explorer's second section reads the
+  micro tier, so a repository ingested *without* the AST scanner has zero functions and zero imports — and
+  every finding then reports "installed only". That failure mode reads as good news and is not; the header
+  states the denominator (`… of the 180 function(s) scanned in this repository`) precisely so a zero is
+  visible rather than reassuring. Treat an unscanned repo as unknown, not clean.
+- **Import reach is per-specifier, not per-export.** A file that imports `lodash` and uses only `_.map`
+  reports reach for a CVE in `_.template`. The graph records which module a function imports, not which
+  binding it touched, so this over-reports within a reached package. It never under-reports.
+- **The caller walk stops at two hops.** Deeper callers are counted and reported, never silently dropped,
+  but they are not drawn: a caller tree that runs off the canvas hides the first two hops that matter.
