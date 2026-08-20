@@ -26,6 +26,7 @@ arrive then, and two sockets would leave that to chance.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -38,7 +39,13 @@ from queue import Empty, Full, Queue
 from typing import Any
 
 from blastradius import schema
-from blastradius.hydra_client import HydraClient
+from blastradius.hydra_client import (
+    DEFAULT_GRAPH,
+    DEFAULT_HTTP,
+    DEFAULT_NAMESPACE,
+    DEFAULT_TOKEN,
+    HydraClient,
+)
 from blastradius.ids import IdAllocator
 from blastradius.pkg.identity import package_key, version_key
 from blastradius.pkg.registry import RegistryClient
@@ -170,7 +177,19 @@ class LiveState:
 
     def __init__(self) -> None:
         self.bus = Bus()
-        self.client = HydraClient()
+        # Mirrors the top-level `client` in ui/server.py -- unqualified
+        # `HydraClient()` defaults to 127.0.0.1, which is only ever correct
+        # for local dev. In docker-compose, this process and hydradb are
+        # separate containers, and 127.0.0.1 here means "myself," not "the
+        # sibling container" -- every ingest, watch and simulation call
+        # through this class silently failed to connect there until this
+        # read the same HYDRA_HTTP the rest of the app already does.
+        self.client = HydraClient(
+            base_url=os.environ.get("HYDRA_HTTP", DEFAULT_HTTP),
+            token=os.environ.get("HYDRA_TOKEN", DEFAULT_TOKEN),
+            namespace=os.environ.get("HYDRA_NAMESPACE", DEFAULT_NAMESPACE),
+            graph=os.environ.get("HYDRA_GRAPH", DEFAULT_GRAPH),
+        )
         self.ids = IdAllocator()
         self.registry = RegistryClient()
 
