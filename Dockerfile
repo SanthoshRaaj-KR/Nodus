@@ -2,9 +2,11 @@
 
 FROM python:3.11-slim
 
-# Node.js 18+ is required to run scanner/scan.mjs via ts-morph.
+# Node.js 18+ is required to run scanner/scan.mjs via ts-morph. git is
+# required by the repo picker's "add from GitHub" flow (ui/live.py shells
+# out to `git clone`).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl gnupg \
+    && apt-get install -y --no-install-recommends curl gnupg git \
     && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
