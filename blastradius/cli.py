@@ -274,7 +274,11 @@ def cmd_up(args) -> int:
 
     print()
     try:
-        node.up(verbose=True)
+        node.up(
+            verbose=True,
+            cloud="aws" if args.aws else "local",
+            aws_profile=args.aws_profile,
+        )
     except node.NodeError as exc:
         print(RED(f"\n{exc}\n"), file=sys.stderr)
         return 2
@@ -870,6 +874,20 @@ def main(argv: list[str] | None = None) -> int:
     doctor.set_defaults(func=cmd_doctor)
 
     up = sub.add_parser("up", help="start the HydraDB container")
+    up.add_argument(
+        "--aws", action="store_true",
+        help=(
+            "use HydraDB's S3 backend instead of the local-filesystem one -- "
+            "needed for a second ingest that shares a package version with "
+            "the first, since the local backend cannot update an existing "
+            "node. Writes to the same bucket the hosted deployment uses; "
+            "needs an AWS CLI profile configured on this machine."
+        ),
+    )
+    up.add_argument(
+        "--aws-profile", default="default",
+        help="AWS CLI profile to use with --aws (default: %(default)s)",
+    )
     up.set_defaults(func=cmd_up)
 
     dn = sub.add_parser("down", help="stop the container, keep the data")

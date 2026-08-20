@@ -19,6 +19,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 IMAGE = "ghcr.io/hydra-db/hydradb:latest"
 CONTAINER = "hydradb"
@@ -31,7 +32,14 @@ ADMIN = "http://127.0.0.1:9090"
 #: node then fails on its first storage write.
 IMAGE_UID = "10001:10001"
 
-RUN_ARGS = [
+#: Matches docker-compose.yml's hosted deployment -- the bucket the live site
+#: at the Caddy-fronted host reads and writes. `up(cloud="aws")` points local
+#: dev at this same bucket rather than a separate one: opt in deliberately,
+#: since every write from a local run becomes visible on the hosted site.
+AWS_BUCKET_NAME = "blastradius-hydradb"
+AWS_DEFAULT_REGION = "ap-south-2"
+
+_COMMON_ARGS = [
     # Docker Desktop stops containers when it pauses, updates, or hits its
     # resource-saver idle timeout, and it does so with a clean SIGTERM -- the
     # node exits 0 and stays down. Everything then fails at once with no
@@ -42,9 +50,6 @@ RUN_ARGS = [
     "-p", "7687:7687",
     "-p", "8443:8443",
     "-p", "9090:9090",
-    "-v", f"{VOLUME}:/data",
-    "-e", "CLOUD_PROVIDER=local",
-    "-e", "LOCAL_PATH=/data/store",
     "-e", "GRAPH_NAMESPACE=default",
     "-e", "GRAPH_ID=default",
     "-e", "GRAPH_CELL_ID=cell-0",
@@ -57,6 +62,38 @@ RUN_ARGS = [
     "-e", "GRAPH_ALLOW_PLAINTEXT=true",
     "-e", "RUST_MIN_STACK=33554432",
 ]
+
+
+def _run_args(cloud: str, aws_profile: str) -> list[str]:
+    """Container flags for `docker run`, split by storage backend.
+
+    `local` writes to the named volume through HydraDB's own local-filesystem
+    object store, which does not implement the update-in-place write a `MERGE`
+    onto an existing node needs -- fine for a from-empty ingest, but it means
+    a *second* ingest that shares even one package version with the first
+    fails outright. `aws` routes through S3 instead, which does support that
+    write, at the cost of needing real AWS credentials and writing to whatever
+    bucket is configured -- here, the same one the hosted deployment uses.
+    """
+    if cloud == "aws":
+        aws_dir = str(Path.home() / ".aws").replace("\\", "/")
+        return [
+            *_COMMON_ARGS,
+            "-e", "CLOUD_PROVIDER=aws",
+            "-e", f"AWS_BUCKET_NAME={AWS_BUCKET_NAME}",
+            "-e", f"AWS_DEFAULT_REGION={AWS_DEFAULT_REGION}",
+            "-e", f"AWS_PROFILE={aws_profile}",
+            "-e", "AWS_SHARED_CREDENTIALS_FILE=/aws-creds/credentials",
+            "-e", "AWS_CONFIG_FILE=/aws-creds/config",
+            "-v", f"{aws_dir}:/aws-creds:ro",
+            "-v", f"{VOLUME}:/data",
+        ]
+    return [
+        *_COMMON_ARGS,
+        "-v", f"{VOLUME}:/data",
+        "-e", "CLOUD_PROVIDER=local",
+        "-e", "LOCAL_PATH=/data/store",
+    ]
 
 
 class NodeError(RuntimeError):
@@ -140,7 +177,10 @@ def init_volume(verbose: bool = True) -> None:
     )
 
 
-def up(wait: int = 90, verbose: bool = True) -> None:
+def up(
+    wait: int = 90, verbose: bool = True,
+    cloud: str = "local", aws_profile: str = "default",
+) -> None:
     require_daemon()
     if container_state() == "running" and readyz():
         if verbose:
@@ -151,8 +191,11 @@ def up(wait: int = 90, verbose: bool = True) -> None:
     init_volume(verbose)
 
     if verbose:
-        print(f"  starting {CONTAINER}")
-    _docker("run", "-d", "--name", CONTAINER, *RUN_ARGS, IMAGE)
+        if cloud == "aws":
+            print(f"  starting {CONTAINER} against s3://{AWS_BUCKET_NAME} (profile {aws_profile!r})")
+        else:
+            print(f"  starting {CONTAINER}")
+    _docker("run", "-d", "--name", CONTAINER, *_run_args(cloud, aws_profile), IMAGE)
 
     if verbose:
         print("  waiting for readiness", end="", flush=True)
