@@ -115,7 +115,7 @@ thing. Do not restate the whole briefing back at the user.
 If the briefing already answers the question, answer immediately without
 calling a tool. Only reach for tools when you need a detail it does not carry.
 
-Two questions the briefing looks like it answers but does not:
+Questions the briefing looks like it answers but does not:
 
 * **"How do I fix / patch / protect against X?"** -- always call
   `remediation_plan` first. The briefing's `fix` column carries the target
@@ -124,6 +124,33 @@ Two questions the briefing looks like it answers but does not:
   one needs an `overrides` block and will silently ignore an install.
 * **"Can our code reach X?"** -- always call `code_reach`. The briefing's
   reach column is a summary; the imports, functions and routes are not in it.
+* **"Who published / released this? Who is the maintainer behind it? Where did
+  it come from?"** -- call `package_provenance`. The briefing carries no
+  publisher, maintainer or repository data at all. Never answer a provenance
+  question from the briefing, and never say this graph has no provenance --
+  it has, on its own edges, and that tool is how you read them.
+* **"Who published the malicious/compromised package?"** with no package
+  named -- the `kind` column tells you which rows are compromised. Call
+  `package_provenance` on that exact version. If it comes back
+  `publisher_known: false`, also call `publish_anomalies`, which finds
+  releases across the whole repository that were pushed by an account that is
+  not a listed maintainer. Report what each one actually is.
+
+## Provenance, and how not to overclaim it
+
+Three answers are distinct here and blurring them is the failure mode:
+
+* **Recorded.** A publishing account is on the artifact. Name it.
+* **Not recorded.** `publisher_known: false` -- the registry metadata for that
+  version was never fetched. Say "not recorded for this version", offer who
+  holds publish rights on the package if the tool returned any, and say the
+  ingest can be re-run with metadata. Do NOT name anybody, and do NOT say the
+  graph cannot answer provenance questions in general.
+* **Recorded, and irregular.** PUBLISHER_NOT_MAINTAINER means the account that
+  pushed it is not on the maintainer list. Name the account and the signal,
+  and say plainly that this is equally the shape of a bot release, an OIDC/CI
+  publish or a former maintainer. It is a lead to investigate and a credential
+  to consider rotating -- never an accusation, and never "the attacker".
 
 ## The current situation
 
@@ -261,6 +288,41 @@ def build_tools(scope: Scope, cfg: ChatConfig) -> list:
         return _shrink(T.attack_frontier(scope, spec))
 
     @function_tool
+    def package_provenance(spec: str) -> str:
+        """WHO published one exact version, and who else can publish that package.
+
+        The answer to "who released this", "who is the maintainer behind it",
+        "whose account pushed the compromised version". Returns the publishing
+        account, the listed maintainers, the source repository, and any
+        incident filed against the artifact.
+
+        `publisher_known: false` means the registry metadata for that version
+        was never fetched. That is "not recorded", NOT "published
+        anonymously" -- never name anybody in that case.
+
+        Args:
+            spec: Exact `name@version`.
+        """
+        return _shrink(T.package_provenance(scope, spec))
+
+    @function_tool
+    def publish_anomalies(package: str = "", limit: int = 12) -> str:
+        """Which releases here were pushed in a suspicious way, and by which account.
+
+        Use for "who published the malicious package" when no package is
+        named. Reports publish-time signals over this repository's packages --
+        most importantly PUBLISHER_NOT_MAINTAINER, an account that pushed a
+        version while not being a listed maintainer.
+
+        Every row is INVESTIGATE. None of them says a package is malicious.
+
+        Args:
+            package: Optional package name to narrow to. Empty means all.
+            limit: How many rows to return, at most 40.
+        """
+        return _shrink(T.publish_anomalies(scope, package, limit))
+
+    @function_tool
     def service_profile(service: str) -> str:
         """One service: how many packages it has, its direct dependencies, and what is wrong with it.
 
@@ -296,6 +358,8 @@ def build_tools(scope: Scope, cfg: ChatConfig) -> list:
         dependency_path,
         remediation_plan,
         attack_frontier,
+        package_provenance,
+        publish_anomalies,
         service_profile,
         search_advisories,
         fleet_overview,

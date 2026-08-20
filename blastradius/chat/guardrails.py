@@ -33,7 +33,14 @@ from dataclasses import dataclass
 from agents import GuardrailFunctionOutput, input_guardrail
 
 from .config import ChatConfig, config
-from .tools import Scope, _scoped_threats, advisory_facts, split_spec, workspace_packages
+from .tools import (
+    Scope,
+    _scoped_threats,
+    advisory_facts,
+    cached_publish_specs,
+    split_spec,
+    workspace_packages,
+)
 
 #: What the agent says when it declines. Names what it *can* do, because a
 #: bare refusal teaches the user nothing about where the edge is.
@@ -234,11 +241,14 @@ _SPEC = re.compile(r"(?<![\w@/-])(@?[a-z0-9][\w.-]*(?:/[\w.-]+)?)@(\d[\w.-]*)", 
 def known_specs(scope: Scope) -> set[str]:
     """Every `name@version` this repository can legitimately be told about.
 
-    Three sources, because a correct answer names more than what is installed:
+    Four sources, because a correct answer names more than what is installed:
     the versions the lockfiles resolved, the versions advisories say are
-    affected, and the fixed versions a remediation is supposed to recommend.
-    Leaving the last two out would flag `upgrade to fastify@5.7.2` -- the right
-    answer -- as an invention.
+    affected, the fixed versions a remediation is supposed to recommend, and
+    the releases the publish-history tool reported. Leaving the third out
+    would flag `upgrade to fastify@5.7.2` -- the right answer -- as an
+    invention; leaving the fourth out does the same to
+    `fast-json-stringify@7.0.0 was published by fdawgs`, which is a fact this
+    repository's own tool produced about a version it does not resolve.
     """
     out = {
         f"{row['name']}@{row['version']}".lower()
@@ -257,6 +267,7 @@ def known_specs(scope: Scope) -> set[str]:
             entry.get("affected_versions") or []
         ):
             out.add(f"{name}@{version}".lower())
+    out |= cached_publish_specs(scope)
     return out
 
 

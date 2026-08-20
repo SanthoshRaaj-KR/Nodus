@@ -131,8 +131,13 @@ def build(scope: Scope) -> Briefing:
 
     if shown:
         lines.append("")
-        lines.append("  spec                          sev       reach  fix             services")
-        lines.append("  ----------------------------  --------  -----  --------------  --------")
+        # `kind` is carried because it is the only column that separates a
+        # known CVE from a tampered artifact, and those are different
+        # incidents. Without it, "which one is the compromised package" costs
+        # a `list_threats` round trip to answer from a table already in the
+        # prompt -- and a model that guesses instead names the wrong one.
+        lines.append("  spec                          kind         sev       reach  fix             services")
+        lines.append("  ----------------------------  -----------  --------  -----  --------------  --------")
         for threat in shown:
             reach = "yes" if threat["in_code"] else (
                 "?" if not overview["code_graph_ingested"] else "no"
@@ -148,7 +153,8 @@ def build(scope: Scope) -> Briefing:
             names = threat.get("services") or []
             who = ", ".join(names) if len(names) <= 2 else f"{len(names)} services"
             lines.append(
-                f"  {threat['spec'][:28]:<28}  {threat.get('severity','')[:8]:<8}  "
+                f"  {threat['spec'][:28]:<28}  {threat.get('kind','')[:11]:<11}  "
+                f"{threat.get('severity','')[:8]:<8}  "
                 f"{reach:<5}  {fix[:14]:<14}  {who}"
             )
         if omitted:
@@ -184,6 +190,14 @@ def _suggestions(overview: dict, threats: list[dict]) -> list[str]:
     if threats:
         worst = threats[0]
         out.append(f"How do I fix {worst['spec']}?")
+        # Offered only where there is a tampered artifact to ask it about, on
+        # the same rule as the rest of this function: a starter question the
+        # repository cannot answer demonstrates the opposite of what it should.
+        compromised = next(
+            (t for t in threats if (t.get("kind") or "") == "compromised"), None
+        )
+        if compromised is not None:
+            out.append(f"Who published {compromised['spec']}?")
         out.append(f"Which services are exposed to {worst['spec']}?")
         if overview["code_graph_ingested"]:
             out.append(f"Does our code actually call {worst['spec']}?")

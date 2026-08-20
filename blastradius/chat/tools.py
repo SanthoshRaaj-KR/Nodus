@@ -1012,6 +1012,419 @@ def attack_frontier(scope: Scope, spec: str) -> dict:
     }
 
 
+# --------------------------------------------------------------------------
+# provenance -- who pushed the artifact, and who else could have
+# --------------------------------------------------------------------------
+#
+# Every other tool here reads the two dependency tiers: what is installed, and
+# what the code reaches. Neither can answer the first question anybody asks
+# about a compromise -- *whose account published this?* -- because that lives
+# on a third set of edges the ingest writes from registry metadata:
+#
+#     PackageVersion --PUBLISHED_BY-->  PublisherIdentity   pushed THIS artifact
+#     Package        --MAINTAINED_BY--> Maintainer          COULD push one
+#     PackageVersion --SOURCED_FROM-->  Repository          whose CI builds it
+#
+# Two honesty rules run through the tools below, and both of them cost answers.
+#
+# **A missing publisher is "not recorded", never "nobody".** Metadata is
+# fetched per package and an ingest run with --no-metadata skips it entirely,
+# so an empty result means the registry was never asked. Returned as
+# `publisher_known: false` with the reason attached, because an empty list
+# reads to a model as a finding and this one is an absence of data.
+#
+# **The account that published is not thereby the attacker.** A publisher
+# outside the package's own maintainer list is the signature of a stolen
+# token. It is also what every OIDC release, every bot and every former
+# maintainer looks like. Reported as a lead, with the wording that says so.
+
+
+def _publisher_rows(scope: Scope, version_id: int) -> list[dict]:
+    """The accounts recorded against one exact artifact."""
+    return [
+        {"username": _clean(r.get("username")), "email": _clean(r.get("email"))}
+        for r in scope.client.query(
+            f"MATCH (v:{schema.PACKAGE_VERSION} {{id: $id}})"
+            f"-[:{schema.PUBLISHED_BY}]->(p:{schema.PUBLISHER}) "
+            "RETURN p.username AS username, p.email AS email ORDER BY username",
+            {"id": version_id},
+        ).rows
+    ]
+
+
+def _maintainer_rows(scope: Scope, package_id: int) -> list[dict]:
+    """The accounts holding publish rights on the package name."""
+    return [
+        {"username": _clean(r.get("username")), "email": _clean(r.get("email"))}
+        for r in scope.client.query(
+            f"MATCH (p:{schema.PACKAGE} {{id: $id}})"
+            f"-[:{schema.MAINTAINED_BY}]->(m:{schema.MAINTAINER}) "
+            "RETURN m.username AS username, m.email AS email ORDER BY username",
+            {"id": package_id},
+        ).rows
+    ]
+
+
+def _pkg_ids(scope: Scope, name: str, version: str) -> tuple:
+    """(version id, package id) out of the local id map, or (None, None)."""
+    from blastradius.pkg.identity import package_key, version_key
+
+    try:
+        return (
+            scope.ids.lookup(schema.PACKAGE_VERSION, version_key(name, version)),
+            scope.ids.lookup(schema.PACKAGE, package_key(name)),
+        )
+    except InvalidPackageName:
+        return None, None
+
+
+def package_provenance(scope: Scope, spec: str) -> dict:
+    """Who published one exact version, and who else holds publish rights.
+
+    Reports the publishing account, the accounts listed as maintainers, the
+    source repository, any incident filed against the artifact, and -- when
+    this exact version carries no publisher record -- the accounts that pushed
+    the package's *other* versions. That last one is still an answer to "whose
+    credentials could have done this" on a version the ingest never enriched.
+
+    Nothing here is a verdict; see the section comment above for why.
+    """
+    name, version = split_spec(spec)
+    if not version:
+        resolved = resolve_package(scope, spec)
+        if len(resolved["matches"]) != 1:
+            return {
+                "spec": spec,
+                "found": False,
+                "suggestions": [m["spec"] for m in resolved["matches"][:6]],
+                "note": "Needs an exact name@version to trace provenance."
+                        + ("" if resolved["matches"] else
+                           f" Nothing matching {spec!r} is resolved by "
+                           f"{scope.workspace.label}."),
+            }
+        name, version = split_spec(resolved["matches"][0]["spec"])
+
+    held = {(r["name"], r["version"]) for r in workspace_packages(scope)}
+    if (name, version) not in held:
+        return {
+            "spec": f"{name}@{version}",
+            "found": False,
+            "note": f"No service in {scope.workspace.label} resolves "
+                    f"{name}@{version}, so this chatbot holds no provenance "
+                    "for it.",
+        }
+
+    version_id, package_id = _pkg_ids(scope, name, version)
+    if version_id is None:
+        return {
+            "spec": f"{name}@{version}",
+            "found": False,
+            "note": f"{name}@{version} has no node in the graph's id map.",
+        }
+
+    from blastradius.pkg.identity import is_service_identity
+
+    try:
+        publishers = _publisher_rows(scope, version_id)
+        maintainers = _maintainer_rows(scope, package_id) if package_id else []
+        repos = scope.client.query(
+            f"MATCH (v:{schema.PACKAGE_VERSION} {{id: $id}})"
+            f"-[:{schema.SOURCED_FROM}]->(r:{schema.REPOSITORY}) "
+            "RETURN r.url AS url ORDER BY url",
+            {"id": version_id},
+        ).rows
+        node = scope.client.query(
+            f"MATCH (v:{schema.PACKAGE_VERSION} {{id: $id}}) "
+            "RETURN v.published_at AS published_at, "
+            "v.has_install_script AS has_install_script",
+            {"id": version_id},
+        ).rows
+        # Pinned on the *target*, because the ingest writes COMPROMISES and
+        # not its inverse -- walking back from the version finds nothing.
+        incidents = scope.client.query(
+            f"MATCH (i:{schema.INCIDENT})-[:{schema.COMPROMISES}]->"
+            f"(v:{schema.PACKAGE_VERSION} {{id: $id}}) "
+            "RETURN i.incident_id AS incident_id, i.status AS status, "
+            "i.summary AS summary",
+            {"id": version_id},
+        ).rows
+        siblings = scope.client.query(
+            f"MATCH (p:{schema.PACKAGE} {{id: $id}})"
+            f"-[:{schema.HAS_VERSION}]->(v:{schema.PACKAGE_VERSION})"
+            f"-[:{schema.PUBLISHED_BY}]->(q:{schema.PUBLISHER}) "
+            "RETURN v.version AS version, q.username AS username "
+            "ORDER BY username",
+            {"id": package_id},
+        ).rows if package_id else []
+    except HydraError as exc:
+        return {
+            "spec": f"{name}@{version}",
+            "found": False,
+            "note": f"the graph could not be read: {exc}",
+        }
+
+    maintainer_names = [m["username"] for m in maintainers if m["username"]]
+    listed = set(maintainer_names)
+
+    published_by = []
+    for row in publishers:
+        who = row["username"]
+        published_by.append({
+            "username": who,
+            "email": row["email"],
+            "is_listed_maintainer": who in listed,
+            # `GitHub Actions` / npm-oidc-no-reply is stamped on every artifact
+            # pushed through trusted publishing, so it names a pipeline rather
+            # than a person. Same rule the frontier uses, for the same reason:
+            # treating it as a credential to rotate is a category error.
+            "is_automation": is_service_identity(who, row["email"]),
+        })
+
+    # Who else has pushed this package. The fallback for a version whose own
+    # publisher edge was never written -- distinct accounts, each with the
+    # versions that witness them.
+    others: dict = {}
+    for row in siblings:
+        who = _clean(row.get("username"))
+        found_version = _clean(row.get("version"))
+        if not who or found_version == version:
+            continue
+        others.setdefault(who, []).append(found_version)
+
+    install_script = bool(_clean(node[0].get("has_install_script"), 0)) if node else False
+
+    signals: list[str] = []
+    for entry in published_by:
+        if entry["is_automation"]:
+            signals.append(
+                f"{entry['username']} is a CI/OIDC publishing identity rather "
+                "than a person -- it names the pipeline that pushed the "
+                "artifact, not an account to rotate."
+            )
+        elif maintainer_names and not entry["is_listed_maintainer"]:
+            signals.append(
+                f"PUBLISHER_NOT_MAINTAINER: {entry['username']} pushed this "
+                "version but is not among the listed maintainers "
+                f"({', '.join(maintainer_names[:6])}). That is the shape of a "
+                "stolen publish token, and also of a routine release by a bot "
+                "or a former maintainer. INVESTIGATE, not a verdict."
+            )
+    if install_script:
+        signals.append(
+            "This version runs an install script, so installing it executes "
+            "code before anything imports it."
+        )
+
+    return {
+        "spec": f"{name}@{version}",
+        "found": True,
+        "publisher_known": bool(published_by),
+        "published_by": published_by,
+        "maintainers": maintainer_names,
+        "source_repository": _clean(repos[0].get("url")) if repos else "",
+        "published_at": _clean(node[0].get("published_at"), 0) if node else 0,
+        "has_install_script": install_script,
+        "incident": [
+            {
+                "incident_id": _clean(i.get("incident_id")),
+                "status": _clean(i.get("status")),
+                "summary": _clean(i.get("summary")),
+            }
+            for i in incidents
+        ],
+        "other_publishers_of_this_package": [
+            {"username": who, "versions": sorted(versions)[:4]}
+            for who, versions in sorted(others.items())
+        ][:8],
+        "signals": signals,
+        "note": (
+            ""
+            if published_by
+            else (
+                f"No publishing account is recorded for {name}@{version}. The "
+                "registry metadata for this version was never fetched -- an "
+                "ingest run without it, or a version added by a simulation -- "
+                "which is NOT the same as it having been published "
+                "anonymously. Say 'not recorded' rather than naming anybody. "
+                "The accounts under `other_publishers_of_this_package` are who "
+                "holds publish rights on the package name, which is the "
+                "nearest real answer; offer those instead if there are any."
+            )
+        ),
+    }
+
+
+def publish_anomalies(scope: Scope, package: str = "", limit: int = 12) -> dict:
+    """Which releases in this repository were pushed in a suspicious way.
+
+    The unprompted half of provenance: `package_provenance` answers "who
+    pushed *this*", and this answers "which of our packages was pushed by
+    somebody who should not have pushed it". It is what a question like *who
+    published the malicious package* actually wants when no package is named.
+
+    Read from the **registry metadata cache, never the network**. The signals
+    are about publish *history* -- when versions appeared, who pushed them,
+    what changed between consecutive releases -- and the graph stores the
+    current state of each version rather than the sequence. Offline is not a
+    fallback here, it is the mode: a chat question must never fan out hundreds
+    of registry reads, and a cached answer is also a reproducible one.
+
+    Packages the cache has never seen are counted and named as *unassessed*
+    rather than dropped. A package nobody could read is not a package with
+    nothing to report, and that distinction is the whole rule of this module.
+    """
+    from blastradius.pkg.anomaly import Signal
+
+    wanted = (package or "").strip().lower()
+    try:
+        found = _publish_signals(scope)
+    except Exception as exc:  # a cold cache must not fail the question
+        return {
+            "package": package,
+            "signals": [],
+            "note": f"publish history could not be read: {type(exc).__name__}: {exc}",
+        }
+
+    rows = found["signals"]
+    if wanted:
+        name = split_spec(wanted)[0] if "@" in wanted[1:] else wanted
+        rows = [r for r in rows if r["package"].lower() == name]
+
+    # Publisher-not-maintainer first: it is the only signal here that names an
+    # account which had no business pushing the artifact, which is what makes
+    # it the answer to the question rather than context for it.
+    order = {
+        Signal.PUBLISHER_NOT_MAINTAINER: 0,
+        Signal.INSTALL_SCRIPT_ADDED: 1,
+        Signal.REPOSITORY_CHANGED: 2,
+        Signal.REPOSITORY_REMOVED: 3,
+        Signal.DORMANCY_BREAK: 4,
+        Signal.PUBLISH_BURST: 5,
+    }
+    rows = sorted(rows, key=lambda r: (order.get(r["signal"], 9), r["package"]))
+    shown, omitted = _cap(rows, max(1, min(int(limit or 12), 40)))
+
+    return {
+        "package": package,
+        "packages_assessed": found["assessed"],
+        "packages_unassessed": found["unassessed"][:8],
+        "count": len(rows),
+        "signals": shown,
+        "omitted": omitted,
+        "correlated_bursts": found["bursts"],
+        "note": (
+            "Every row is a publish-time observation at INVESTIGATE "
+            "confidence. None of them says a package is malicious -- "
+            "PUBLISHER_NOT_MAINTAINER in particular is equally the shape of a "
+            "bot release and of a stolen token. Name the account and the "
+            "signal; do not call it an attacker."
+            + (
+                f" {len(found['unassessed'])} package(s) are not in the "
+                "metadata cache and were not assessed at all, so this list is "
+                "not exhaustive."
+                if found["unassessed"] else ""
+            )
+        ),
+    }
+
+
+#: (workspace id, sorted package names) -> the publish-history report.
+#:
+#: Keyed by the package set rather than the graph's read epoch, because the
+#: input is the on-disk registry cache and that moves only on an ingest --
+#: an epoch key would rebuild this on every unrelated write.
+_publish_cache: dict = {}
+
+
+def _publish_signals(scope: Scope) -> dict:
+    """Publish-time signals over this workspace's packages, computed once.
+
+    Roughly 1.8s cold over ~500 packages, all of it reading and parsing cached
+    packuments; a few milliseconds warm. Cheap enough to do inside a question,
+    expensive enough that doing it per question would be felt.
+    """
+    from blastradius.pkg.anomaly import analyse_correlated_burst, analyse_package
+    from blastradius.pkg.registry import RegistryClient
+
+    names = sorted({r["name"] for r in workspace_packages(scope)})
+    key = (scope.workspace.id, tuple(names))
+    with _lock:
+        if key in _publish_cache:
+            return _publish_cache[key]
+
+    missing: list[str] = []
+    registry = RegistryClient(offline=True)
+    packuments = registry.packuments(
+        names, full=True, on_error=lambda n, exc: missing.append(n)
+    )
+
+    rows: list[dict] = []
+    for packument in packuments.values():
+        for signal in analyse_package(packument):
+            rows.append({
+                "signal": signal.signal,
+                "package": signal.package,
+                "version": signal.version,
+                "spec": f"{signal.package}@{signal.version}",
+                "detail": signal.detail,
+                "witness": signal.witness,
+            })
+
+    bursts = [
+        {
+            "account": burst.identity,
+            "packages": burst.package_count,
+            "artifacts": burst.artifact_count,
+            "minutes": round(burst.span_seconds / 60, 1),
+            # A burst confined to one scope or one repository is a monorepo
+            # releasing; volume alone does not separate a worm from a release.
+            "verdict": burst.verdict,
+            "explanation": burst.explain(),
+        }
+        for burst in analyse_correlated_burst(list(packuments.values()))
+    ][:6]
+
+    report = {
+        "signals": rows,
+        "bursts": bursts,
+        "assessed": len(packuments),
+        "unassessed": sorted(missing),
+    }
+    with _lock:
+        _publish_cache[key] = report
+    return report
+
+
+def cached_publish_specs(scope: Scope) -> set:
+    """Specs the publish-history tool has already reported, read never built.
+
+    Feeds the grounding audit. These versions are real facts about real
+    packages -- `fast-json-stringify@7.0.0` was genuinely published by an
+    account outside the maintainer list -- but they are versions this
+    repository does not *resolve*, so without this the audit reports the
+    tool's own output back as an invention.
+
+    Deliberately does not build the report. The audit runs on every answer and
+    a cold build is ~2s, which would land on the first question of every
+    conversation; an answer can only name one of these if `publish_anomalies`
+    ran during the turn, and that leaves the cache warm behind it.
+    """
+    names = sorted({r["name"] for r in workspace_packages(scope)})
+    with _lock:
+        report = _publish_cache.get((scope.workspace.id, tuple(names)))
+    if not report:
+        return set()
+
+    out = {str(row["spec"]).lower() for row in report["signals"]}
+    for burst in report["bursts"]:
+        # The burst rows name the versions inside the window in their prose,
+        # and an answer quoting one is quoting the tool.
+        for token in str(burst.get("explanation", "")).split():
+            if "@" in token[1:]:
+                out.add(token.strip(".,;:()[]").lower())
+    return out
+
+
 def service_profile(scope: Scope, service: str) -> dict:
     """One service: what it depends on, and what is wrong with it."""
     if not scope.owns(service):
@@ -1105,4 +1518,5 @@ def clear_caches() -> None:
         _index_cache = (None, None)
         _packages_cache.clear()
         _threats_cache.clear()
+        _publish_cache.clear()
         _advisory_cache = None
