@@ -223,6 +223,25 @@ stops the auto-fit from fighting you on resize.
 
 ![Phone width](docs/screens/mobile.png)
 
+### The redesigned console (`/console`)
+
+A React rebuild of this same Explorer lives in `ui/web` (Vite + React 18).
+`npm run build` there compiles into `ui/static/app`, which `server.py` already
+mounts; the build output is gitignored on purpose (see `.gitignore`) so a
+stale bundle can never silently outrank the source it was built from. Until
+that build has been run once in a given checkout, `GET /console` falls back
+to the standalone `ui/static/console.html` rather than 404ing.
+
+Two gaps worth knowing about before demoing off this branch:
+
+- **`/api/repos` has no backend yet.** `ui/web/src/lib/api.js` already says so
+  in a comment — the Repos view degrades to `localStorage` and states that
+  rather than faking a queue.
+- **`frontier`, `anomalies`, and `scale`** (the CLI surfaces this branch adds —
+  see `python -m blastradius.pkg.cli --help`) are not exposed through
+  `ui/server.py` or either console yet. They're CLI-only for now; wiring them
+  up is follow-up work, not something this merge attempted.
+
 ### Making it fast
 
 Measured rather than guessed, and the answer was not where it looked:
