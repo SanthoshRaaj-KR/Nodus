@@ -47,6 +47,30 @@ from .identity import normalize_name, normalize_repo_url
 __all__ = ["RegistryClient", "RegistryError", "PackumentSummary", "VersionSummary"]
 
 REGISTRY = "https://registry.npmjs.org"
+
+#: Where a private or proxied registry is configured, if anywhere. Read from
+#: the environment rather than a flag so that every entry point -- CLI,
+#: pipeline, watcher, UI -- picks it up without each growing its own option.
+#:
+#: An internal registry is the case this tool was previously blind to: it
+#: publishes nothing to the public replication feed, so the live watcher could
+#: not see internal packages at all, and an ingest resolved their metadata
+#: against npmjs.org, where they do not exist.
+ENV_REGISTRY = "BLASTRADIUS_REGISTRY"
+ENV_TOKEN = "BLASTRADIUS_REGISTRY_TOKEN"
+
+
+def default_registry() -> str:
+    """The configured registry, or the public one."""
+    import os
+
+    return (os.environ.get(ENV_REGISTRY) or REGISTRY).rstrip("/")
+
+
+def default_token() -> str:
+    import os
+
+    return os.environ.get(ENV_TOKEN, "")
 ABBREVIATED = "application/vnd.npm.install-v1+json"
 DEFAULT_CACHE = Path(__file__).resolve().parents[2] / "data" / "registry-cache"
 
@@ -116,7 +140,26 @@ class RegistryClient:
         concurrency: int = 12,
         user_agent: str = "blast-radius-graph/2.0 (supply-chain research)",
         offline: bool = False,
+        registry: str | None = None,
+        token: str | None = None,
     ):
+        #: Base URL for every read. Defaults to whatever the environment
+        #: configures, which is the public registry unless told otherwise.
+        self.registry = (registry or default_registry()).rstrip("/")
+        #: Bearer token for a registry that needs one. Never logged, and not
+        #: part of the cache key -- see `_cache_path`.
+        self.token = token if token is not None else default_token()
+        #: Download counts come from a different host on npm (api.npmjs.org,
+        #: not registry.npmjs.org) and generally do not exist at all on a
+        #: private registry. Derived rather than assumed, and the typosquat
+        #: check already treats an unknown download count as unknown rather
+        #: than zero -- so a private registry loses popularity asymmetry and
+        #: says so, instead of reporting every internal package as unpopular.
+        self.downloads_base = (
+            self.registry.replace("registry.", "api.", 1)
+            if "registry.npmjs.org" in self.registry
+            else self.registry
+        )
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.timeout = timeout
@@ -134,6 +177,10 @@ class RegistryClient:
     # -- transport ---------------------------------------------------------
 
     def _cache_path(self, url: str, accept: str) -> Path:
+        # The URL already carries the registry host, so switching registries
+        # cannot collide on a cache entry. The token is deliberately NOT in
+        # the key: it is a credential, it rotates, and keying on it would
+        # invalidate the whole cache every time somebody refreshed one.
         digest = hashlib.sha256(f"{accept}|{url}".encode()).hexdigest()[:32]
         return self.cache_dir / f"{digest}.json.gz"
 
@@ -168,6 +215,11 @@ class RegistryClient:
         headers = {"User-Agent": self.user_agent, "Accept-Encoding": "gzip"}
         if accept:
             headers["Accept"] = accept
+        # Only ever sent to the configured registry. A token belonging to an
+        # internal registry must not travel to npmjs.org because a package
+        # happened to resolve there.
+        if self.token and url.startswith(self.registry):
+            headers["Authorization"] = f"Bearer {self.token}"
 
         last: Exception | None = None
         for attempt in range(3):
@@ -220,7 +272,7 @@ class RegistryClient:
         that did not exist when the document was last cached.
         """
         canonical = normalize_name(name)
-        url = f"{REGISTRY}/{urllib.parse.quote(canonical, safe='@')}"
+        url = f"{self.registry}/{urllib.parse.quote(canonical, safe='@')}"
         raw = self._get_json(url, None if full else ABBREVIATED, refresh=refresh)
         return self._reduce(canonical, raw, full)
 
@@ -340,7 +392,7 @@ class RegistryClient:
         while offset < limit:
             size = min(page_size, limit - offset)
             url = (
-                f"{REGISTRY}/-/v1/search?text=maintainer:"
+                f"{self.registry}/-/v1/search?text=maintainer:"
                 f"{urllib.parse.quote(username)}&size={size}&from={offset}"
             )
             try:
@@ -381,7 +433,7 @@ class RegistryClient:
 
         for i in range(0, len(unscoped), 128):
             chunk = unscoped[i : i + 128]
-            url = f"{REGISTRY.replace('registry', 'api')}/downloads/point/last-week/{','.join(chunk)}"
+            url = f"{self.downloads_base}/downloads/point/last-week/{','.join(chunk)}"
             try:
                 payload = self._get_json(url)
             except RegistryError:

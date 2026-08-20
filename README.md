@@ -163,6 +163,36 @@ explorer. Keeping them apart means the demo surface can be restarted or
 re-skinned without touching what other tools depend on, and it reads HydraDB
 directly rather than proxying — one fewer moving part to fail on stage.
 
+### Pointing at a private registry
+
+Three environment variables, picked up by every entry point — CLI, pipeline,
+watcher, UI — so none of them grows its own flag:
+
+```bash
+export BLASTRADIUS_REGISTRY=https://npm.internal.example
+export BLASTRADIUS_REGISTRY_TOKEN=...        # optional, sent to that host only
+export BLASTRADIUS_CHANGES_URL=https://npm.internal.example/_changes
+```
+
+The token is sent **only** to the configured registry — a credential for an
+internal registry must not travel to npmjs.org because a package happened to
+resolve there, and a test asserts both directions. It is deliberately not part
+of the cache key: it rotates, and keying on it would discard the whole cache
+each time.
+
+The watcher is the piece a private registry does not simply fall in behind.
+Ingest reads package documents and any registry serves those; the watcher needs
+a *firehose*, and CouchDB `_changes` is npm-specific — Artifactory, Verdaccio
+and Nexus each expose something different or nothing. Set `BLASTRADIUS_CHANGES_URL`
+if yours has one. Either way `/api/live/status` reports `registry`, `changes_url`
+and `public_feed`, so a console that is tailing npmjs.org while you believe it
+is watching your internal registry says so.
+
+Download counts are npm-only (`api.npmjs.org`), so a private registry loses
+popularity data. Typosquat detection already treats an unknown download count as
+unknown rather than zero, so internal packages are not reported as unpopular —
+they are reported as unassessed.
+
 ### Scoping a scan: `.blastradiusignore`
 
 Discovery is a recursive walk for `package-lock.json`, and a walk cannot tell a

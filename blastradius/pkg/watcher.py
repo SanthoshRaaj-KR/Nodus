@@ -63,6 +63,25 @@ __all__ = [
 
 CHANGES_URL = "https://replicate.npmjs.com/_changes"
 
+#: A private registry's change feed, when it has one. Most do not: the CouchDB
+#: replication endpoint is an npm-specific thing, and Artifactory, Verdaccio
+#: and Nexus each expose something different or nothing at all.
+#:
+#: This is why the watcher is the one part of the tool that a private registry
+#: does not simply fall into place behind. Ingest reads a package document and
+#: any registry can serve one; the watcher needs a *firehose*, and that is not
+#: standardised. Configured explicitly or the watcher stays on public npm and
+#: the status says which -- silently tailing npmjs.org while a user believes
+#: they are watching their internal registry would be the worst of the three
+#: possible behaviours.
+ENV_CHANGES = "BLASTRADIUS_CHANGES_URL"
+
+
+def default_changes_url() -> str:
+    import os
+
+    return os.environ.get(ENV_CHANGES) or CHANGES_URL
+
 #: A version whose publish time is within this window of "now" is treated as a
 #: new publish. The feed does not say what changed, only that something did, so
 #: this is what separates a publish from a deprecation or a dist-tag move.
@@ -152,7 +171,7 @@ class Watcher:
         on_fleet_hit: Callable[[Alert], None] | None = None,
         poll_seconds: float = 5.0,
         batch_limit: int = 200,
-        changes_url: str = CHANGES_URL,
+        changes_url: str | None = None,
     ):
         self.registry = registry or RegistryClient()
         self.ids = ids
@@ -162,7 +181,7 @@ class Watcher:
         self.on_fleet_hit = on_fleet_hit
         self.poll_seconds = poll_seconds
         self.batch_limit = batch_limit
-        self.changes_url = changes_url
+        self.changes_url = changes_url or default_changes_url()
 
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -220,6 +239,12 @@ class Watcher:
             "last_error": self.last_error,
             "buffered_alerts": len(self.alerts),
             "subscribers": len(self._subscribers),
+            # Which registry this is actually watching, always. A user who has
+            # configured an internal registry and is in fact being shown
+            # public npm has been misled by their own tool.
+            "registry": getattr(self.registry, "registry", ""),
+            "changes_url": self.changes_url,
+            "public_feed": self.changes_url == CHANGES_URL,
         }
 
     # -- subscriptions -----------------------------------------------------
