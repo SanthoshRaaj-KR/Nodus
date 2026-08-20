@@ -476,6 +476,47 @@ reading the screen. Tracing is disabled, reasoning effort is `low`, and
 Mini-class models only, and it is checked rather than assumed -- `CHAT_MODEL`
 defaults to `gpt-5.4-mini` and a full-size model is refused with a 503.
 
+### Guardrails
+
+Told only in prose to stay on topic, the agent answered `1+1` with `2` and
+wrote a poem about the sea on request -- while correctly refusing questions
+about heads of state. That is the shape of prompt-only scoping: it holds
+against a different *domain* and gives way to anything that reads as a small
+favour. So there are three layers, cheapest first.
+
+| Layer | Cost | Catches |
+|---|---|---|
+| **1. Patterns** | free, pre-model | `1+1`, "write me a poem", "translate this" |
+| **2. Classifier** | a `gpt-5.4-nano` call, in parallel | "who is the president of France", "center a div in CSS" |
+| **3. Grounding audit** | free, post-answer | any `name@version` the graph has never heard of |
+
+Layer 1 is written to be impossible to false-positive on: every branch
+requires the message to contain *no* supply-chain vocabulary at all, and its
+arithmetic pattern needs digits either side of a real operator -- a dot is not
+an operator, so `4.17.20` can never read as a sum.
+
+Layer 2 runs with the SDK's `run_in_parallel`, so a question that passes costs
+no wall-clock time, and it **fails open**: a classifier outage lets the message
+through to a prompt rule and a grounding audit that both still stand. For a
+scope rule rather than a safety rule, availability beats strictness.
+
+The property that actually breaks a guardrail like this is not letting a poem
+through -- it is refusing *"how bad?"* mid-conversation. A terse follow-up
+carries no vocabulary of its own, so layer 1 never judges it and layer 2 is
+told to allow anything ambiguous. `tests/test_chat_guardrails.py` spends as
+many tests on that as on refusing.
+
+Layer 3 is the anti-hallucination half, and the only one that does not depend
+on the model behaving. Every `name@version` in the answer is checked against
+what the repository actually holds -- installed versions, plus the affected
+and fixed versions advisories name, so recommending `fastify@5.7.2` is not
+mistaken for inventing it. Anything left over is reported to the user rather
+than scrubbed from the text: silently editing the answer would hide the
+failure from the only person able to judge it.
+
+`CHAT_GUARDRAILS=0` turns 1 and 2 off, for seeing what the agent would say
+unscreened. Never for production.
+
 ### What it will not do
 
 The facts come from `blastradius/chat/tools.py`, which is plain Python over
@@ -505,6 +546,7 @@ install silently will not move it.
 tests/test_chat_tools.py       the facts, and the downgrade bug, without a key
 tests/test_chat_workspaces.py  isolation and collision detection
 tests/test_chat_briefing.py    token budget, and that the caveat survives
+tests/test_chat_guardrails.py  staying on subject, and inside the facts
 tests/test_chat_router.py      routing and every failure message
 tests/test_chat_agent_live.py  the model in the loop; skipped with no key
 ```
@@ -808,6 +850,7 @@ blastradius/
     workspaces.py            which Service nodes a chatbot owns -- the isolation
     tools.py                 the graph tools, scoped and capped; no OpenAI import
     briefing.py              the situation pack put in the prompt, cached per epoch
+    guardrails.py            scope screening, and the grounding audit
     agent.py                 the only module that knows OpenAI exists
     router.py                /api/chat/{ref}/... mounted into ui/server.py
     cli.py                   add / list / brief / ask / repl, with timings

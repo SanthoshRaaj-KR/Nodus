@@ -287,3 +287,75 @@ def test_answers_arrive_promptly(scope):
     elapsed = time.perf_counter() - started
     assert not result["error"]
     assert elapsed < 45, f"took {elapsed:.1f}s"
+
+
+# --------------------------------------------------------------------------
+# guardrails, end to end
+# --------------------------------------------------------------------------
+
+
+@needs_key
+@needs_graph
+@pytest.mark.parametrize("question", [
+    "what's 1+1?",
+    "write me a poem about the sea",
+    "who is the president of France?",
+    "help me center a div in CSS",
+])
+def test_off_topic_questions_are_declined(scope, question):
+    """Prompt-only scoping leaked here: it answered 1+1 and wrote the poem.
+
+    It refused questions about heads of state at the same time, which is the
+    tell -- prose scoping holds against a different domain and gives way to
+    anything that reads as a small favour.
+    """
+    result = _ask(scope, question, session="offtopic")
+    assert not result["error"]
+    assert result["refused"], f"should have declined: {result['answer'][:200]}"
+    assert "supply chain" in result["answer"]
+
+
+@needs_key
+@needs_graph
+@pytest.mark.parametrize("question", [
+    "what is vulnerable here?",
+    "which services are affected?",
+    "what should I patch first?",
+])
+def test_real_questions_are_never_declined(scope, question):
+    result = _ask(scope, question, session="ontopic")
+    assert not result["error"]
+    assert not result["refused"], f"wrongly declined: {question}"
+    assert result["answer"].strip()
+
+
+@needs_key
+@needs_graph
+def test_a_terse_followup_is_not_declined(scope):
+    """The failure that makes a guardrail worse than none.
+
+    "how bad?" carries no vocabulary of its own, and refusing it mid-thread
+    would be far more annoying than the poem it was built to stop.
+    """
+    session = f"thread-{uuid.uuid4().hex[:6]}"
+    first = asyncio.run(agent_mod.answer(scope, "what is vulnerable?", session_id=session))
+    assert not first["refused"]
+    for follow_up in ("how bad?", "why?", "and how do I fix that?"):
+        result = asyncio.run(agent_mod.answer(scope, follow_up, session_id=session))
+        assert not result["refused"], f"wrongly declined follow-up: {follow_up}"
+
+
+@needs_key
+@needs_graph
+def test_answers_name_nothing_the_graph_does_not_hold(scope):
+    """The grounding audit, run over real answers rather than fixtures."""
+    for question in (
+        "what is vulnerable?",
+        "what should I patch first, and to which version?",
+        "what is our exposure to left-pad?",
+    ):
+        result = _ask(scope, question, session="grounded")
+        assert not result["error"]
+        assert result["ungrounded"] == [], (
+            f"{question!r} named specs not in the graph: {result['ungrounded']}"
+        )
