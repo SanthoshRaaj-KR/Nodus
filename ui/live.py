@@ -47,15 +47,24 @@ from blastradius.hydra_client import (
     HydraClient,
 )
 
-#: Ingest runs `counts_by_label` -- one COUNT(*) per node label -- as its
-#: last step, and against HydraDB's S3 backend that is measurably slower
-#: than against local-filesystem storage: enough to exceed the client's
-#: default 25s timeout on a label with many rows. Ingest already reports
-#: progress through the job's stage list, so a caller is never staring at a
-#: bare spinner -- there is no UX cost to giving this client more room,
-#: unlike the request-serving client in ui/server.py, which stays at the
-#: default because those reads are meant to feel instant.
-_INGEST_TIMEOUT_MS = int(os.environ.get("HYDRA_INGEST_TIMEOUT_MS", "120000"))
+#: Ingest is slower against HydraDB's S3 backend than against local-filesystem
+#: storage -- enough that the client's default 25s timeout is marginal there.
+#:
+#: This cannot simply be raised, though: HydraDB's admission control rejects a
+#: request whose *declared* `timeout_ms` exceeds `client_query_runtime_ms`
+#: (30s on this deployment) with a 429, before running anything. So a larger
+#: number does not buy patience, it breaks every query outright. 29s sits just
+#: under that ceiling, which is the most this knob can actually ask for.
+#:
+#: Raising the real ceiling is a server-side setting, not a client one. If
+#: ingest still times out here, the fix is a smaller write batch (see
+#: `HydraClient.batch`) so each individual query does less work -- not a
+#: bigger number here.
+_ADMISSION_CEILING_MS = 30_000
+_INGEST_TIMEOUT_MS = min(
+    int(os.environ.get("HYDRA_INGEST_TIMEOUT_MS", "29000")),
+    _ADMISSION_CEILING_MS - 1_000,
+)
 from blastradius.ids import IdAllocator
 from blastradius.pkg.identity import package_key, version_key
 from blastradius.pkg.registry import RegistryClient

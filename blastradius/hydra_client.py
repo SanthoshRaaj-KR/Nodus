@@ -40,7 +40,30 @@ MAX_PAGES = 200
 #: One statement per request and no transactions, so a batch is a single
 #: UNWIND. Large enough to amortise the round trip, small enough that a failed
 #: chunk is cheap to replay.
-BATCH_SIZE = 500
+#:
+#: Tunable because the right size depends on the storage backend, and by an
+#: order of magnitude. Against local-filesystem storage each row is a disk
+#: write and 500 finishes in well under a second. Against the S3 backend each
+#: chunk is an HTTPS round trip to the bucket's region, and 500 rows can
+#: exceed HydraDB's 30s `client_query_runtime_ms` admission limit -- which
+#: fails the whole ingest. A smaller chunk is the fix there: the timeout is a
+#: server-side ceiling the client cannot raise (see ui/live.py), so the only
+#: lever left is doing less work per query.
+#:
+#: Set `HYDRA_BATCH_SIZE=100` (or lower) on an S3-backed deployment.
+#:
+#: A typo'd value falls back to the default rather than raising: this is read
+#: at import, so a bad number would otherwise take down every entry point in
+#: the project -- server, CLI and tests alike -- with a traceback pointing at
+#: an import line rather than at the environment.
+def _batch_size_from_env(default: int = 500) -> int:
+    try:
+        return max(1, int(os.environ.get("HYDRA_BATCH_SIZE", "").strip() or default))
+    except ValueError:
+        return default
+
+
+BATCH_SIZE = _batch_size_from_env()
 
 
 class HydraError(RuntimeError):
