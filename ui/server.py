@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from blastradius import schema
+from blastradius.chat.config import load_env
 from blastradius.hydra_client import (
     DEFAULT_GRAPH,
     DEFAULT_HTTP,
@@ -41,6 +42,12 @@ from blastradius.query import blast, codereach, graphview
 from blastradius.query.advisory import Advisory
 
 from .live import state as livestate
+
+# `.env` is read before anything below touches os.environ. Nothing in this
+# project loaded it before -- `.env.example` documented HYDRA_* and every
+# process still expected them exported by hand -- so this fixes the existing
+# vars as well as supplying the chat agent's key.
+load_env()
 
 HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
@@ -70,6 +77,14 @@ client = HydraClient(
 #: because every package-view request resolves a target through it, and
 #: reopening a sqlite file per keystroke is the one avoidable round trip.
 ids = IdAllocator()
+
+# The chat agent, mounted rather than embedded. It gets the client and the id
+# allocator this process already holds open, so it opens no second connection
+# and no second copy of the id map.
+from blastradius.chat.router import router as chat_router, wire as wire_chat  # noqa: E402
+
+wire_chat(client=client, ids=ids)
+app.include_router(chat_router)
 
 
 @app.get("/api/health")
@@ -746,5 +761,34 @@ def graph_page() -> FileResponse:
     """
     return FileResponse(
         STATIC / "graph.html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
+
+
+@app.get("/chat")
+def chat_picker() -> FileResponse:
+    """The chatbot picker: one per ingested repository.
+
+    Lands here rather than on a chatbot because which repository you are
+    asking about is the first thing that has to be true. A default chatbot
+    would answer confidently for whichever repo happened to be registered
+    first, which is the mixing this whole feature is built to prevent.
+    """
+    return FileResponse(
+        STATIC / "chat.html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
+
+
+@app.get("/chat/{ref}")
+def chat_page(ref: str) -> FileResponse:
+    """One repository's chatbot. `ref` is its number or slug -- /chat/1, /chat/2.
+
+    The same file as the picker: it reads the id out of its own URL and asks
+    the API which chatbot that is, so there is one page to keep correct rather
+    than one per workspace.
+    """
+    return FileResponse(
+        STATIC / "chat.html",
         headers={"Cache-Control": "no-store, must-revalidate"},
     )

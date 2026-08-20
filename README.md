@@ -392,6 +392,125 @@ rewrites container-side absolute paths — `/data/store` arrives as
 
 ---
 
+## Ask it questions (`/chat`)
+
+`osv-scanner` tells you what is wrong. The Explorer shows you where it reaches.
+Neither answers the question somebody actually asks at 09:06, which is *"what
+do I do about it"* -- so there is a chat agent over the same graph, at
+<http://127.0.0.1:8000/chat>.
+
+```powershell
+# 1. Ingest a repository, as normal.
+python -m blastradius.cli pipeline corpus --reset
+
+# 2. Give it a chatbot.
+python -m blastradius.chat.cli add corpus/fleet --label "Corpus fleet"
+
+# 3. Ask, from the terminal or the browser.
+python -m blastradius.chat.cli ask 1 "what is vulnerable, and what do I fix first?"
+python -m blastradius.chat.cli repl 1
+```
+
+It needs one key. Copy `.env.example` to `.env` and set `OPENAI_API_KEY`;
+nothing else in that file has to change. `.env` is gitignored, and this is
+also the first thing in the project that actually *loads* it -- the `HYDRA_*`
+variables `.env.example` has always documented were previously expected to be
+exported by hand, and now are not.
+
+### One chatbot per repository
+
+`/chat/1` and `/chat/2` are different chatbots over different repositories,
+and they do not share findings. Asking #2 about a package only #1 has gets
+*"not resolved by any service in this repository"*, not a borrowed answer.
+
+That guarantee cannot come from the store. HydraDB scopes by graph and by
+namespace, but the token this project ships is authorised for `default` alone
+-- anything else is a 403 -- so a graph per repository would mean
+re-provisioning auth. It comes instead from **ownership of a service set**: a
+workspace records exactly which `Service` nodes an ingest wrote, and every
+tool the agent can call is filtered to those ids. Two repositories then sit in
+one graph, sharing the `PackageVersion` nodes they genuinely have in common,
+and stay answerable apart.
+
+The one hazard is a name collision. `service_key` is `svc:<name>`, so two
+repositories that both contain a service called `api` collapse onto one node
+and no filter downstream can separate them again. That is detected at
+registration and reported, because silently merging two teams' exposure is the
+failure this design exists to prevent.
+
+```powershell
+python -m blastradius.chat.cli list          # every chatbot and what it owns
+python -m blastradius.chat.cli brief 1       # the situation pack, verbatim
+python -m blastradius.chat.cli refresh 1     # re-resolve ids after a `reset`
+```
+
+`refresh` matters after `reset`: that clears `data/ids.sqlite` and the next
+ingest renumbers every node, so a workspace still holding the old ids would
+match nothing at all -- which reads exactly like a clean bill of health.
+
+### Why it answers in a second and not five
+
+Most of what anyone asks -- *what is affected*, *how bad*, *what first*,
+*which services* -- is answerable from a few hundred facts that change only
+when the graph does. Making the model fetch them turns every such question
+into two sequential model calls plus a graph read, and no token can arrive
+until all of it finishes.
+
+So they are computed once per `(workspace, read_epoch)` and put in the prompt
+instead, as a ~350-token table. Those questions then cost **one** model call
+and start streaming immediately; only real drill-downs spend a tool round
+trip. The pack is a stable prefix, so OpenAI's prompt caching hits it on every
+follow-up.
+
+| | first token | tools |
+|---|---:|---|
+| "what is vulnerable?" | ~0.9-1.7 s | none -- answered from the pack |
+| "how do I fix `uuid@8.3.2`?" | ~2.6-3.8 s | `remediation_plan` |
+
+Cold, the pack costs a whole-graph index build plus a sweep per service
+(~2.4 s on the twelve-service corpus); warm it is ~16 ms. The page calls
+`POST /api/chat/{ref}/warm` on load so that lands while somebody is still
+reading the screen. Tracing is disabled, reasoning effort is `low`, and
+`CHAT_MAX_TURNS` caps the tool loop so a bad question fails fast.
+
+Mini-class models only, and it is checked rather than assumed -- `CHAT_MODEL`
+defaults to `gpt-5.4-mini` and a full-size model is refused with a 503.
+
+### What it will not do
+
+The facts come from `blastradius/chat/tools.py`, which is plain Python over
+HydraDB with no OpenAI import and no key -- so it is unit-tested against a
+real graph, and the model only chooses between answers and phrases them.
+Three rules are load-bearing:
+
+- **"Not scanned" is never "not affected".** With no code graph the reach
+  column reads `?`, the prompt says `UNKNOWN, not clear`, and
+  `remediation_plan` refuses to deprioritise on reachability. Empty
+  reachability data looks exactly like an all-clear, and reporting it as one
+  tells somebody to ignore a live vulnerability.
+- **"Installed but not reached" is not "not affected" either.** It means
+  deprioritise, not dismiss -- the package is still on disk.
+- **Never the lowest published fix.** OSV lists a fixed version per affected
+  *branch*, so one advisory on `vite@5.4.21` reports `0.1.24`, `2.14.1`,
+  `6.4.3`, `7.3.5` and `8.0.16` together. Taking the lowest recommends a
+  five-major **downgrade** onto a branch that was never patched, so
+  `recommended_fix` filters to versions above what is installed first, and
+  returns nothing when the branch in use has no forward fix.
+
+Remediation is assembled from facts rather than advice: a direct dependency
+gets `npm install`, a transitive one gets an `overrides` block, because an
+install silently will not move it.
+
+```
+tests/test_chat_tools.py       the facts, and the downgrade bug, without a key
+tests/test_chat_workspaces.py  isolation and collision detection
+tests/test_chat_briefing.py    token budget, and that the caveat survives
+tests/test_chat_router.py      routing and every failure message
+tests/test_chat_agent_live.py  the model in the loop; skipped with no key
+```
+
+---
+
 ## The graph model
 
 **Macro (lockfile).** The ingest tier, unchanged. The ecosystem tier the macro
@@ -685,14 +804,23 @@ blastradius/
     blast.py                 Q1..Q5 and the severity composition
     exposure.py              severity x distance heat, shared by both views
     graphview.py             the code view, ranked by real call depth
+  chat/                      the chat agent, one chatbot per repository
+    workspaces.py            which Service nodes a chatbot owns -- the isolation
+    tools.py                 the graph tools, scoped and capped; no OpenAI import
+    briefing.py              the situation pack put in the prompt, cached per epoch
+    agent.py                 the only module that knows OpenAI exists
+    router.py                /api/chat/{ref}/... mounted into ui/server.py
+    cli.py                   add / list / brief / ask / repl, with timings
   api/main.py                FastAPI
   api/static/index.html      single-page UI, self-contained
+ui/static/chat.html          the chatbot picker and chat page, no build step
 corpus/                      target repos
 advisories/                  the teammate contract, as files
   generated/                 written by osv-scan, cleared on every run
 data/osv/<repo>/             scan CSV + timing log per scanned repository
 tests/test_oracle.py         graph answer == brute-force answer
 tests/test_exposure.py       the heat model, and that advisories reach code
+tests/test_chat_*.py         the agent: isolation, grounding, token budget
 ```
 
 ---

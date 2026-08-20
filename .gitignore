@@ -2,6 +2,12 @@ node_modules/
 __pycache__/
 *.pyc
 data/ids.sqlite*
+# Chat agent local state. Workspaces name absolute paths to somebody's
+# checkouts, sessions are conversation history, and the advisory cache is
+# rebuilt from whatever has been scanned -- all three are per-machine.
+data/chat-workspaces.json
+data/chat-sessions.sqlite*
+data/chat-advisory-cache.json
 corpus/*/node_modules/
 .pytest_cache/
 .playwright-mcp/
