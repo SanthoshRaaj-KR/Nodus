@@ -620,7 +620,13 @@ function toneOf(n){
 function renderBarStats(){
   const s=(S.pkg&&S.pkg.stats)||{};
   const findings=(S.pkg&&S.pkg.findings)||[];
-  const p0=findings.filter(f=>f.tier==='P0').length;
+  /* Graded exactly the way the findings list grades it. A finding has no
+     `tier` field -- the tier is derived from `confidence`, and reading a
+     property that does not exist made the bar say "0 runtime exposed"
+     over a list with two P0 rows in it. Two numbers from one payload
+     disagreeing about the same question is the failure this whole
+     project is built to avoid, so there is one derivation. */
+  const p0=findings.filter(f=>(TIER_OF_CONFIDENCE[f.confidence]||'P3')==='P0').length;
   setStat('barP0', S.pkg?p0:null);
   setStat('barFindings', S.pkg?findings.length:null);
   setStat('barMs', s.query_ms!=null?s.query_ms:null);
