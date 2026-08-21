@@ -329,6 +329,15 @@ def cmd_snapshot(args) -> int:
         elif args.action == "publish":
             uri = snapshot.publish()
             print(f"  {uri}")
+        elif args.action == "sync":
+            r = snapshot.sync()
+            print(f"  {r['uploaded']} objects, {r['bytes'] / 1e6:.1f} MB "
+                  f"-> s3://{r['bucket']}/{r['prefix']}")
+            if r["pruned"]:
+                print(f"  pruned {r['pruned']} stale object(s)")
+            print()
+            print("  a node started with CLOUD_PROVIDER=aws against that bucket")
+            print("  now reads this graph directly, with no restore step.")
         elif args.action == "push":
             print(f"  {snapshot.push(args.path)}")
         elif args.action == "pull":
@@ -1024,7 +1033,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     snap.add_argument(
         "action",
-        choices=("save", "load", "show", "publish", "push", "pull", "where"),
+        choices=("save", "load", "show", "publish", "sync", "push", "pull", "where"),
         help="save/load a local archive; publish builds one and uploads it; "
              "push/pull move an existing file; where prints the configured target",
     )

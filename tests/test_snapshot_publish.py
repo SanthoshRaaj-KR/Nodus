@@ -181,3 +181,92 @@ def test_publishing_never_costs_you_the_build(clean_env, monkeypatch, tmp_path):
     assert "bucket is on fire" in job.snapshot_error
     # The caller sets `done` after this returns; the point is that it still can.
     assert job.status != "failed"
+
+
+# -- publishing into a live bucket ----------------------------------------
+
+class FakeLiveS3(FakeS3):
+    """Enough of the object API to check keys, and what gets deleted."""
+
+    def __init__(self, existing: list[str] | None = None) -> None:
+        super().__init__()
+        self.objects: dict[str, bytes] = {k: b"old" for k in (existing or [])}
+        self.deleted: list[str] = []
+
+    def put_object(self, Bucket, Key, Body):  # noqa: N803 - boto3 spelling
+        self.objects[Key] = Body
+
+    def list_objects_v2(self, Bucket, Prefix="", **kw):  # noqa: N803
+        hits = [{"Key": k} for k in sorted(self.objects) if k.startswith(Prefix)]
+        return {"Contents": hits, "IsTruncated": False}
+
+    def delete_objects(self, Bucket, Delete):  # noqa: N803
+        for obj in Delete["Objects"]:
+            self.deleted.append(obj["Key"])
+            self.objects.pop(obj["Key"], None)
+
+
+def test_sync_writes_the_store_as_keys_under_the_prefix(clean_env, monkeypatch):
+    """The relative path in the store is the S3 key, which is the whole trick."""
+    monkeypatch.setenv("SNAPSHOT_BUCKET", "live")
+    monkeypatch.setenv("SNAPSHOT_PREFIX", "")
+    fake = FakeLiveS3()
+    monkeypatch.setattr(snapshot, "_client", lambda region: fake)
+    monkeypatch.setattr(snapshot, "_store_files", lambda: [
+        ("graph/data/_graph_nodes/v1/node-0", b"a"),
+        ("graph/data/namespaces/default/graphs/default/cell-0/wal/001.sst", b"b"),
+    ])
+    monkeypatch.setattr(snapshot, "IDS", Path("/nonexistent/ids.sqlite"))
+
+    out = snapshot.sync(verbose=False)
+    assert out["uploaded"] == 2
+    assert set(fake.objects) == {
+        "graph/data/_graph_nodes/v1/node-0",
+        "graph/data/namespaces/default/graphs/default/cell-0/wal/001.sst",
+    }
+
+
+def test_sync_removes_what_the_previous_graph_left(clean_env, monkeypatch):
+    """A stale WAL segment is not clutter, it is a second graph.
+
+    Left in place, the node opens a mix of the two and answers from neither.
+    """
+    monkeypatch.setenv("SNAPSHOT_BUCKET", "live")
+    monkeypatch.setenv("SNAPSHOT_PREFIX", "")
+    fake = FakeLiveS3(existing=["graph/data/old/wal/999.sst", "graph/data/keep/a"])
+    monkeypatch.setattr(snapshot, "_client", lambda region: fake)
+    monkeypatch.setattr(snapshot, "_store_files", lambda: [("graph/data/keep/a", b"new")])
+    monkeypatch.setattr(snapshot, "IDS", Path("/nonexistent/ids.sqlite"))
+
+    out = snapshot.sync(verbose=False)
+    assert fake.deleted == ["graph/data/old/wal/999.sst"]
+    assert out["pruned"] == 1
+    assert fake.objects["graph/data/keep/a"] == b"new"
+
+
+def test_sync_can_be_told_to_leave_the_bucket_alone(clean_env, monkeypatch):
+    monkeypatch.setenv("SNAPSHOT_BUCKET", "live")
+    fake = FakeLiveS3(existing=["snapshots/graph/data/old", "snapshots/x"])
+    monkeypatch.setattr(snapshot, "_client", lambda region: fake)
+    monkeypatch.setattr(snapshot, "_store_files", lambda: [("graph/data/new", b"n")])
+    monkeypatch.setattr(snapshot, "IDS", Path("/nonexistent/ids.sqlite"))
+
+    snapshot.sync(verbose=False, prune=False)
+    assert fake.deleted == []
+
+
+def test_sync_carries_the_id_map_and_never_prunes_it(clean_env, monkeypatch, tmp_path):
+    """The map is not an object store key, and deleting it empties the graph."""
+    monkeypatch.setenv("SNAPSHOT_BUCKET", "live")
+    ids = tmp_path / "ids.sqlite"
+    import sqlite3 as _s
+    _s.connect(str(ids)).close()
+    monkeypatch.setattr(snapshot, "IDS", ids)
+
+    fake = FakeLiveS3(existing=["snapshots/ids.sqlite"])
+    monkeypatch.setattr(snapshot, "_client", lambda region: fake)
+    monkeypatch.setattr(snapshot, "_store_files", lambda: [("graph/data/a", b"a")])
+
+    snapshot.sync(verbose=False)
+    assert "snapshots/ids.sqlite" not in fake.deleted
+    assert "snapshots/ids.sqlite" in fake.objects

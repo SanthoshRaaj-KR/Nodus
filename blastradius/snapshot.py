@@ -164,6 +164,108 @@ def pull(dest: str | Path, verbose: bool = True, **over) -> Path:
     return dest
 
 
+def _store_files() -> list[tuple[str, bytes]]:
+    """Every object in the local store, as (key, bytes).
+
+    The store is already a key tree rather than a directory tree -- nothing
+    inside any object refers to a path, checked before this was written -- so
+    the relative path under `store/` *is* the S3 key a bucket-backed node
+    reads. That correspondence is what makes a local build publishable at all.
+    """
+    proc = _volume_sh(f"tar cf - -C /d/{STORE_DIR} .")
+    if proc.returncode != 0 or not proc.stdout:
+        detail = proc.stderr.decode(errors="replace").strip()
+        raise SnapshotError(
+            f"could not read the store: {detail or 'nothing has been ingested'}"
+        )
+    import io
+
+    out: list[tuple[str, bytes]] = []
+    with tarfile.open(fileobj=io.BytesIO(proc.stdout)) as tar:
+        for member in tar.getmembers():
+            if not member.isfile():
+                continue
+            handle = tar.extractfile(member)
+            if handle is None:
+                continue
+            out.append((member.name.lstrip("./"), handle.read()))
+    return out
+
+
+def sync(verbose: bool = True, prune: bool = True, **over) -> dict:
+    """Publish the local store into the bucket as live objects.
+
+    Unlike `publish`, which uploads one archive for a host to restore, this
+    writes the store out key by key so a node running CLOUD_PROVIDER=aws reads
+    it directly with no restore step. That is the shape the hosted
+    docker-compose already expects.
+
+    `prune` is on and matters: a bucket holding an older graph has WAL
+    segments this one does not, and leaving them behind means the node opens a
+    mix of two graphs rather than the one that was just built. Deleting them
+    is therefore part of publishing correctly, not a tidy-up, which is also
+    why this is never automatic without being asked for.
+    """
+    cfg = {**s3_config(), **over}
+    client = _client(cfg["region"])
+    bucket = cfg["bucket"]
+    root = cfg["prefix"].strip("/")
+
+    files = _store_files()
+    keys = {f"{root}/{k}" if root else k: body for k, body in files}
+    total = sum(len(b) for b in keys.values())
+    if verbose:
+        print(f"  uploading {len(keys)} objects ({total / 1e6:.1f} MB) to s3://{bucket}/{root}")
+
+    for key, body in keys.items():
+        try:
+            client.put_object(Bucket=bucket, Key=key, Body=body)
+        except Exception as exc:  # noqa: BLE001
+            raise SnapshotError(f"upload of s3://{bucket}/{key} failed: {exc}") from None
+
+    removed = 0
+    if prune:
+        try:
+            token = None
+            stale: list[dict] = []
+            while True:
+                kw = {"Bucket": bucket, "Prefix": f"{root}/" if root else ""}
+                if token:
+                    kw["ContinuationToken"] = token
+                page = client.list_objects_v2(**kw)
+                for obj in page.get("Contents", []) or []:
+                    if obj["Key"] not in keys and obj["Key"] != _ids_key(cfg):
+                        stale.append({"Key": obj["Key"]})
+                if not page.get("IsTruncated"):
+                    break
+                token = page.get("NextContinuationToken")
+            for batch in (stale[i:i + 1000] for i in range(0, len(stale), 1000)):
+                client.delete_objects(Bucket=bucket, Delete={"Objects": batch})
+                removed += len(batch)
+        except SnapshotError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise SnapshotError(f"could not prune s3://{bucket}/{root}: {exc}") from None
+        if verbose and removed:
+            print(f"  removed {removed} object(s) left by the previous graph")
+
+    # The id map is not part of the object store, but a bucket-backed node is
+    # just as unreadable without it. It rides alongside under its own key.
+    if IDS.exists():
+        _checkpoint_ids()
+        client.put_object(Bucket=bucket, Key=_ids_key(cfg), Body=IDS.read_bytes())
+        if verbose:
+            print(f"  id map -> s3://{bucket}/{_ids_key(cfg)}")
+
+    return {"uploaded": len(keys), "bytes": total, "pruned": removed,
+            "bucket": bucket, "prefix": root}
+
+
+def _ids_key(cfg: dict) -> str:
+    root = cfg["prefix"].strip("/")
+    return f"{root}/ids.sqlite" if root else "ids.sqlite"
+
+
 def publish(verbose: bool = True, **over) -> str:
     """Save the current graph and upload it, leaving no file behind.
 
