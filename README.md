@@ -116,16 +116,18 @@ thing a flat lockfile scan structurally cannot do.
 
 ### What it looks like
 
-The macro view: one compromised version, and the exact path by which a service
-holds it. Everything not on that path is dimmed.
+The whole graph, live out of HydraDB: 2,834 nodes and 8,828 edges, every circle
+a real thing the ingest wrote. Colour is not decoration. Red is what is known to
+be wrong, violet is what you own and could lose, cyan is what a compromise
+travels through, and amber is who could publish the next one.
 
-![Macro view](docs/screens/macro.png)
+![The live graph](docs/screens/live-graph.jpg)
 
-The micro view: the same compromise, traced through real source. An HTTP route
-reaches a handler, which calls a function, whose body imports the compromised
-package. This is the difference between "installed" and "reachable".
+Select the compromised version and everything unrelated drops away, leaving the
+one edge that matters. This is the blast radius: the incident, the version it
+names, and the path from there into the fleet.
 
-![Micro view](docs/screens/micro.png)
+![One incident, everything else dimmed](docs/screens/live-graph-incident.jpg)
 
 ---
 
@@ -196,6 +198,15 @@ flowchart LR
 `PackageVersion` is the node both halves share, which is what makes the join
 possible at all. Neither diagram draws the materialised inverse edges; section 9
 explains why they exist.
+
+Clicking one of those nodes in the live graph shows the model as it is actually
+stored. Here is `lodash@4.17.20`: the properties the ingest wrote, and the edge
+counts underneath it, one per relationship. `PUBLISHED_BY` and `SOURCED_FROM`
+are the provenance half, `RESOLVED_IN` is the flattened closure that answers
+which of your services hold it, and `AFFECTS 3` is three advisories pointing at
+this exact version.
+
+![A package version, with its edges](docs/screens/live-graph-provenance.jpg)
 
 ### The three claims Nodus refuses to merge
 
@@ -412,13 +423,6 @@ A threat with code reach names the file and line to open. A threat with no code
 reach is not a false positive, because the package really is installed, but it is
 a different priority, and saying so is the product.
 
-Pointed at a real application rather than the demo corpus, the same view reports
-0 of 4 entry routes affected, 0 of 174 functions reached and 0 of 24 imports
-vulnerable. A clean answer is still an answer, and it is one the tool has to be
-able to give:
-
-![A real application](docs/screens/real-app.png)
-
 ### 7.2 The Macro view: evidence, not a score
 
 Scoped to a single version and answered server-side against evidence stored on
@@ -434,6 +438,14 @@ asking, and the surface a live alert lands on. Built in one sweep of nine edge
 reads and then cached against `read_epoch`, because unpinned edge sweeps are the
 expensive shape in HydraDB (500 to 770 ms each) and the second view of the same
 graph must be instant.
+
+The detail panel is where the honesty rule shows up in the product. The
+simulated incident says in its own summary that it is simulated, that no real
+malicious package is involved, and that nothing was downloaded. Underneath it,
+the live feed and the correlated-burst panel report "none seen yet" rather than
+inventing activity to fill the space.
+
+![The detail panel and the live feed](docs/screens/live-graph-detail.jpg)
 
 ### 7.4 The blast frontier: what the attacker publishes to next
 
@@ -579,9 +591,16 @@ which is one fewer moving part to fail during a demo.
 
 ## 8. The assistant
 
-A chat interface over the same graph. It exists because the queries above are
-precise and the questions people ask under pressure are not: *who published the
-malicious package*, *what do I patch first*, *can this actually run*.
+A chat interface over the same graph, in the bottom right of every page. It
+exists because the queries above are precise and the questions people ask under
+pressure are not: *who published the malicious package*, *what do I patch
+first*, *can this actually run*.
+
+![Asking the graph](docs/screens/live-graph-chat.jpg)
+
+Every line of that answer came from a HydraDB query. The exposure, the
+reachability, the service name and the fix target are four separate tool calls
+against the graph, not the model recalling something about `vite`.
 
 **One chatbot per repository.** Each workspace records exactly which `Service`
 nodes its ingest created, and every tool the agent can call is filtered to those
@@ -775,25 +794,84 @@ runs:
 
 ### Prerequisites
 
-Python 3.11+, Node 18+, Docker. `osv-scanner` is optional; without it the scan
-falls back to the OSV API.
+| Needed | Why | If missing |
+|---|---|---|
+| Python 3.11+ | Everything server-side | Required |
+| Node 18+ | `ts-morph` runs the AST scan | Required |
+| Docker | Runs the HydraDB container | Required |
+| `osv-scanner` | Finds the vulnerabilities | Optional; the scan falls back to the OSV API over the resolved versions |
 
-### Local
+### Step by step
+
+**1. Install the dependencies.**
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1          # cmd.exe: .\.venv\Scripts\activate.bat
 pip install -r requirements.txt
-cd scanner; npm install; cd ..
+cd scanner; npm install; cd ..        # ts-morph, once
+```
 
-python -m blastradius.cli doctor      # checks every prerequisite, names the fix
-python -m blastradius.cli up          # start the HydraDB container
+If `Activate.ps1` is blocked by execution policy, either use the `.bat` above or
+run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once. Nothing else in
+this project needs it.
+
+**2. Check the machine before building anything.**
+
+```powershell
+python -m blastradius.cli doctor
+```
+
+This checks every prerequisite and names the fix for each one it cannot find,
+rather than failing halfway through an ingest.
+
+**3. Start HydraDB.**
+
+```powershell
+python -m blastradius.cli up
+```
+
+Starts the container and waits until it answers. `down` stops it and keeps the
+data; `status` reports the daemon, the container, readiness and contents.
+
+**4. Build the graph from a repository.**
+
+```powershell
 python -m blastradius.cli pipeline --reset
-python -m blastradius.cli status      # both tiers should be non-zero
+```
+
+Scans the repository, writes the advisories it finds, ingests both graph tiers
+and prints where the time went. It defaults to `corpus/` and takes any other
+checkout as an argument. Expect roughly 10 seconds on a warm registry cache.
+
+**5. Confirm both tiers landed.**
+
+```powershell
+python -m blastradius.cli stats
+```
+
+Every label should be non-zero. If `PackageVersion` is populated but `Function`
+is not, the AST scan did not run; `doctor` will say why.
+
+**6. Start the UI.**
+
+```powershell
 python -m blastradius.cli ui          # port 8100
 ```
 
-Then open <http://127.0.0.1:8100>, pick a repository, and work from the console.
+Open <http://127.0.0.1:8100>, choose the repository, and work from there. The
+live graph is at `/graph`, the threat-and-reachability explorer at `/explorer`,
+and the assistant is the button in the bottom right of both.
+
+**7. Optional: see it react to an incident.**
+
+```powershell
+python -m blastradius.pkg.cli simulate     # marks a version compromised, answers everything
+python -m blastradius.pkg.cli retract      # puts it back
+```
+
+The assistant needs an `OPENAI_API_KEY` in `.env`; everything else above works
+without one.
 
 ### Configuration
 
