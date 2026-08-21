@@ -72,27 +72,22 @@ approximation. What we load into HydraDB is small, exact and entirely about you.
 Nodus builds **two graphs and one bridge** inside HydraDB.
 
 ```mermaid
-flowchart LR
-    subgraph MACRO["Macro tier - from lockfiles"]
-        SVC["Service<br/>payment-api"]
-        PV1["PackageVersion<br/>express@4.18.2"]
-        PV2["PackageVersion<br/>ua-parser-js@0.7.29"]
-        SVC -->|DEPENDS_ON| PV1
-        PV1 -->|DEPENDS_ON| PV2
-        PV2 -.->|"PRESENT_IN (flattened closure)"| SVC
+flowchart TB
+    subgraph MICRO["Micro tier: built from the TypeScript AST"]
+        direction LR
+        RT["Route<br/>POST /login"] -->|HANDLED_BY| FN1["Function<br/>handleLogin()"]
+        FN1 -->|CALLS| FN2["Function<br/>verify()"]
+        FN2 -->|CALLS_EXTERNAL| IMP["ExternalImport<br/>ua-parser-js"]
     end
 
-    subgraph MICRO["Micro tier - from the TypeScript AST"]
-        RT["Route<br/>POST /login"]
-        FN1["Function<br/>handleLogin()"]
-        FN2["Function<br/>verify()"]
-        IMP["ExternalImport<br/>ua-parser-js"]
-        RT -->|HANDLED_BY| FN1
-        FN1 -->|CALLS| FN2
-        FN2 -->|CALLS_EXTERNAL| IMP
+    subgraph MACRO["Macro tier: built from lockfiles"]
+        direction LR
+        SVC["Service<br/>payment-api"] -->|DEPENDS_ON| PV1["PackageVersion<br/>express@4.18.2"]
+        PV1 -->|DEPENDS_ON| PV2["PackageVersion<br/>ua-parser-js@0.7.29"]
     end
 
-    IMP ==>|"RESOLVES_TO (the bridge)"| PV2
+    IMP ==>|"RESOLVES_TO: the bridge"| PV2
+    PV2 -.->|"PRESENT_IN: the same fact, flattened to one hop"| SVC
 ```
 
 The macro tier says **you have it**. The micro tier says **an HTTP request can
@@ -140,64 +135,67 @@ Everything below is written into HydraDB by the ingest and read back by queries.
 The single source of truth for labels, edge types and id ranges is
 [`blastradius/schema.py`](blastradius/schema.py).
 
+**Who a package is, and what is known to be wrong with it.** This half is
+ecosystem-wide: it describes npm, not your fleet.
+
 ```mermaid
-flowchart TB
-    subgraph IDENT["Identity and provenance"]
-        PKG["Package"]
-        MNT["Maintainer"]
-        REPO["Repository"]
-        ORG["Organization"]
-        PUBID["PublisherIdentity"]
-    end
-
-    subgraph LOCK["Resolution record"]
-        LF["Lockfile"]
-        LE["LockfileEntry"]
-    end
-
-    subgraph THREAT["Threat"]
-        ADV["Advisory"]
-        INC["Incident"]
-    end
-
-    SVC["Service"]
+flowchart LR
+    MNT["Maintainer"]
+    ORG["Organization"]
+    PKG["Package"]
     PV["PackageVersion"]
-    FILE["File"]
-    FUNC["Function"]
-    ROUTE["Route"]
-    EI["ExternalImport"]
-    ART["PersistenceArtifact"]
+    PUBID["PublisherIdentity"]
+    REPO["Repository"]
+    ADV["Advisory"]
+    INC["Incident"]
 
     PKG -->|HAS_VERSION| PV
     PKG -->|MAINTAINED_BY| MNT
     PKG -->|OWNED_BY| ORG
     PKG -->|TYPOSQUAT_OF| PKG
-    PV -->|PUBLISHED_BY| PUBID
-    PV -->|SOURCED_FROM| REPO
+    MNT -->|MEMBER_OF| ORG
     PV -->|REQUIRES| PKG
     PV -->|SATISFIED_BY| PV
-    MNT -->|MEMBER_OF| ORG
+    PV -->|PUBLISHED_BY| PUBID
+    PV -->|SOURCED_FROM| REPO
+    ADV -->|AFFECTS| PV
+    INC -->|COMPROMISES| PV
+```
+
+**What your fleet installed, and what your code does with it.** This half is
+yours: it is built entirely from your lockfiles and your source.
+
+```mermaid
+flowchart LR
+    SVC["Service"]
+    LF["Lockfile"]
+    LE["LockfileEntry"]
+    PV["PackageVersion"]
+    ART["PersistenceArtifact"]
+    FILE["File"]
+    FUNC["Function"]
+    ROUTE["Route"]
+    EI["ExternalImport"]
 
     SVC -->|HAS_LOCKFILE| LF
     LF -->|HAS_ENTRY| LE
     LE -->|RESOLVES_VERSION| PV
-    PV -->|RESOLVED_IN| SVC
-
     SVC -->|DEPENDS_ON| PV
     PV -->|DEPENDS_ON| PV
+    PV -->|RESOLVED_IN| SVC
     PV -->|PRESENT_IN| SVC
     SVC -->|HAS_ARTIFACT| ART
-
     FILE -->|DECLARED_IN| SVC
     FILE -->|CONTAINS| FUNC
     ROUTE -->|HANDLED_BY| FUNC
     FUNC -->|CALLS| FUNC
     FUNC -->|CALLS_EXTERNAL| EI
     EI -->|RESOLVES_TO| PV
-
-    ADV -->|AFFECTS| PV
-    INC -->|COMPROMISES| PV
 ```
+
+`PackageVersion` is the node both halves share, which is what makes the join
+possible at all. Neither diagram draws the materialised inverse edges; section 9
+explains why they exist.
 
 ### The three claims Nodus refuses to merge
 
