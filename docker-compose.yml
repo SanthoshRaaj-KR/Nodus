@@ -32,6 +32,21 @@ services:
       - .env
     expose:
       - "8000"
+    volumes:
+      # The id map, and it is half of the graph.
+      #
+      # HydraDB holds the nodes and edges in S3, but every name -> id lookup
+      # lives in data/ids.sqlite, and ids are assigned by insertion order into
+      # that file rather than derived from the graph. .dockerignore excludes
+      # data/ from the image on purpose, so without a volume here the map is
+      # container-local: it is rebuilt empty on every restart and redeploy
+      # while the bucket keeps the graph those ids belong to. The graph
+      # survives and becomes unreadable, which reads as "the scan found
+      # nothing" rather than as the storage fault it is.
+      #
+      # Also carries the chat workspace registry and the OSV advisory cache,
+      # which are re-fetchable but expensive to lose.
+      - blastradius-data:/app/data
 
   caddy:
     image: caddy:2-alpine
@@ -48,5 +63,6 @@ services:
 
 volumes:
   hydradb-cache:
+  blastradius-data:
   caddy-data:
   caddy-config:

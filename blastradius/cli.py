@@ -312,6 +312,42 @@ def cmd_logs(args) -> int:
     return 0
 
 
+def cmd_snapshot(args) -> int:
+    """Save or load the graph and its id map as one archive.
+
+    Two halves that are useless apart -- see blastradius/snapshot.py for why
+    they travel together and why the local backend is the right place to
+    build one.
+    """
+    from . import snapshot
+
+    print()
+    try:
+        if args.action == "save":
+            snapshot.save(args.path)
+            print()
+            print("  publish it with:")
+            print(f"    aws s3 cp {args.path} s3://{'{bucket}'}/snapshots/")
+        elif args.action == "load":
+            meta = snapshot.load(args.path)
+            print(f"  store {meta['store_bytes'] / 1e6:.1f} MB, "
+                  f"id map {meta['ids_bytes'] / 1e6:.1f} MB")
+        else:
+            meta = snapshot.describe(args.path)
+            import time as _t
+            print(f"  format      {meta['format']}")
+            print(f"  created     {_t.strftime('%Y-%m-%d %H:%M', _t.localtime(meta['created_at']))}")
+            print(f"  store       {meta['store_bytes'] / 1e6:.1f} MB")
+            print(f"  id map      {meta['ids_bytes'] / 1e6:.1f} MB")
+            if not meta["ids_bytes"]:
+                print(YELLOW("  no id map in this archive -- it will resolve nothing"))
+    except snapshot.SnapshotError as exc:
+        print(RED(f"  {exc}\n"), file=sys.stderr)
+        return 2
+    print()
+    return 0
+
+
 def cmd_wipe(args) -> int:
     from . import node
 
@@ -971,6 +1007,14 @@ def main(argv: list[str] | None = None) -> int:
 
     wp = sub.add_parser("wipe", help="destroy container, volume and id map")
     wp.set_defaults(func=cmd_wipe)
+
+    snap = sub.add_parser(
+        "snapshot",
+        help="save/load the graph + id map as one archive, for hosting",
+    )
+    snap.add_argument("action", choices=("save", "load", "show"))
+    snap.add_argument("path", help="the .tar.gz to write, read or inspect")
+    snap.set_defaults(func=cmd_snapshot)
 
     args = parser.parse_args(argv)
     try:
