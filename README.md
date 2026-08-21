@@ -1,816 +1,977 @@
 # Nodus
 
-**Track 2A / problem A — supply chain blast radius.**
+**Supply-chain blast radius, computed as a graph in HydraDB.**
 
-A package is compromised at 09:00. Which of your services are exposed by 09:06,
-and does your code actually *run* the poisoned dependency?
+Track 2A, problem A.
 
-`npm audit` answers the first half of that for one repo. This answers both
-halves across a fleet, and tells you which alerts you can safely ignore.
+A package is compromised at 09:00. Two questions decide what happens next:
+**which of your services are exposed**, and **does your code actually run the
+poisoned dependency**. `npm audit` answers a narrow version of the first for one
+repository. Nodus answers both, across a fleet of repositories, and tells you
+which alerts you can safely ignore.
 
----
-
-## The idea in one paragraph
-
-The problem statement frames this as a traversal over the npm ecosystem graph —
-tens of millions of versioned nodes. We do not build that graph, because we do
-not need it. **A `package-lock.json` v3 already is a fully-resolved dependency
-graph**: every entry under `packages` names its own resolved dependencies. So
-scanning a fleet of repos yields an exact dependency graph with no registry
-crawl, no semver re-resolution and no approximation.
-
-That gets you the macro graph. On its own it is still just a lockfile scanner.
-The differentiator is the second graph, built with `ts-morph` over the real
-TypeScript compiler API, and the bridge between them:
-
-```
-[Service: payment-api]
-       |
-       +--> (macro / lockfile) ----> [PackageVersion: ua-parser-js@0.7.29]
-       |                                          ^
-       +--> (micro / AST)                         | RESOLVES_TO
-            [File: src/token.ts]                  |
-               +- [Function: verify()] --CALLS_EXTERNAL--+
-                     ^
-                     +--CALLS-- [Function: handleLogin()]
-                                      ^
-                                      +--HANDLED_BY-- [Route: POST /login]
-```
-
-The macro graph says *you have it*. The micro graph says *an HTTP request can
-reach it*. Those are very different incidents.
+Everything in this project is built on one idea: dependency risk is a
+reachability problem, reachability problems are graph problems, and so the whole
+system is a graph stored in HydraDB with every question expressed as a traversal
+over it.
 
 ---
 
-## Severity tiers
+## Contents
 
-| Tier | Meaning |
-|---|---|
-| **P0 CONFIRMED** | Exposed **and** a persistence artifact is on disk. The worm wrote into `.claude/` or `.vscode/`, so `npm uninstall` does not clear it. |
-| **P1 REACHABLE** | Exposed **and** an HTTP route reaches the calling function. |
-| **P2 IMPORTED** | Exposed and imported from source, but no route path found. |
-| **P3 INSTALLED** | In the lockfile, never imported. **Safe to deprioritise.** |
+1. [The problem](#1-the-problem)
+2. [The solution in one picture](#2-the-solution-in-one-picture)
+3. [The graph model stored in HydraDB](#3-the-graph-model-stored-in-hydradb)
+4. [Where HydraDB is used](#4-where-hydradb-is-used)
+5. [How the graph is built](#5-how-the-graph-is-built)
+6. [How a question is answered](#6-how-a-question-is-answered)
+7. [Feature by feature](#7-feature-by-feature)
+8. [The assistant](#8-the-assistant)
+9. [Designing around HydraDB's constraints](#9-designing-around-hydradbs-constraints)
+10. [Measured results](#10-measured-results)
+11. [Running it](#11-running-it)
+12. [Repository layout](#12-repository-layout)
+13. [Testing](#13-testing)
+14. [Known limits](#14-known-limits)
 
-P3 is not filler. Telling a team which 30 of 40 alerts they can ignore at 09:06
-is where most of the saved time in a real incident comes from, and it is the one
+---
+
+## 1. The problem
+
+The npm ecosystem is a graph of tens of millions of versioned packages. When one
+of them is compromised, the interesting question is not "is this package bad".
+Somebody else already answered that. The interesting questions are local to you:
+
+| Question | What a flat scanner says | What is actually true |
+|---|---|---|
+| Which services have it? | One repository at a time | It spreads across a fleet, mostly transitively |
+| How deep is it? | Nothing | It arrived through a chain you never chose |
+| Does our code run it? | Nothing | Almost all installed packages are never imported |
+| What do we fix first? | Everything is severity-coloured | Only a few alerts can actually execute |
+| Where does it spread next? | Nothing | Publish rights, not dependencies, are how worms move |
+
+The last two matter most during an incident. A team looking at forty alerts at
+09:06 needs to know which thirty they can defer, and no lockfile scan can tell
+them, because the answer is not in the lockfile. It is in the source code.
+
+### The insight that makes it tractable
+
+The problem statement suggests traversing the whole npm ecosystem graph. We do
+not build that graph, because we do not need it.
+
+**A `package-lock.json` v3 already is a fully resolved dependency graph.** Every
+entry under `packages` names its own resolved dependencies, at exact versions,
+with no ranges left to solve. Scanning a fleet of repositories therefore yields
+an exact dependency graph with no registry crawl, no semver re-resolution and no
+approximation. What we load into HydraDB is small, exact and entirely about you.
+
+---
+
+## 2. The solution in one picture
+
+Nodus builds **two graphs and one bridge** inside HydraDB.
+
+```mermaid
+flowchart LR
+    subgraph MACRO["Macro tier - from lockfiles"]
+        SVC["Service<br/>payment-api"]
+        PV1["PackageVersion<br/>express@4.18.2"]
+        PV2["PackageVersion<br/>ua-parser-js@0.7.29"]
+        SVC -->|DEPENDS_ON| PV1
+        PV1 -->|DEPENDS_ON| PV2
+        PV2 -.->|"PRESENT_IN (flattened closure)"| SVC
+    end
+
+    subgraph MICRO["Micro tier - from the TypeScript AST"]
+        RT["Route<br/>POST /login"]
+        FN1["Function<br/>handleLogin()"]
+        FN2["Function<br/>verify()"]
+        IMP["ExternalImport<br/>ua-parser-js"]
+        RT -->|HANDLED_BY| FN1
+        FN1 -->|CALLS| FN2
+        FN2 -->|CALLS_EXTERNAL| IMP
+    end
+
+    IMP ==>|"RESOLVES_TO (the bridge)"| PV2
+```
+
+The macro tier says **you have it**. The micro tier says **an HTTP request can
+reach it**. Those are very different incidents, and keeping them as separate
+tiers joined by one bridge is what lets Nodus grade an alert instead of just
+reporting it.
+
+Both tiers, the bridge, and every identity and provenance relationship live in
+one HydraDB graph. Nothing is held in a second database, a cache layer or an
+in-memory index that could disagree with it.
+
+### The severity tiers this produces
+
+| Tier | Meaning | Action |
+|---|---|---|
+| **P0 CONFIRMED** | Exposed, and a persistence artifact is on disk. The worm wrote into `.claude/` or `.vscode/`, so `npm uninstall` does not clear it. | Manual cleanup |
+| **P1 REACHABLE** | Exposed, and an HTTP route reaches the calling function. | Patch now |
+| **P2 IMPORTED** | Exposed and imported from source, but no route path found. | Patch soon |
+| **P3 INSTALLED** | In the lockfile, never imported. | Safe to deprioritise |
+
+P3 is not filler. On the corpus as currently ingested, 1,418 resolved package
+versions sit behind 4 external imports. Almost nothing in a dependency tree is
+ever named by a line of your code. Telling a team which alerts fall into P3 is
+where most of the saved time in a real incident comes from, and it is the one
 thing a flat lockfile scan structurally cannot do.
 
----
+### What it looks like
 
-## Quick start
-
-Everything runs through one Python entry point — no `.ps1` required, so you
-never have to touch PowerShell's execution policy.
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1          # cmd.exe: .\.venv\Scripts\activate.bat
-pip install -r requirements.txt
-cd scanner; npm install; cd ..        # ts-morph, once
-
-python -m blastradius.cli doctor      # checks every prerequisite, names the fix
-python -m blastradius.cli up          # start the HydraDB container
-
-# Scan corpus/ for real vulnerabilities and build both tiers from it.
-python -m blastradius.cli pipeline --reset
-
-python -m blastradius.cli status      # both tiers should be non-zero
-python -m blastradius.cli ui          # Nodus, port 8100
-```
-
-`pipeline` is the whole build: it scans the repository with `osv-scanner`,
-writes the advisories it found, ingests the code graph and the package tier
-from that same path, and prints where the time went. It defaults to `corpus/`
-and takes any other checkout as an argument. The scan, the code graph and the
-registry prefetch run concurrently — see
-[Where the vulnerabilities come from](#where-the-vulnerabilities-come-from).
-
-The three steps it wraps are still there, and are what to reach for when you
-want to rebuild one tier without the others:
-
-```powershell
-python -m blastradius.cli osv-scan corpus       # advisories only, no graph writes
-python -m blastradius.cli ingest                # code graph + lockfile tier -> Micro
-python -m blastradius.pkg.cli ingest --offline  # package tier               -> Macro
-```
-
-**Both ingests are required**, which is why `pipeline` runs them together. They
-populate different halves of the graph and neither backfills the other:
-`blastradius.cli ingest` builds the code graph and the lockfile tier the Micro
-view walks, and `blastradius.pkg.cli ingest` builds the package tier — declared
-ranges, lockfile resolutions, maintainer and repository identity — that the
-Macro view queries. Run only the first and the Explorer opens on an empty Macro
-tab with no targets to pick.
-
-`--offline` reads `data/registry-cache/`, which is committed, so the ingest is
-reproducible with the network off. Drop the flag to refresh from npm.
-
-If `Activate.ps1` is blocked, either use the `.bat` above or run
-`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once. Nothing else in
-this project needs it.
-
-`hydra.ps1` still exists and does the same job, but `blastradius.node` drives
-Docker from Python and is the supported path.
-
-Then open <http://127.0.0.1:8100> and pick a target chip, or type
-`name@version` and press Enter. The assessment API and its simpler UI are a
-separate server — `python -m blastradius.cli serve`, port 8000 — and that is
-the one with **Simulate 09:00**.
-
-### Starting clean
-
-Two levels, and the difference matters. Both clear the id map in `data/`, which
-is the "memory" mapping a natural key like `lodash@4.17.21` to a node id. The
-graph and that map have to go together: drop one without the other and the next
-ingest allocates fresh ids and writes a second copy of everything beside the
-first.
-
-```powershell
-python -m blastradius.cli reset       # empty the graph + id map, node comes back up
-python -m blastradius.cli wipe        # destroy container, volume and id map (asks first)
-```
-
-`reset` is the everyday one, and it takes about five seconds. It drops the
-store and brings the node straight back, so you end up with a running node, an
-empty graph and a fresh id map. Re-run both ingests afterwards.
-
-It works this way because deleting rows does not scale here: the node costs
-roughly 319 ms per node in a batched `DETACH DELETE`, so a few thousand nodes
-takes many minutes *and* trips the 25 s per-query timeout partway through,
-leaving the graph half-cleared. Dropping the store is O(1) and cannot finish
-halfway.
-
-`wipe` is the same demolition without the rebuild, plus a confirmation prompt.
-Reach for it when you want the node gone rather than reset — otherwise `reset`
-is what you want, since `wipe` leaves you to run `up` yourself.
-
-`data/registry-cache/` survives both on purpose: it is a build input rather than
-graph state, and keeping it is what lets the rebuild run `--offline`.
-
-A full rebuild from nothing is one command, since `pipeline --reset` does the
-demolition and the rebuild in the right order:
-
-```powershell
-python -m blastradius.cli pipeline --reset
-python -m blastradius.cli stats       # node and edge counts, both tiers
-```
-
-## The Explorer
-
-`ui/` is a separate frontend server from `blastradius/api/`. That one is the
-machine-facing assessment API a CI job would call; this is the human-facing
-explorer. Keeping them apart means the demo surface can be restarted or
-re-skinned without touching what other tools depend on, and it reads HydraDB
-directly rather than proxying — one fewer moving part to fail on stage.
-
-### Pointing at a private registry
-
-Three environment variables, picked up by every entry point — CLI, pipeline,
-watcher, UI — so none of them grows its own flag:
-
-```bash
-export BLASTRADIUS_REGISTRY=https://npm.internal.example
-export BLASTRADIUS_REGISTRY_TOKEN=...        # optional, sent to that host only
-export BLASTRADIUS_CHANGES_URL=https://npm.internal.example/_changes
-```
-
-The token is sent **only** to the configured registry — a credential for an
-internal registry must not travel to npmjs.org because a package happened to
-resolve there, and a test asserts both directions. It is deliberately not part
-of the cache key: it rotates, and keying on it would discard the whole cache
-each time.
-
-The watcher is the piece a private registry does not simply fall in behind.
-Ingest reads package documents and any registry serves those; the watcher needs
-a *firehose*, and CouchDB `_changes` is npm-specific — Artifactory, Verdaccio
-and Nexus each expose something different or nothing. Set `BLASTRADIUS_CHANGES_URL`
-if yours has one. Either way `/api/live/status` reports `registry`, `changes_url`
-and `public_feed`, so a console that is tailing npmjs.org while you believe it
-is watching your internal registry says so.
-
-Download counts are npm-only (`api.npmjs.org`), so a private registry loses
-popularity data. Typosquat detection already treats an unknown download count as
-unknown rather than zero, so internal packages are not reported as unpopular —
-they are reported as unassessed.
-
-### Scoping a scan: `.blastradiusignore`
-
-Discovery is a recursive walk for `package-lock.json`, and a walk cannot tell a
-service you deploy from a fixture committed to exercise the parser. Pointed at
-*this* repository it found fifteen — twelve of them a synthetic demo corpus and
-one a test fixture — and reported a fleet of fifteen for a project that ships
-two. Every derived number inherits that: "2 of 13 threats reach code" is a
-different sentence when eleven findings belong to fixtures.
-
-So a repo says what is not its own code, in a `.blastradiusignore` at the scan
-root:
-
-```
-corpus/            # generated demo fleet
-tests/fixtures/    # parser fixtures
-```
-
-A pattern with a slash is **relative to the scan root**, so `corpus/` hides
-`<root>/corpus` and nothing else — pointing the CLI *at* `corpus/` still scans
-it, which is what the demo does on purpose. Bare names (`node_modules`, `.git`)
-match any component at any depth and always apply.
-
-It scopes both tiers. The graph walk honours it directly; the OSV scan also
-filters its findings by source, because `osv-scanner --recursive` walks the
-tree itself and would otherwise raise advisories against packages no service
-resolves. Skips are always **reported, never silent** — `repo/inspect` returns
-the ignored list before you commit to a scan, and `doctor` names them. A scan
-that quietly dropped twelve manifests is indistinguishable from a small repo.
-
-Three pages, each answering a different question:
-
-| Page | Question |
-|---|---|
-| `/console` | Which projects resolved one exact version, and on what evidence? |
-| `/explorer` | What is confirmed wrong, and can any of it be reached from our code? |
-| `/graph` | What is happening on npm right now, and what would a compromise do? |
-
-**`/explorer` — confirmed threats, and the last mile.** Section 1 lists every
-advisory, incident and deprecation against a version this graph holds, grouped
-by version rather than by CVE. Section 2 traces the selected one down to
-source: `PackageVersion -> dependency chain -> ExternalImport -> Function ->
-callers`. On this repository 2 of 13 confirmed threats reach code — `vite@5.4.21`
-via two separate import paths that both land in `vite.config.js`. The other
-eleven are installed and never imported, which the page says in those words:
-*installed, but not reached from your source*. That is not "not affected", and
-it is the difference between patch-now and patch-Tuesday.
-
-**Macro — the supply chain.** Scoped to one exact version, and read left to
-right as an argument:
-
-    THREAT -> COMPROMISED -> RANGE ADMITS -> LOCKFILE RESOLVES -> PROJECTS
-
-The third column is a dead end. It holds every version whose declared range
-would accept the compromised one — the leads a range-only tool reports — and it
-connects to nothing on its right, because admitting a version is not installing
-it. Only the fourth column, the resolutions a lockfile actually recorded,
-reaches a project. On the corpus in this repo that is 25 nodes against 1.
-
-The highlight is not computed in the browser. Exposure is a fact already stored
-on an edge, so guessing it client-side by matching package names would put back
-exactly the range-only heuristic the model exists to replace.
+The macro view: one compromised version, and the exact path by which a service
+holds it. Everything not on that path is dimmed.
 
 ![Macro view](docs/screens/macro.png)
 
-> The screenshot above still shows the previous depth-column view and needs
-> retaking against the current one.
-
-**Micro — the call graph.** The claim no lockfile scanner can make:
-`src/index.ts → POST /login → handleLogin() → verify() → import 'ua-parser-js'`.
+The micro view: the same compromise, traced through real source. An HTTP route
+reaches a handler, which calls a function, whose body imports the compromised
+package. This is the difference between "installed" and "reachable".
 
 ![Micro view](docs/screens/micro.png)
 
-Note what is *dimmed* there: `GET /health`, `unusedHelper()`, `import 'express'`.
-That is the "safe to ignore" signal, and it is the half of an incident response
-that actually saves time.
-
-Edges carry arrowheads and the column gutters carry chevrons, so the direction
-the graph reads is stated rather than implied. On the hot path the dashes flow
-along the arrow.
-
-Clicking any node opens metadata and the reachability path:
-
-![Detail panel](docs/screens/detail-panel.png)
-
-**Focus mode** is what makes this usable on a real application. Drawing all 474
-functions produces a canvas metres tall that answers nobody's question, so by
-default the view shows only the blast radius plus **one hop of context** either
-side -- what else calls these, what else they reach -- so the boundary is
-visible and not just a bare chain. Each column reports `1 of 471` and offers
-`+470 more`, which opens that column alone.
-
-![Focus mode](docs/screens/focus.png)
-
-With no query there is no blast radius to compute, so each column falls back to
-its ten most-connected nodes: the hubs are what is worth seeing first. Toggling
-`focus` off draws everything, which is occasionally what you want and never
-what you want first.
-
-It is responsive down to phone width: the graph auto-fits (shrink only — a
-four-node graph blown up to fill a monitor implies more than is there), the
-detail drawer becomes a bottom sheet, chips and metrics scroll sideways, and
-the legend drops since the column headers already carry the colours. A
-zoom/fit control sits bottom-right; touching it hands you manual control and
-stops the auto-fit from fighting you on resize.
-
-![Phone width](docs/screens/mobile.png)
-
-### The redesigned console (`/console`)
-
-A React rebuild of this same Explorer lives in `ui/web` (Vite + React 18).
-`npm run build` there compiles into `ui/static/app`, which `server.py` already
-mounts; the build output is gitignored on purpose (see `.gitignore`) so a
-stale bundle can never silently outrank the source it was built from. Until
-that build has been run once in a given checkout, `GET /console` falls back
-to the standalone `ui/static/console.html` rather than 404ing.
-
-Two gaps worth knowing about before demoing off this branch:
-
-- **`/api/repos` has no backend yet.** `ui/web/src/lib/api.js` already says so
-  in a comment — the Repos view degrades to `localStorage` and states that
-  rather than faking a queue.
-- **`scale` is CLI-only**, and deliberately: it is a measurement harness, not a
-  view, and its destructive mode is gated behind
-  `BLASTRADIUS_DESTRUCTIVE_TESTS=1`. `frontier` and `anomalies` are no longer
-  CLI-only — the watcher runs the anomaly checks on every live publish and the
-  frontier on every fleet hit — but the UI shows only their *counts*. The
-  routes, per-target evidence atoms and confidence tiers that
-  `python -m blastradius.pkg.cli frontier` prints still have no view.
-- **`compare` has no view either.** Range-only-vs-lockfile-truth is the central
-  accuracy claim and it is reachable only from the CLI; the simulation computes
-  the number and does not render it.
-- **Typosquats are invisible in every UI.** `TYPOSQUAT_OF` edges ship in the
-  `/api/graph/full` payload but are drawn in the same grey as every other edge,
-  and no endpoint returns typosquat findings. The module has six detection
-  techniques and no surface.
-
-### Making it fast
-
-Measured rather than guessed, and the answer was not where it looked:
-
-| Query shape | Median |
-|---|---|
-| Pinned-id 2-hop | 4.7 ms |
-| Pinned-id variable-length `*1..8` | 6.3 ms |
-| Label scan + property filter | 36.6 ms |
-| **Unpinned edge sweep** `(a)-[e]->(b)` | **500-770 ms** |
-
-Traversal was never the problem. Unpinned sweeps are ~100x slower than pinned
-traversals and dominated everything, so both fixes target those:
-
-- **Names resolve locally.** `held_versions` was a label scan, because there is
-  no index behind `p.name`. `data/ids.sqlite` already maps the canonical purl
-  (`pkg:npm/lodash@4.17.21`) `-> id` and SQLite indexes it -- 0.02 ms instead of 36 ms. Candidates are then
-  confirmed against the graph in a single `UNION ALL` of pinned lookups, since
-  the id map outlives the graph and would otherwise name versions that are no
-  longer there.
-- **The Explorer caches the micro view against the node's `read_epoch`**, which
-  advances only when writes land. Building it costs six unpinned sweeps;
-  serving it again costs one pinned lookup — **1198 ms -> 54 ms** — and an
-  ingest invalidates it automatically. The macro view is not cached this way:
-  it is answered per target rather than swept whole, and reports its own
-  measured cost in the footer.
-
-The micro graph is sent to the browser once and its blast radius is a reverse
-BFS in JS, so typing in the search box costs no round trips. That works because
-the code graph is small and the question there really is "what reaches this".
-
-The macro view is the case where it does not work, which is why it moved server
-side: over the package tier a client-side name match cannot tell a version a
-range merely admits from one a lockfile resolved. It runs on the same
-`RESOLVED_IN` and `SATISFIES` edges the CLI uses, and commits on Enter rather
-than filtering per keystroke — one blast-radius analysis per character typed is
-not a search box.
-
-The design came from a Claude Design project and is implemented here in vanilla
-JS — the source `.dc.html` targets a React template runtime we do not ship.
-
-### Scanning any Node app (micro graph only)
-
-The macro graph needs a resolved lockfile. The call graph needs only source, so
-it has its own entry point that skips the lockfile and the bridge entirely:
-
-```powershell
-python -m blastradius.cli reset                    # clear graph + id map together
-python -m blastradius.cli scan ..\some-node-app
-python -m blastradius.cli ui
-```
-
-![Real application](docs/screens/real-app.png)
-
-**Paths.** The argument is an ordinary relative or absolute directory path,
-resolved against your current working directory. In **Git Bash** use forward
-slashes: a backslash is an escape character there, so `..\GenReal.ai` silently
-becomes `..GenReal.ai` before Python ever sees it. Backslashes are fine in
-PowerShell and cmd. If a path does not resolve, the error prints what it
-resolved to, your working directory, and any nearby directory that looks like
-what you meant.
-
-**Service name** comes from `package.json`'s `name`, falling back to the folder
-name. Many templates ship with `"name": "project"`, so pass `--service` when you
-want something meaningful in the graph.
-
-Without the bridge an import carries no resolved version, so searching by
-package name still highlights but "which version" stays a macro-graph question.
-
-**Clearing state:** see [Starting clean](#starting-clean) above. `reset` drops
-the store *and* deletes `data/ids.sqlite`. Those must go together. Dropping the
-store alone is harmless (ids just continue from a higher counter), but deleting
-`ids.sqlite` while the graph still holds data gives every node a fresh id and
-duplicates the lot.
-
-### Or from the terminal
-
-```powershell
-python -m blastradius.cli stats                            # what is in the graph
-python -m blastradius.cli services                         # ingested services
-python -m blastradius.cli check ua-parser-js@0.7.29        # one package
-python -m blastradius.cli check express --range ">=4.18.0 <4.19.0"
-python -m blastradius.cli advisory advisories\GHSA-ua-parser-js-2021.json
-```
-
-`check` prints the macro answer, the micro answer, and the verdict in one pass,
-and exits non-zero when anything lands in P0 or P1 — so it doubles as a CI gate.
-
-The package tier has its own terminal surface, and it is the quickest way to
-see what the Macro view is drawing:
-
-```powershell
-python -m blastradius.pkg.cli compare lodash@4.17.21     # range-only leads vs lockfile truth
-python -m blastradius.pkg.cli simulate lodash@4.17.21    # mark it compromised, print the report
-python -m blastradius.pkg.cli retract lodash@4.17.21     # take the mark back off
-python -m blastradius.pkg.cli bench lodash@4.17.21       # query latency
-python -m blastradius.pkg.cli frontier pino@10.2.1       # where the worm goes NEXT
-python -m blastradius.pkg.cli anomalies --offline        # publish-time signals
-python -m blastradius.pkg.cli scale --yes                # the scale experiment (destructive)
-```
-
-`frontier` is the forward-looking half, and the one no scanner answers: given a
-compromise, which packages can the implicated credentials publish to *next*,
-ranked by how many of your services resolve each one today. See
-[PACKAGE-GRAPH.md §10b](PACKAGE-GRAPH.md). `anomalies` reads publish metadata
-for the worm's own signature — bursts, install scripts appearing, publishes from
-outside the maintainer list.
-
-`compare` is the one that states the case without any UI: it prints how many
-versions a declared range admits against how many a lockfile actually resolved.
-`simulate` writes an `Incident` node in our own database pointing at an
-ordinary, healthy public package — nothing is downloaded, nothing is executed,
-and no package is modified. The edge lands on the `PackageVersion`, never the
-`Package`, which is why marking `4.17.21` leaves `4.17.20` untouched.
-
-Run everything Docker-related from **PowerShell, never Git Bash**. Git Bash
-rewrites container-side absolute paths — `/data/store` arrives as
-`C:/Program Files/Git/data/store` — and the node dies with a bare
-`PermissionDenied` that names no path.
-
 ---
 
-## The graph model
+## 3. The graph model stored in HydraDB
 
-**Macro (lockfile).** The ingest tier, unchanged. The ecosystem tier the macro
-*view* reads — `SATISFIES`, `RESOLVED_IN`, maintainer and repository identity,
-and the evidence atoms a finding is built from — is documented separately in
-[PACKAGE-GRAPH.md](PACKAGE-GRAPH.md).
+Everything below is written into HydraDB by the ingest and read back by queries.
+The single source of truth for labels, edge types and id ranges is
+[`blastradius/schema.py`](blastradius/schema.py).
 
-| Edge | From → To |
-|---|---|
-| `DEPENDS_ON` | Service → PackageVersion, PackageVersion → PackageVersion |
-| `REQUIRED_BY` | materialised inverse |
-| `PRESENT_IN` | PackageVersion → Service — the flattened transitive closure |
-| `HAS_PACKAGE` | materialised inverse |
+```mermaid
+flowchart TB
+    subgraph IDENT["Identity and provenance"]
+        PKG["Package"]
+        MNT["Maintainer"]
+        REPO["Repository"]
+        ORG["Organization"]
+        PUBID["PublisherIdentity"]
+    end
 
-**Micro (ts-morph AST)**
+    subgraph LOCK["Resolution record"]
+        LF["Lockfile"]
+        LE["LockfileEntry"]
+    end
 
-| Edge | From → To |
-|---|---|
-| `CONTAINS` | File → Function |
-| `CALLS` / `CALLED_BY` | Function → Function, and its inverse |
-| `CALLS_EXTERNAL` / `IMPORT_USED_BY` | Function → ExternalImport, and its inverse |
-| `HANDLED_BY` / `HANDLES` | Route → Function, and its inverse |
+    subgraph THREAT["Threat"]
+        ADV["Advisory"]
+        INC["Incident"]
+    end
 
-**Bridge**
+    SVC["Service"]
+    PV["PackageVersion"]
+    FILE["File"]
+    FUNC["Function"]
+    ROUTE["Route"]
+    EI["ExternalImport"]
+    ART["PersistenceArtifact"]
 
-| Edge | From → To |
-|---|---|
-| `RESOLVES_TO` / `IMPORTED_AS` | ExternalImport → PackageVersion, and its inverse |
+    PKG -->|HAS_VERSION| PV
+    PKG -->|MAINTAINED_BY| MNT
+    PKG -->|OWNED_BY| ORG
+    PKG -->|TYPOSQUAT_OF| PKG
+    PV -->|PUBLISHED_BY| PUBID
+    PV -->|SOURCED_FROM| REPO
+    PV -->|REQUIRES| PKG
+    PV -->|SATISFIED_BY| PV
+    MNT -->|MEMBER_OF| ORG
 
-`ExternalImport` is keyed per **(service, specifier)**, not globally, because two
-services can resolve `lodash` to different versions — and that difference is
-exactly what the tool exists to surface.
+    SVC -->|HAS_LOCKFILE| LF
+    LF -->|HAS_ENTRY| LE
+    LE -->|RESOLVES_VERSION| PV
+    PV -->|RESOLVED_IN| SVC
 
-### One key per thing, across both tiers
+    SVC -->|DEPENDS_ON| PV
+    PV -->|DEPENDS_ON| PV
+    PV -->|PRESENT_IN| SVC
+    SVC -->|HAS_ARTIFACT| ART
 
-Both ingest paths write `PackageVersion` and `Service` nodes, and ids are
-allocated per `(label, natural_key)`. So the *key function* is a correctness
-boundary, not a formatting choice: `blastradius/ingest/` and `blastradius/pkg/`
-both go through `pkg/identity.py` (`version_key`, `package_key`, `service_key`),
-and neither may build a key inline.
+    FILE -->|DECLARED_IN| SVC
+    FILE -->|CONTAINS| FUNC
+    ROUTE -->|HANDLED_BY| FUNC
+    FUNC -->|CALLS| FUNC
+    FUNC -->|CALLS_EXTERNAL| EI
+    EI -->|RESOLVES_TO| PV
 
-They once disagreed — `vite@6.3.6` from the lockfile loader against
-`pkg:npm/vite@6.3.6` from the package tier — and the result was two
-unconnected nodes for every package version in the repo. Advisories attached to
-one copy; the dependency tree and the `RESOLVES_TO` bridge attached to the
-other. Nothing errored, no count looked wrong, and
-
-```
-MATCH (:Advisory)-[:AFFECTS]->(v:PackageVersion)<-[:RESOLVES_TO]-(:ExternalImport)
-```
-
-returned zero rows, so the product reported a clean bill of health for a repo
-with 96 published advisories in it. `tests/test_identity.py` and
-`tests/test_exposure.py` hold the guards.
-
-### Two ecosystems, one key space
-
-npm's `requests` and PyPI's `requests` are unrelated projects, so the ecosystem
-is part of the key, not a property hanging off the node:
-
-```
-pkg:npm/lodash@4.17.21          pkg:pypi/h11@0.16.0
-```
-
-This was not theoretical. Before the ecosystem reached the key, every PyPI
-advisory in the supplied OSV scan was written through npm's name rules as
-`pkg:npm/h11@0.9.0` — a package that does not exist. The finding could never
-attach to the real node, so it sat in the graph with zero exposed services and
-read as merely uninteresting rather than as broken.
-
-PyPI names are normalised per PEP 503 (`Flask_SQLAlchemy`, `flask-sqlalchemy`
-and `Flask.SQLAlchemy` are one project), and versions are compared per PEP 440
-by `blastradius/pkg/pep440.py` — written by hand rather than taking a
-dependency, and differential-tested against `packaging` across the whole
-cross-product of a version corpus when it happens to be importable. That test is
-what found the two rules not derivable from the ordering: `>1.0` must **not**
-match `1.0.post1`, and the mirror rule for `<` and pre-releases.
-
-A PyPI resolution records how much it is worth as evidence, because a
-`requirements.txt` is an instruction and a lockfile is a record:
-
-| `source` on `RESOLVED_IN` | what it means |
-|---|---|
-| `pypi-locked` | a lock file named the exact version (`poetry.lock`, `uv.lock`) |
-| `pypi-pinned` | the manifest pinned it with `==` |
-| `pypi-resolved` | pip chose it from a range, just now — a forecast |
-
-### Exposure is one model, read by both views
-
-`blastradius/query/exposure.py` walks the package tree, the bridge and the code
-graph as a **single** edge set, backwards from every version an advisory names,
-and grades each node it reaches:
-
-```
-heat = severity_base - hops * DECAY
+    ADV -->|AFFECTS| PV
+    INC -->|COMPROMISES| PV
 ```
 
-Both `/api/pkg/project` and `/api/graph?mode=micro` read that one model, so the
-two tabs cannot disagree about the same CVE. It is walked as one set rather than
-two because a module rarely imports the vulnerable package itself — this repo
-imports `react-router-dom`, which is clean, while the thirteen advisories sit on
-`react-router` one hop below it. Two separate walks stop at the bridge and call
-that file safe.
+### The three claims Nodus refuses to merge
 
-The UI draws `heat` directly: green where nothing reaches a node, then yellow,
-orange and red as it climbs. Severity decides where a node starts on the ramp
-and distance walks it down, so a critical two hops out still outranks a low one
-at the source.
+Most tools collapse "this range mentions the package" and "this lockfile
+installed the package" into one number. Nodus stores them as three different
+edges with three different evidence strengths, because the difference is the
+whole accuracy claim:
 
----
-
-## Two decisions that are not obvious
-
-### Every edge is written twice
-
-HydraDB requires a variable-length traversal to **pin the source id**; `*` and
-`*1..` are rejected and patterns are directed with exactly one type. A backward
-walk is therefore not expressible at all. Every "who reaches this" question is a
-forward walk over a materialised inverse edge, written at ingest. See
-`INVERSE_OF` in `blastradius/schema.py` — it is the reason ingest writes each
-edge in both directions, not an optimisation.
-
-### `PRESENT_IN` is a flattened closure, not a traversal
-
-A variable-length walk must declare a maximum depth. Real npm trees are
-routinely deeper than any bound worth hardcoding, so answering "is this package
-in that service" with `[:REQUIRED_BY*1..8]` would **silently under-report** deep
-exposure — the failure mode that most flatters the tool. The closure is computed
-in Python at ingest instead, which makes the query exact at any depth *and*
-turns it into a single hop. Call-graph walks still use a bound (`MAX_CALL_DEPTH`,
-8) because call chains genuinely are short; the bound is returned in the API
-response so nobody mistakes a truncated answer for a complete one.
-
----
-
-## HydraDB constraints worth knowing before you edit a query
-
-These were all found the hard way, by being rejected at runtime. They are not
-in `cypher-compat.md`, so they are written down here.
-
-| Constraint | Consequence |
-|---|---|
-| Variable-length needs a pinned source and an upper bound | materialised inverse edges; flattened closure |
-| **`UNWIND … MATCH … MERGE` (write) requires exactly one label per endpoint** | edges are batched per `(type, src label, dst label)`, since `REQUIRED_BY` spans two label pairs |
-| **`UNWIND … MATCH … RETURN` (read) forbids labels**, demands the first projection be the source field, and accepts exactly two unsorted projections | reads never use `UNWIND` — they issue one plain `MATCH` per id with a scalar `$id`, where labels and full projections both work |
-| **A list parameter is accepted only as `UNWIND` input** | `algo.MSpaths` cannot take `sourceValues` as `$param`; the list is inlined as a literal (escaped in `_literal_list`) |
-| **Admission control caps `client_query_runtime_ms`** (30 s stock) | asking for more is an HTTP 429; the client defaults to 25 s |
-| No `IN`, `CONTAINS`, `ENDS WITH`, `IS NULL` in `WHERE` | every property is always written, using sentinels |
-| No string functions | semver matching happens in Python, which feeds exact ids to the graph |
-| Relationships are reified with their own global `id` | a persisted id allocator is mandatory — `blastradius/ids.py` |
-| `sum`/`avg` unsigned ints only | timestamps are epoch-second integers |
-| No transactions, one statement per request | writes are `UNWIND`-batched auto-commits; `MERGE` by id makes re-runs idempotent |
-
-The write/read asymmetry on `UNWIND` is the one that will bite an editor:
-**writes are label-qualified, reads are not.** Do not make them match — the
-server rejects whichever one you change.
-
-Base list: `../hydradb/cypher-compat.md`.
-
----
-
-## Where the vulnerabilities come from
-
-They are scanned, not written down. `osv_scanner_tool/` drives Google's
-`osv-scanner` over a repository, and `blastradius/pkg/osvscan.py` turns what it
-finds into the two inputs the graph already consumes:
-
-| Output | Consumer | What it makes dynamic |
+| Edge in HydraDB | What it proves | Evidence |
 |---|---|---|
-| `data/osv/<repo>/osv_scan_results.csv` | `blastradius/pkg/osv.py` → package tier | `Advisory` nodes and `AFFECTS` edges — the Macro view's threat column |
-| `advisories/generated/*.json` | `blastradius/query/advisory.py` → micro tier | `cli advisory`, `cli check` and the one-click chips in both UIs |
+| `REQUIRES` | A declared range names the package | POSSIBLE |
+| `SATISFIED_BY` | The range provably admits this exact version | POSSIBLE_EXACT |
+| `RESOLVES_VERSION` | A lockfile actually selected this version | **CONFIRMED** |
 
-Writing both is the point: they feed different tiers, and a scan that populated
-only one would leave half the tool still hardcoded. The hand-written samples in
-`advisories/` stay where they are — generated files live in the `generated/`
-subdirectory and are cleared and rewritten on every scan, so the two never
-fight.
+`^4.17.21` and `^4.17.0` both admit `lodash@4.17.21`. Only one of them is what
+your build installed. A tool that cannot tell those apart over-reports, and an
+over-reporting security tool is one people learn to ignore.
+
+Advisories and incidents are likewise kept apart. `Advisory -AFFECTS->` means
+**vulnerable**; `Incident -COMPROMISES->` means **tampered**. A decade-old
+low-severity CVE outranking an active compromise is precisely the failure that
+makes a security dashboard ignorable, so they are different node types on
+different scales.
+
+### One key per thing
+
+Ids in HydraDB are allocated per `(label, natural key)` by
+[`blastradius/ids.py`](blastradius/ids.py), and every key is built by
+[`blastradius/pkg/identity.py`](blastradius/pkg/identity.py) following the
+Package URL spec: `pkg:npm/lodash@4.17.21`, `pkg:pypi/h11@0.16.0`.
+
+This is a correctness boundary, not tidiness. The two ingest paths once
+disagreed. `vite@6.3.6` from the lockfile loader and `pkg:npm/vite@6.3.6` from
+the package tier became two unconnected HydraDB nodes for every package version
+in the repository. Advisories attached to one copy, the dependency tree to the
+other, nothing errored, and the product reported a clean
+bill of health for a repository with 96 advisories in it. The ecosystem is part
+of the key for the same reason: npm's `requests` and PyPI's `requests` are
+unrelated projects.
+
+---
+
+## 4. Where HydraDB is used
+
+HydraDB is not a storage detail here. It is the execution engine. Every question
+the product answers is a HydraDB query, and the data model was designed around
+what HydraDB's query planner accepts.
+
+| Capability | What HydraDB does | Code |
+|---|---|---|
+| **Store both graph tiers** | 16 node labels and 45 edge types, written with `UNWIND` + `MERGE` by id | `ingest/load.py`, `pkg/writer.py` |
+| **Which services are exposed** | One pinned-id hop over the `RESOLVED_IN` closure stored in HydraDB, 3.0 ms | `pkg/blast.py` |
+| **Why do we have this package** | `algo.MSpaths` resolved inside the HydraDB engine, not reassembled client-side | `query/blast.py` |
+| **Show me the chain** | `algo.SSpaths` over `SATISFIES` and the `RESOLVED_IN` closure, run only for the node a user opens | `pkg/blast.py` |
+| **Does our code reach it** | Forward walks from `ExternalImport` over `IMPORT_USED_BY` and `CALLED_BY` in HydraDB | `query/codereach.py` |
+| **Heat map of the whole tree** | Bulk edge reads from HydraDB, graded in Python from a single edge set | `query/exposure.py` |
+| **Blast frontier** | Three one-hop HydraDB queries over `PUBLISHED_BY`, `MAINTAINED_BY`, `SOURCED_FROM` | `pkg/frontier.py` |
+| **Who published this** | Pinned lookups over `PUBLISHED_BY` and `MAINTAINED_BY` in HydraDB | `chat/tools.py` |
+| **Whole-graph map** | Label scans plus nine unpinned edge sweeps, cached on `read_epoch` | `pkg/fullgraph.py` |
+| **Incident simulation** | Writes an `Incident` node and `COMPROMISES` edge into HydraDB, then retracts it | `pkg/incident.py` |
+| **Cache invalidation** | HydraDB's monotonic `read_epoch` is the cache key for every derived payload | `hydra_client.py` |
+| **Chatbot facts** | Every fact the assistant is allowed to state comes from a HydraDB query | `chat/tools.py` |
+| **Scale measurement** | Synthetic graphs up to 500,000 versions written to and timed through HydraDB | `pkg/scale.py` |
+
+The client is [`blastradius/hydra_client.py`](blastradius/hydra_client.py): the
+HTTP JSON API by default, with a Bolt session available for bulk loads. It
+handles HydraDB's typed cell format (`{"type": "string", "value": "lodash"}`),
+cursor pagination, `UNWIND` batching and the admission-control runtime ceiling.
+
+**`read_epoch` deserves a specific mention.** HydraDB returns a monotonic read
+snapshot with every query result, and it advances only when writes land. That
+makes it a free, correct cache key: the whole-graph map, the Explorer's micro
+view and the chatbot's briefing are all cached against it, so an ingest
+invalidates every derived payload automatically without a single invalidation
+message being written anywhere.
+
+---
+
+## 5. How the graph is built
+
+One command turns a repository into a fully populated HydraDB graph:
 
 ```powershell
-# Scan only: writes the CSV, the advisory JSON, and a timed log report.
-python -m blastradius.cli osv-scan corpus
-
-# Scan and rebuild both tiers, end to end. Defaults to corpus/.
 python -m blastradius.cli pipeline --reset
 ```
 
-`pipeline` is the one to reach for. The three commands it replaces —
-`osv-scan`, `cli ingest`, `pkg.cli ingest` — all have to agree on *which*
-repository they are talking about, and running them against different paths
-gives you a graph whose vulnerabilities describe somebody else's code. It also
-times every stage and writes `pipeline-log.md` beside the CSV, which is the
-only place the end-to-end cost is measured rather than estimated.
+```mermaid
+flowchart TB
+    REPO["A repository checkout<br/>corpus/ or any path"]
 
-### What runs beside what
+    subgraph A["Phase A - runs concurrently"]
+        OSV["osv-scanner<br/>writes CSV + advisory JSON<br/>touches no graph"]
+        AST["ts-morph AST scan<br/>writes the micro tier<br/>the only graph writer here"]
+        PRE["npm registry prefetch<br/>warms data/registry-cache<br/>network only"]
+    end
 
-Three of the four stages do not depend on each other, so `blastradius/pipeline.py`
-runs them together:
+    B["Phase B - package tier ingest<br/>needs the scan CSV, the ids phase A<br/>allocated, and the cached registry docs"]
 
+    HYDRA[("HydraDB<br/>one graph, both tiers")]
+    VERIFY["Verify<br/>counts and spot checks"]
+
+    REPO --> A
+    OSV --> B
+    AST --> B
+    PRE --> B
+    AST --> HYDRA
+    B --> HYDRA
+    HYDRA --> VERIFY
 ```
-+-- phase A (concurrent) ------------------------------------------+
-|  osv scan          -> files only, touches neither graph nor ids  |
-|  code graph ingest -> the only graph writer in this phase        |
-|  registry prefetch -> warms data/registry-cache/, network only   |
-+------------------------------------------------------------------+
-                                |
-phase B: package tier ingest  <-+  needs the scan's CSV, the ids the
-                                   code graph allocated, and the registry
-                                   documents now sitting in cache
-```
 
-The split is drawn along what each stage **writes**, not along what would be
-convenient. Exactly one member of phase A writes to the graph and exactly one
-writes `data/ids.sqlite`, so there is no lock to contend and no ordering to get
-wrong. The package tier is not in there because it genuinely depends on all
-three — starting it early would mean ingesting advisories the scan had not
+The split is drawn along **what each stage writes**, not along what would be
+convenient. Exactly one member of phase A writes to HydraDB and exactly one
+writes the id map, so there is no lock to contend for and no ordering to get
+wrong. The package tier cannot join phase A because it genuinely depends on all
+three. Starting it early would mean ingesting advisories the scan had not
 finished finding.
 
-The prefetch is the one that pays. The package tier spends most of its time
-waiting on the npm registry, and those documents are keyed by package name —
-which the lockfiles already name, before any advisory is known. On a cold cache
-that stage alone was ~11 s of a 19 s run.
+The prefetch is the stage that pays for itself. The package tier spends most of
+its time waiting on the npm registry, and those documents are keyed by package
+name, which the lockfiles already give us before any advisory is known. On a
+cold cache that stage alone was about 11 seconds of a 19 second run.
 
-`--sequential` turns the overlap off. When a stage fails, being able to run the
-same work in a straight line is worth more than the seconds.
+`--sequential` turns the overlap off, which is worth more than the saved seconds
+when a stage is failing and you need to see it in a straight line.
 
-### Measured
+### Where the vulnerabilities come from
 
-One repo (`corpus/drawio-desktop`, 338 packages, 1 lockfile), warm registry
-cache, three runs each, median:
+They are scanned, not hand-written. `osv_scanner_tool/` drives Google's
+`osv-scanner` over the repository and `blastradius/pkg/osvscan.py` turns the
+findings into the two inputs the graph consumes: a CSV that becomes `Advisory`
+nodes and `AFFECTS` edges in HydraDB, and advisory JSON files that the micro
+tier resolves against exact versions.
+
+**Ground truth is the resolved version, never the manifest.** An unpinned range
+in `package.json` resolves to whatever is newest, which is usually the *safe*
+version, so scanning manifests reports vulnerabilities in versions nobody
+installs and misses the ones they do. The scan reads `package-lock.json`, which
+is already resolved.
+
+If `osv-scanner` is not on the machine, the scan falls back to resolving the
+lockfiles locally and asking `api.osv.dev` about the exact resolved versions.
+Same advisories, one network hop. `python -m blastradius.cli doctor` reports
+which path you are on.
+
+---
+
+## 6. How a question is answered
+
+Take the headline question: *`ua-parser-js@0.7.29` is compromised. What now?*
+
+```mermaid
+sequenceDiagram
+    participant U as Responder
+    participant N as Nodus
+    participant ID as Local id map, SQLite
+    participant H as HydraDB
+
+    U->>N: ua-parser-js@0.7.29
+    N->>ID: purl to integer id
+    ID-->>N: id (0.01 ms, no graph hit)
+
+    N->>H: One hop over RESOLVED_IN, pinned by id
+    H-->>N: Exposed services, depth, entry dependency (3.0 ms)
+
+    N->>H: Walk RESOLVES_TO into the micro tier
+    H-->>N: The ExternalImport that names it
+
+    N->>H: Walk IMPORT_USED_BY, then CALLED_BY
+    H-->>N: The functions that call it, and their callers
+
+    N->>H: Walk HANDLES to routes
+    H-->>N: The HTTP routes that reach those functions
+
+    N->>N: Grade P0 / P1 / P2 / P3
+    N-->>U: Ranked answer with the file and line to open
+```
+
+Three design choices are visible in that sequence.
+
+**Names resolve locally, before HydraDB is touched.** Looking a package name up
+by property would be a label scan, and HydraDB has no index behind `p.name`. The
+id map in `data/ids.sqlite` already stores the canonical purl to id mapping and
+SQLite does index it, so the lookup is 0.02 ms instead of 36 ms. Candidates are
+then confirmed against HydraDB with pinned lookups, because the id map outlives
+the graph and would otherwise name versions that are no longer there.
+
+**The headline query does not traverse at all.** `RESOLVED_IN` and `PRESENT_IN`
+are the *flattened transitive closure* of the dependency tree, computed in Python
+at ingest and written into HydraDB as single edges carrying depth, the direct
+dependency the path ran through, and the time window. So "which services resolved
+this version" is one hop, exact at any depth. This is not only a speed choice: a
+variable-length walk in HydraDB must declare a maximum depth, real npm trees are
+routinely deeper than any bound worth hardcoding, and a bounded walk would
+**silently under-report** deep exposure, which is the failure mode that most
+flatters the tool.
+
+**Path reconstruction is paid for on demand.** The summary never runs
+`algo.SSpaths`; only the node a user actually opens does.
+
+---
+
+## 7. Feature by feature
+
+### 7.1 The Explorer: from a threat to a function
+
+Two questions in order: what is definitely wrong with what we installed, and
+which of those can be reached from a line of source here. The second is the
+point. The Explorer walks `Advisory` or `Incident` to `PackageVersion`, along the
+dependency chain if the arrival was indirect, across the bridge to the
+`ExternalImport` that names it, into the `Function` whose body calls that import,
+and out to the functions that call *that* one.
+
+A threat with code reach names the file and line to open. A threat with no code
+reach is not a false positive, because the package really is installed, but it is
+a different priority, and saying so is the product.
+
+Pointed at a real application rather than the demo corpus, the same view reports
+0 of 4 entry routes affected, 0 of 174 functions reached and 0 of 24 imports
+vulnerable. A clean answer is still an answer, and it is one the tool has to be
+able to give:
+
+![A real application](docs/screens/real-app.png)
+
+### 7.2 The Macro view: evidence, not a score
+
+Scoped to a single version and answered server-side against evidence stored on
+HydraDB edges. It reports how many candidates a range-only heuristic would have
+produced against how many the lockfiles confirm, which is the accuracy claim
+stated as a number rather than as a promise.
+
+### 7.3 The whole-graph map
+
+Every node in HydraDB drawn as a circle, coloured by heat, with enough metadata
+to explain each one. It is the map you look at before you know what you are
+asking, and the surface a live alert lands on. Built in one sweep of nine edge
+reads and then cached against `read_epoch`, because unpinned edge sweeps are the
+expensive shape in HydraDB (500 to 770 ms each) and the second view of the same
+graph must be instant.
+
+### 7.4 The blast frontier: what the attacker publishes to next
+
+Blast radius is backward-looking: a version is compromised, which projects
+already hold it. By the time that is answered, the damage is done.
+
+The TanStack-class worm did not spread by being depended upon. It spread by
+**publishing**: credentials taken from a CI pipeline, 84 artifacts across 42
+packages in six minutes. Every one of those packages was predictable the moment
+the first was known, because publish rights are a graph the registry hands out
+for free:
+
+```mermaid
+flowchart LR
+    C["Compromised version"]
+    ACC["PublisherIdentity<br/>the account that pushed it"]
+    MNT["Maintainers<br/>with publish rights"]
+    REPO["Repository<br/>whose CI publishes"]
+    F["Frontier<br/>everything those can publish to"]
+    RANK["Ranked by how many of<br/>YOUR services resolve it today"]
+
+    C -->|PUBLISHED_BY| ACC
+    C -->|MAINTAINED_BY| MNT
+    C -->|SOURCED_FROM| REPO
+    ACC --> F
+    MNT --> F
+    REPO --> F
+    F --> RANK
+```
+
+Three one-hop HydraDB queries over edges the ingest already writes, and the
+ranking reuses the same `RESOLVED_IN` closure the blast radius uses, read
+forwards. The output is a rotation list: these are the credentials to revoke.
+
+### 7.5 Publish-time anomalies
+
+The registry metadata already fetched for every version carries
+`has_install_script`, `published_at`, `publisher` and `repository`. Between them
+those four fields describe the TanStack compromise almost exactly, and
+[`blastradius/pkg/anomaly.py`](blastradius/pkg/anomaly.py) reads them back:
+
+| Signal | What it saw |
+|---|---|
+| `PUBLISHER_NOT_MAINTAINER` | Pushed by an account that is not a listed maintainer |
+| `INSTALL_SCRIPT_ADDED` | An install script appeared on a package that never had one |
+| `DORMANCY_BREAK` | A long-quiet package published suddenly |
+| `PUBLISH_BURST` | Releases far tighter than the package's own history |
+| `REPOSITORY_CHANGED` / `REPOSITORY_REMOVED` | Source repository moved or vanished |
+| `CORRELATED_BURST` | One account bursting across many packages at once |
+
+The last one is the signal no per-package check can see, and it is what separates
+a worm from a maintainer having a busy afternoon.
+
+**Unknown is not "no".** This is the rule the module is built around. The
+abbreviated npm packument carries no maintainers and no publish times, and a
+missing `published_at` is stored as the sentinel 0, not 1970. Treating either as
+a negative would emit "published by an unknown account" for every package whose
+metadata simply was not fetched. Each check states its own preconditions and
+declines to fire when they are not met, and every signal is labelled INVESTIGATE
+rather than presented as a verdict.
+
+### 7.6 Typosquat neighbourhoods
+
+HydraDB has no string functions, so this cannot run as a query. It is a
+precompute that writes `TYPOSQUAT_OF` edges into HydraDB at ingest, and the query
+side simply follows them.
+
+Two things decide whether it is useful or noise. Candidate generation uses a
+deletion-variant index, so the expensive edit-distance function runs on a handful
+of pairs rather than millions. And a popularity guard decides correctness:
+`lodash.merge`, `lodash.debounce` and `@types/lodash` all sit within a trivial
+edit distance of `lodash` and none is a squat, so an edge is written only when
+the target is materially more depended-upon than the candidate.
+
+### 7.7 The live watcher
+
+Everything above answers a question you already knew to ask. npm replicates its
+registry as a public CouchDB change feed, so a watcher can see publishes as they
+happen rather than waiting for an advisory that arrives hours later.
+
+```mermaid
+flowchart LR
+    FEED["npm _changes feed<br/>resumable seq cursor"]
+    RES["Resolve the packument<br/>is the newest version recent?"]
+    AN["anomaly.analyse_package"]
+    HIT{"Does this fleet<br/>hold that package?"}
+    HYDRA[("HydraDB")]
+    ALERT["Alert on the console<br/>with blast radius and frontier"]
+    DROP["Recorded, not surfaced"]
+
+    FEED --> RES --> AN --> HIT
+    HIT -->|query| HYDRA
+    HIT -->|yes| ALERT
+    HIT -->|no| DROP
+```
+
+Measured at roughly 0.85 changes per second for the whole registry, which is a
+trivial volume and the reason this can be a poll loop rather than a pipeline. The
+watcher itself is deliberately ignorant of the graph so it can be tested without
+one; deciding what a fleet hit *means* happens in `ui/live.py`, which has HydraDB.
+
+### 7.8 Incident simulation
+
+Nothing here touches a real malicious package. An incident is a node in our own
+HydraDB graph pointing at one ordinary, healthy public package version. No
+artifact is downloaded, nothing is executed, and the package is not modified. We
+are testing graph logic, and graph logic does not care whether the tampering was
+real.
+
+The incident carries a **live window**, because a compromised version is usually
+pulled within hours, so "did this project resolve it while it was live" is a
+different and much smaller question than "does this project hold it now".
+`simulate` creates one and answers every question the engine can ask about it;
+`retract` removes it and leaves the graph as it was.
+
+### 7.9 The web surface
+
+```mermaid
+flowchart LR
+    START["/<br/>Repository picker"]
+    CONSOLE["/console<br/>Live console"]
+    EXPLORER["/explorer<br/>Threats and code reach"]
+    GRAPH["/graph<br/>Whole-graph map"]
+    API["blastradius.api<br/>machine-facing assessment API"]
+    HYDRA[("HydraDB")]
+
+    START --> CONSOLE
+    CONSOLE --> EXPLORER
+    CONSOLE --> GRAPH
+    EXPLORER --> HYDRA
+    GRAPH --> HYDRA
+    CONSOLE --> HYDRA
+    API --> HYDRA
+```
+
+`ui/server.py` is the human-facing explorer and `blastradius/api/main.py` is the
+machine-facing assessment API a CI job would call. They are deliberately separate
+so the demo surface can be restarted or re-skinned without touching what other
+tools depend on, and both read HydraDB directly rather than proxying each other,
+which is one fewer moving part to fail during a demo.
+
+---
+
+## 8. The assistant
+
+A chat interface over the same graph. It exists because the queries above are
+precise and the questions people ask under pressure are not: *who published the
+malicious package*, *what do I patch first*, *can this actually run*.
+
+**One chatbot per repository.** Each workspace records exactly which `Service`
+nodes its ingest created, and every tool the agent can call is filtered to those
+ids at construction time. A chatbot for repository 2 has no callable path to
+repository 1's data. The isolation is a closure, not a parameter the model fills
+in, because a model that passes the wrong id would then be a data leak
+rather than a wrong answer.
+
+```mermaid
+flowchart TB
+    Q["A question"]
+
+    subgraph G["Guardrails, cheapest first"]
+        L1["Layer 1 - pattern refusal<br/>free, deterministic, fires only when a<br/>message has no supply-chain vocabulary at all"]
+        L2["Layer 2 - classifier on a nano model<br/>runs in parallel, fails open"]
+    end
+
+    BRIEF["Briefing in the system prompt<br/>computed once per (workspace, read_epoch)"]
+    AGENT["Agent<br/>13 tools, all backed by HydraDB"]
+    HYDRA[("HydraDB")]
+    L3["Layer 3 - grounding audit<br/>every name@version in the answer<br/>checked against what HydraDB holds"]
+    OUT["Streamed to the browser<br/>as Server-Sent Events"]
+
+    Q --> L1 --> L2 --> AGENT
+    BRIEF --> AGENT
+    AGENT <--> HYDRA
+    AGENT --> L3 --> OUT
+```
+
+**The briefing is the speed decision.** Most of what anyone asks (what is
+affected, how bad it is, what to patch first, which services) is answerable from
+a few hundred facts that change only when the graph does. Making the model fetch
+them turns every such question into at least two sequential model calls before
+the first token can arrive. They are computed once per `(workspace, read_epoch)`
+and put in the system prompt instead, so those questions cost one model call and
+begin streaming immediately. Only genuine drill-downs spend a tool round trip.
+
+**Layer 3 is the anti-hallucination half, and it is code, not a prompt rule.**
+Every `name@version` the answer names is checked against the set HydraDB can
+legitimately support: versions the lockfiles resolved, versions advisories name
+as affected, fixed versions a remediation should recommend, and releases the
+publish-history tool reported. An invented `left-pad@1.0.0` in a vulnerability
+report is the failure worth catching by code, because the reader has no way to
+catch it themselves.
+
+**Provenance answers are worded carefully on purpose.** A version with no
+publisher edge in HydraDB reads as *not recorded*, never as *published
+anonymously*, and names nobody. A publisher outside the maintainer list is
+reported as a lead with the word INVESTIGATE and without the word attacker,
+because that gap is equally the signature of a stolen token, a bot, an OIDC
+pipeline, and a maintainer who left last year.
+
+The 13 tools available to it: `resolve_package`, `list_threats`, `threat_detail`,
+`impacted_services`, `code_reach`, `dependency_path`, `remediation_plan`,
+`attack_frontier`, `package_provenance`, `publish_anomalies`, `service_profile`,
+`search_advisories`, `fleet_overview`. Every one of them is a HydraDB query.
+
+---
+
+## 9. Designing around HydraDB's constraints
+
+HydraDB is a graph engine with a deliberately narrow query surface, and most of
+the interesting design decisions in this project are consequences of that. These
+were found by being rejected at runtime, and are written down here because they
+are not obvious from the outside.
+
+| Constraint | Consequence in this design |
+|---|---|
+| A variable-length traversal must pin its **source** and declare a maximum depth | Backward reachability is not expressible, so ingest writes **materialised inverse edges** and every "who reaches this" question is a forward walk |
+| A bounded walk would under-report a deep npm tree | `PRESENT_IN` and `RESOLVED_IN` are **flattened closures**, computed in Python at ingest, so they are exact at any depth and cost one hop |
+| `UNWIND ... MATCH ... MERGE` (write) requires exactly one label per endpoint | Edges are batched per `(type, source label, destination label)`, since `REQUIRED_BY` spans two label pairs |
+| `UNWIND ... MATCH ... RETURN` (read) **forbids** labels and accepts exactly two unsorted projections | Reads never use `UNWIND`; one plain `MATCH` per id with a scalar `$id`, where labels and full projections both work |
+| A list parameter is accepted only as `UNWIND` input | `algo.MSpaths` cannot take `sourceValues` as a parameter; the list is inlined as an escaped literal |
+| Admission control caps query runtime (30 s stock) and rejects a label scan above 250,000 candidates | The client declares 25 s; **every read on the hot path is id-pinned**, which is why the local id map exists |
+| No `IN`, `CONTAINS`, `ENDS WITH` or `IS NULL` in `WHERE` | Absence cannot be tested for, so every property is always written using explicit sentinels |
+| No string functions | Semver matching, PEP 440 comparison and typosquat distance all run in Python and feed **exact ids** to HydraDB |
+| Relationships are reified with their own global id | A persisted id allocator is mandatory, not optional |
+| No transactions, one statement per request | Writes are `UNWIND`-batched auto-commits, and `MERGE` by id makes every re-ingest idempotent |
+
+Two of these are worth stating as design rules rather than as trivia.
+
+**Every edge that a query needs to walk backwards is written twice.** Measured
+against a live node rather than assumed: a *single-hop* backward pattern is
+actually fine, so only the relationship a query walks backwards for more than one
+hop needs its inverse materialised. Applying the blanket rule everywhere would
+have roughly doubled the edge count and the write time for no query gained.
+
+**The write/read asymmetry on `UNWIND` is the one that will bite an editor.**
+Writes are label-qualified, reads are not. Do not make them match, because HydraDB
+rejects whichever one you change.
+
+---
+
+## 10. Measured results
+
+Everything below was measured against a live HydraDB node, not estimated.
+
+### Query latency
+
+Corpus: 12 projects, 649 lockfile entries, 400 packages, 1,319 versions,
+3,277 nodes, 18,224 edges. Warm p50.
+
+| Query | Latency | Rows |
+|---|---:|---:|
+| Purl to id, local id map | 0.01 ms | 1 |
+| Exact version lookup | 2.2 ms | 1 |
+| Direct dependents | 10.5 ms | 25 |
+| Transitive dependents (depth 5) | 94 ms | 174 |
+| **Exposed projects, one hop over the closure** | **3.0 ms** | 1 |
+| Shared maintainer | 8.2 ms | 1 |
+| Live-window overlap | 14.7 ms | 1 |
+
+A full `simulate` run, answering every question the engine can ask about an
+incident: **310 ms**.
+
+### Does the cost track the answer, or the graph?
+
+The central performance claim is that the exposure query costs what the *answer*
+costs, not what the graph costs. `blastradius/pkg/scale.py` measures it by
+building synthetic graphs through the real writer and timing the real query
+through HydraDB, asserting at every point that the query returned exactly the
+services attached to its probe, so a fast wrong answer cannot pass.
+
+Two sweeps, because a flat line on its own is unfalsifiable: it looks identical
+whether the query is genuinely proportional to the answer or the harness is just
+dominated by fixed HTTP overhead.
+
+**Sweep A: the graph grows, the answer is held at 5 rows.**
+
+| Versions in HydraDB | Closure edges | p50 | p95 |
+|---:|---:|---:|---:|
+| 5,000 | 5,015 | 1.02 ms | 1.37 ms |
+| 50,000 | 50,015 | 1.59 ms | 1.91 ms |
+| 500,000 | 500,015 | **1.95 ms** | 3.06 ms |
+
+**Sweep B: one 500,000-version graph, the answer grows.** This is the control,
+and it must rise.
+
+| Answer rows | p50 | p95 |
+|---:|---:|---:|
+| 1 | 1.42 ms | 1.50 ms |
+| 10 | 1.69 ms | 1.78 ms |
+| 100 | 10.17 ms | 13.65 ms |
+| 1,000 | 56.76 ms | 59.48 ms |
+
+Expressed as elasticity, so the two sweeps can be compared despite moving
+different units over different spans:
+
+```
+cost elasticity to graph size    0.14
+cost elasticity to answer size   0.53
+```
+
+**Answer size costs 3.8 times what graph size does.** A 100x larger graph costs
+1.9x; a 1000x larger answer costs 40x. The closure design holds. Reproduced
+independently at 100k and at 500k with the same two figures to two decimal
+places.
+
+Graph size is not free, though, and the honest form of the claim says so: 0.14 is
+above zero, so the single-hop lookup does pay something as the store grows.
+"Flat" would be a stronger claim than the experiment supports.
+
+### What the measurement changed
+
+| Query shape against HydraDB | Median |
+|---|---:|
+| Pinned-id two-hop | 4.7 ms |
+| Pinned-id variable-length `*1..8` | 6.3 ms |
+| Label scan with a property filter | 36.6 ms |
+| **Unpinned edge sweep** `(a)-[e]->(b)` | **500-770 ms** |
+
+Traversal was never the problem. Unpinned sweeps are roughly 100 times slower
+than pinned traversals and dominated everything, so both optimisations target
+them: names resolve in the local id map instead of a label scan, and the views
+that need a whole-graph sweep are cached against `read_epoch`. Serving the
+Explorer's micro view again went from 1,198 ms to 54 ms.
+
+### Build time
+
+One repository (338 packages, 1 lockfile), warm registry cache, median of three
+runs:
 
 | Mode | Total |
 |---|---:|
-| concurrent | **10.5 s** |
+| Concurrent | **10.5 s** |
 | `--sequential` | 12.6 s |
 
-Where the concurrent run spends it:
+---
 
-| Stage | Seconds | Share |
-|---|---:|---:|
-| reset (drop store, clear id map, restart) | 2.87 | 26.7% |
-| **phase A** | **3.29** | **30.7%** |
-| ├ registry prefetch | 1.68 | ∥ |
-| ├ osv scan (1 lockfile → 5 findings → 3 advisories) | 3.13 | ∥ |
-| └ code graph ingest (ts-morph) | 3.29 | ∥ |
-| package tier ingest | 4.29 | 39.9% |
-| verify | 0.29 | 2.7% |
+## 11. Running it
 
-The `∥` rows overlap, so they are given a marker rather than a share — three
-concurrent stages that each got a percentage would produce a column adding up
-to more than the run took.
+### Prerequisites
 
-The scanner is a Go binary, so a machine without the toolchain cannot
-pip-install its way out of a missing one. `doctor` reports it as a warning
-rather than a failure, because the scan falls back to resolving the lockfiles
-locally and asking `api.osv.dev` about the exact resolved versions — same
-advisories, one network hop, and `--engine` forces either path when you want to
-compare them. To install the real thing:
+Python 3.11+, Node 18+, Docker. `osv-scanner` is optional; without it the scan
+falls back to the OSV API.
+
+### Local
 
 ```powershell
-go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+cd scanner; npm install; cd ..
+
+python -m blastradius.cli doctor      # checks every prerequisite, names the fix
+python -m blastradius.cli up          # start the HydraDB container
+python -m blastradius.cli pipeline --reset
+python -m blastradius.cli status      # both tiers should be non-zero
+python -m blastradius.cli ui          # port 8100
 ```
 
-**Ground truth is the resolved version, never the manifest.** An unpinned range
-in `package.json` resolves to whatever is newest — which is usually the *safe*
-version — so scanning manifests reports vulnerabilities in versions nobody
-installs and misses the ones they do. The scan reads `package-lock.json`, which
-already is a resolved graph, and the generated advisories name exact versions
-rather than a synthesised range for the same reason.
+Then open <http://127.0.0.1:8100>, pick a repository, and work from the console.
 
-## The advisory contract
+### Configuration
 
-Advisory discovery is the other half of the team. They produce this, we consume
-it — and it is the same shape `osvscan.py` emits, so a scanned advisory and a
-hand-written one are interchangeable. Samples live in `advisories/`:
+Copy `.env.example` to `.env`:
 
-```json
-{
-  "advisory_id": "GHSA-xxxx-yyyy-zzzz",
-  "ecosystem": "npm",
-  "package": "@tanstack/react-query",
-  "affected_versions": ["5.62.3", "5.62.4"],
-  "affected_range": ">=5.62.3 <5.62.5",
-  "published_at": 1747900800,
-  "withdrawn_at": 1747901160,
-  "severity": "critical",
-  "iocs": {
-    "paths": [".claude/hooks/*.js"],
-    "content_markers": ["eval(atob("]
-  }
-}
+| Variable | Purpose |
+|---|---|
+| `HYDRA_HTTP` | HydraDB HTTP endpoint, default `http://127.0.0.1:8443` |
+| `HYDRA_TOKEN` | HydraDB bearer token |
+| `HYDRA_NAMESPACE`, `HYDRA_GRAPH` | HydraDB namespace and graph |
+| `HYDRA_BATCH_SIZE` | Rows per write batch. Lower it to 100 on an S3-backed node |
+| `OPENAI_API_KEY` | Required only for the assistant |
+| `CHAT_MODEL`, `CHAT_REASONING_EFFORT`, `CHAT_MAX_TURNS` | Assistant tuning |
+
+A private registry needs three more, picked up by every entry point so none of
+them grows its own flag: `BLASTRADIUS_REGISTRY`, `BLASTRADIUS_REGISTRY_TOKEN` and
+`BLASTRADIUS_CHANGES_URL`. The token is sent only to the configured registry. A
+credential for an internal registry must not travel to npmjs.org because a
+package happened to resolve there, and a test asserts both directions.
+
+### Deployed
+
+`docker-compose.yml` runs HydraDB against an S3 bucket, the application, and
+Caddy for TLS. On that deployment, seed the graph out of band rather than
+ingesting through the UI:
+
+```bash
+docker compose exec blastradius-api python -m blastradius.seed
 ```
 
-`affected_versions` is preferred. When only `affected_range` is given, it is
-resolved against the versions we actually hold (`blastradius/query/advisory.py`)
-— so an advisory covering 400 versions costs the same as one covering two.
+### Useful commands
+
+```powershell
+python -m blastradius.cli check lodash@4.17.20      # assess one version
+python -m blastradius.cli stats                     # node and edge counts in HydraDB
+python -m blastradius.pkg.cli simulate              # create an incident, answer everything
+python -m blastradius.pkg.cli retract               # take it back off
+python -m blastradius.pkg.cli frontier lodash@4.17.21
+python -m blastradius.pkg.cli anomalies --offline
+python -m blastradius.pkg.cli compare               # range-only leads vs lockfile truth
+python -m blastradius.pkg.cli bench                 # query latency
+```
 
 ---
 
-## Layout
+## 12. Repository layout
 
 ```
-hydra.ps1                    node lifecycle + query CLI
-scanner/scan.mjs             ts-morph AST scanner -> micro graph JSON
-osv_scanner_tool/            osv-scanner + OSV API wrappers, dependency resolver
-  scan.py                    repo -> osv-scanner -> finding rows
-  deps.py                    resolved dependency graph (pip report / lockfile)
-  enrich.py                  OSV + registry metadata for a resolved graph
 blastradius/
-  schema.py                  labels, edge types, id blocks, sentinels
-  ids.py                     persisted key -> id allocator (data/ids.sqlite)
-  hydra_client.py            HTTP client, UNWIND batching, Bolt fallback
-  ingest/
-    lockfile.py              package-lock v2/v3 + npm nested resolution
-    bridge.py                ExternalImport -> PackageVersion
-    persistence.py           .claude/ .vscode/ IOC scan
-    load.py                  orchestration, closure, batched writes
-  pkg/
-    osvscan.py               scan a repo -> the CSV + advisory JSON, timed
-    osv.py                   the CSV contract, alias merge (union-find)
-    ingest.py                lockfiles + registry + advisories -> package tier
-  query/
-    advisory.py              semver ranges -> exact PackageVersion keys
-    blast.py                 Q1..Q5 and the severity composition
-    exposure.py              severity x distance heat, shared by both views
-    graphview.py             the code view, ranked by real call depth
-  api/main.py                FastAPI
-  api/static/index.html      single-page UI, self-contained
-corpus/                      target repos
-advisories/                  the teammate contract, as files
-  generated/                 written by osv-scan, cleared on every run
-data/osv/<repo>/             scan CSV + timing log per scanned repository
-tests/test_oracle.py         graph answer == brute-force answer
-tests/test_exposure.py       the heat model, and that advisories reach code
+  schema.py            Labels, edge types, id blocks, sentinels. One source of truth.
+  ids.py               Persisted natural key to HydraDB id allocator (data/ids.sqlite)
+  hydra_client.py      HydraDB HTTP client, UNWIND batching, cursor paging, Bolt fallback
+  pipeline.py          One repository in, a populated HydraDB graph out
+  node.py              HydraDB container lifecycle, driven from Python
+  seed.py              Clone and ingest a fixed set of repositories for a hosted demo
+  cli.py               doctor, up, pipeline, ingest, check, stats, ui, serve
+
+  ingest/              The micro tier and the lockfile tier
+    lockfile.py        package-lock v2/v3 parsing and npm nested resolution
+    load.py            Orchestration, transitive closure, batched HydraDB writes
+    bridge.py          ExternalImport to PackageVersion
+    persistence.py     .claude/ and .vscode/ IOC scan
+    ignore.py          .blastradiusignore scoping
+
+  pkg/                 The ecosystem tier
+    identity.py        Canonical purl keys for packages, versions, repos, people
+    ingest.py          Lockfiles + registry + advisories into HydraDB
+    writer.py          Batched HydraDB writes for the package tier
+    blast.py           The blast-radius queries and the evidence model
+    frontier.py        What the attacker can publish to next
+    anomaly.py         Publish-time signals
+    typosquat.py       Deletion-variant index, popularity guard, TYPOSQUAT_OF edges
+    watcher.py         The npm _changes feed
+    incident.py        Synthetic incidents, with a live window
+    graphview.py       The macro view, answered server-side
+    fullgraph.py       The whole graph as circles, cached on read_epoch
+    scale.py           The complexity experiment
+    semver.py          npm range matching, in Python
+    pep440.py          PyPI version comparison, differential-tested
+    registry.py        npm registry client with an offline cache
+    osvscan.py         Repository to advisories, timed
+
+  query/               Reads for the UI and the API
+    blast.py           Q1..Q5 and the severity composition
+    codereach.py       Threat to the function that runs it
+    exposure.py        One heat model, shared by both views
+    graphview.py       The layered code view
+    advisory.py        Semver ranges to exact PackageVersion keys
+
+  chat/                The assistant
+    tools.py           Every fact it may state, read from HydraDB
+    agent.py           The only module that knows OpenAI exists
+    guardrails.py      Three layers: pattern, classifier, grounding audit
+    briefing.py        The situation pack, cached on read_epoch
+    workspaces.py      One chatbot per repository, isolated by service set
+    router.py          /api/chat, streaming over Server-Sent Events
+
+ui/
+  server.py            The human-facing explorer
+  live.py              Watcher, ingest jobs and simulations, on one event bus
+  static/              start, console, explorer, graph, chat widget
+  web/                 React rebuild of the console (Vite)
+
+scanner/scan.mjs       ts-morph AST scanner, emits the micro graph
+osv_scanner_tool/      osv-scanner and OSV API wrappers, dependency resolver
+corpus/                Target repositories
+advisories/            The advisory contract, as files
+data/registry-cache/   Committed npm metadata, so an ingest is reproducible offline
+docs/ENGINEERING.md    The full engineering write-up
+PACKAGE-GRAPH.md       The ecosystem tier in depth, with the measurements
 ```
 
 ---
 
-## Verification
+## 13. Testing
 
 ```powershell
-python -m pytest tests/test_oracle.py -v
+python -m pytest tests/ -q
 ```
 
-The suite compares our closure against a deliberately stupid brute-force oracle
-that re-implements npm resolution independently, so an error in one is unlikely
-to be mirrored in the other. Two tests need a live node and skip themselves when
-HydraDB is not reachable: the graph-vs-brute-force check and the idempotent
-re-ingest check.
+28 test modules, 449 test functions. Tests that need a live HydraDB node skip
+themselves cleanly when one is not reachable.
 
-**Known limitations, stated rather than papered over:**
+The suite is written around the failures that would be invisible rather than
+around coverage:
 
-- Route detection is Express/Fastify-shaped and pattern-based. A route
-  registered by decorator or built from a dynamic table is missed; the scanner
+| Test module | What it defends |
+|---|---|
+| `test_oracle.py` | The graph's answer equals a deliberately stupid brute-force oracle that re-implements npm resolution independently, so an error in one is unlikely to be mirrored in the other |
+| `test_identity.py` | The two ingest paths cannot drift apart on keys, the failure that once reported a clean bill of health for a repository with 96 advisories |
+| `test_exposure.py` | Advisories actually reach code across the bridge |
+| `test_closure.py` | The flattened closure matches a real traversal |
+| `test_semver.py`, `difftest_semver.py` | Range matching, differentially tested |
+| `test_pep440.py` | PyPI ordering, differentially tested against `packaging` |
+| `test_anomaly.py` | Unknown is reported as unknown, never as a negative |
+| `test_chat_guardrails.py` | The three layers, including that the classifier fails open |
+| `test_chat_provenance.py` | A missing publisher reads as "not recorded" and names nobody |
+| `test_live.py` | System directories are refused as ingest targets |
+| `verify_constraints.py` | What HydraDB actually accepts, measured rather than assumed |
+
+---
+
+## 14. Known limits
+
+Stated rather than papered over.
+
+- **Route detection is Express and Fastify shaped**, and pattern-based. A route
+  registered by decorator or built from a dynamic table is missed. The scanner
   reports its counts in `stats` rather than claiming to be exhaustive.
-- Dynamic dispatch (`obj[name]()`, callbacks through a registry) cannot be
-  resolved by any static analyser and is counted in `stats.dynamicCalls`.
-- `P2 IMPORTED` means the package is imported by *your* source. A transitive
-  dependency is imported by an intermediate package's code, not yours, so for
-  deep dependencies the reachability signal comes from the direct dependency
-  that leads to it.
-- Lockfile v1 is rejected loudly rather than parsed partially — a half-parsed
-  lockfile would read as "this repo is clean", which is the worst possible way
-  to be wrong.
+- **Dynamic dispatch cannot be resolved** by any static analyser. `obj[name]()`
+  and callbacks through a registry are counted in `stats.dynamicCalls`.
+- **`P2 IMPORTED` means imported by *your* source.** A transitive dependency is
+  imported by an intermediate package's code, not yours, so for deep
+  dependencies the reachability signal comes from the direct dependency that
+  leads to it.
+- **Lockfile v1 is rejected loudly** rather than parsed partially. A half-parsed
+  lockfile would read as "this repository is clean", which is the worst possible
+  way to be wrong.
+- **Two repositories sharing a service name share one HydraDB node**, and no
+  filter downstream can separate them again. This is detected at workspace
+  registration and reported rather than silently accepted.
+- **The change feed is npm-specific.** Artifactory, Verdaccio and Nexus each
+  expose something different or nothing, so the live watcher does not simply
+  fall in behind a private registry.
+- **Typosquat findings have no UI.** The edges are in HydraDB and the module has
+  six detection techniques, but no endpoint returns them yet.
+- **Download counts are npm-only**, so a private registry loses popularity data.
+  Unknown counts are treated as unknown, not as zero, so internal packages are
+  reported as unassessed rather than as unpopular.
+
+---
+
+## Further reading
+
+- [docs/ENGINEERING.md](docs/ENGINEERING.md): the full engineering write-up,
+  setup variations, the advisory contract, the private registry path, and every
+  decision in detail.
+- [PACKAGE-GRAPH.md](PACKAGE-GRAPH.md): the ecosystem tier in depth, the
+  evidence model, and the complete measurement record.
