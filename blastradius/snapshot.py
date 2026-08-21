@@ -36,7 +36,8 @@ from pathlib import Path
 
 from . import node
 
-__all__ = ["save", "load", "describe", "SnapshotError"]
+__all__ = ["save", "load", "describe", "push", "pull", "publish",
+           "s3_config", "SnapshotError"]
 
 #: Bumped when the archive layout changes in a way an older reader would get
 #: wrong. `load` refuses a version it does not know rather than unpacking a
@@ -48,6 +49,135 @@ IDS = ROOT / "data" / "ids.sqlite"
 
 #: Everything under the volume worth carrying, relative to /data.
 STORE_DIR = "store"
+
+#: Where a published snapshot lands. The bucket defaults to the one the hosted
+#: stack already reads, but under its own prefix: HydraDB owns the top of that
+#: bucket as a live object store, and dropping archives beside its keys would
+#: put two different things with two different lifecycles in one namespace.
+DEFAULT_BUCKET = node.AWS_BUCKET_NAME
+DEFAULT_PREFIX = "snapshots/"
+DEFAULT_NAME = "graph-latest.tar.gz"
+
+
+def s3_config() -> dict:
+    """Bucket, prefix and region, from the environment.
+
+    Credentials are deliberately not read here. boto3 resolves them from the
+    standard chain -- environment, ~/.aws, instance role -- so a host with a
+    role attached needs no secret in the config, and a laptop with a profile
+    needs nothing but the profile it already has.
+    """
+    import os
+
+    return {
+        "bucket": os.environ.get("SNAPSHOT_BUCKET", DEFAULT_BUCKET),
+        "prefix": os.environ.get("SNAPSHOT_PREFIX", DEFAULT_PREFIX),
+        "name": os.environ.get("SNAPSHOT_NAME", DEFAULT_NAME),
+        "region": os.environ.get(
+            "SNAPSHOT_REGION",
+            os.environ.get("AWS_DEFAULT_REGION", node.AWS_DEFAULT_REGION),
+        ),
+        # Auto-publish is on as soon as a bucket is named. Someone who has
+        # gone to the trouble of configuring one wants the build to land
+        # there; someone who has not gets a local build and no surprise
+        # egress bill.
+        "auto": os.environ.get(
+            "SNAPSHOT_AUTO_PUSH",
+            "1" if os.environ.get("SNAPSHOT_BUCKET") else "0",
+        ).strip().lower() in ("1", "true", "yes", "on"),
+    }
+
+
+def _client(region: str):
+    """A boto3 S3 client, with the two failure modes named.
+
+    Both are configuration rather than code, and both are much easier to fix
+    when the message says which one happened.
+    """
+    try:
+        import boto3  # noqa: PLC0415 - optional until a bucket is configured
+    except ImportError:  # pragma: no cover - depends on the install
+        raise SnapshotError(
+            "boto3 is not installed, so a snapshot cannot be published. "
+            "`pip install -r requirements.txt`, or drop SNAPSHOT_BUCKET to "
+            "keep builds local."
+        ) from None
+    try:
+        return boto3.client("s3", region_name=region)
+    except Exception as exc:  # noqa: BLE001 - surfaced verbatim
+        raise SnapshotError(f"could not open an S3 client: {exc}") from None
+
+
+def _key(cfg: dict, name: str) -> str:
+    """Prefix plus file name, with the slashes sorted out once."""
+    prefix = cfg["prefix"].strip("/")
+    return f"{prefix}/{name}" if prefix else name
+
+
+def push(path: str | Path, verbose: bool = True, **over) -> str:
+    """Upload an archive and return its ``s3://`` URI.
+
+    The object is named after the file unless ``SNAPSHOT_NAME`` says
+    otherwise. Uploading ``nightly.tar.gz`` and finding it in the bucket
+    under some other name is the kind of surprise that costs an hour when the
+    host is pulling a key that nothing writes.
+    """
+    import os
+
+    cfg = {**s3_config(), **over}
+    path = Path(path).expanduser().resolve()
+    if not path.exists():
+        raise SnapshotError(f"no such snapshot: {path}")
+
+    key = _key(cfg, over.get("name") or os.environ.get("SNAPSHOT_NAME") or path.name)
+    uri = f"s3://{cfg['bucket']}/{key}"
+    client = _client(cfg["region"])
+    if verbose:
+        mb = path.stat().st_size / 1e6
+        print(f"  uploading {mb:.1f} MB to {uri}")
+    try:
+        client.upload_file(str(path), cfg["bucket"], key)
+    except Exception as exc:  # noqa: BLE001 - the SDK message is the useful part
+        raise SnapshotError(f"upload to {uri} failed: {exc}") from None
+    if verbose:
+        print(f"  published {uri}")
+    return uri
+
+
+def pull(dest: str | Path, verbose: bool = True, **over) -> Path:
+    """Download the published archive to ``dest``."""
+    cfg = {**s3_config(), **over}
+    dest = Path(dest).expanduser().resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    key = _key(cfg, cfg["name"])
+    uri = f"s3://{cfg['bucket']}/{key}"
+    client = _client(cfg["region"])
+    if verbose:
+        print(f"  downloading {uri}")
+    try:
+        client.download_file(cfg["bucket"], key, str(dest))
+    except Exception as exc:  # noqa: BLE001
+        raise SnapshotError(f"download of {uri} failed: {exc}") from None
+    if verbose:
+        print(f"  wrote {dest} ({dest.stat().st_size / 1e6:.1f} MB)")
+    return dest
+
+
+def publish(verbose: bool = True, **over) -> str:
+    """Save the current graph and upload it, leaving no file behind.
+
+    This is the whole point of the module in one call: the graph was built
+    locally, and now it is somewhere a host can read it. The archive is
+    written to a temporary path because keeping it would leave a stale copy
+    of a graph that is about to change again.
+    """
+    cfg = {**s3_config(), **over}
+    with tempfile.TemporaryDirectory() as tmp:
+        # Named for the key it is about to become, so `push` needs no special
+        # case and the file on disk matches the object in the bucket.
+        archive = save(Path(tmp) / cfg["name"], verbose=verbose)
+        return push(archive, verbose=verbose, **over)
 
 
 class SnapshotError(RuntimeError):

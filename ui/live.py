@@ -182,6 +182,9 @@ class IngestJob:
     counts: dict[str, int] = field(default_factory=dict)
     advisories: int = 0
     services: list[str] = field(default_factory=list)
+    #: Where the finished graph was published, and why it was not.
+    snapshot_uri: str = ""
+    snapshot_error: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -194,6 +197,8 @@ class IngestJob:
             "counts": self.counts,
             "advisories": self.advisories,
             "services": self.services,
+            "snapshot_uri": self.snapshot_uri,
+            "snapshot_error": self.snapshot_error,
             "stages": [
                 {
                     "name": s.name, "status": s.status,
@@ -498,6 +503,16 @@ class LiveState:
                     f"{k}: {v}" for k, v in report.failures.items()
                 )
             else:
+                # The graph is built and local. Publishing it is the last
+                # stage of the build rather than a thing somebody remembers
+                # to do afterwards, and it appears in the stage list with its
+                # own timing like every other stage.
+                #
+                # A failure here does not fail the build: the graph on this
+                # machine is finished and correct, and the console should say
+                # so even when the bucket is misconfigured. The error is
+                # carried on the stage instead, where it names itself.
+                self._publish_snapshot(job, on_stage)
                 job.status = "done"
         except Exception as exc:  # noqa: BLE001 - surfaced to the browser
             close_current("failed")
@@ -506,6 +521,29 @@ class LiveState:
             job.elapsed_s = time.perf_counter() - started
             traceback.print_exc()
 
+        self._emit_job()
+
+    def _publish_snapshot(self, job: IngestJob, on_stage) -> None:
+        """Upload the finished graph, if a bucket has been configured."""
+        from blastradius import snapshot
+
+        cfg = snapshot.s3_config()
+        if not cfg["auto"]:
+            return
+
+        on_stage("publish to s3")
+        stage = job.stages[-1]
+        started = time.perf_counter()
+        try:
+            uri = snapshot.publish(verbose=False)
+            stage.status = "ok"
+            stage.detail = uri
+            job.snapshot_uri = uri
+        except Exception as exc:  # noqa: BLE001 - reported, never fatal
+            stage.status = "failed"
+            stage.detail = str(exc)
+            job.snapshot_error = str(exc)
+        stage.seconds = time.perf_counter() - started
         self._emit_job()
 
     def _reopen_ids(self) -> None:

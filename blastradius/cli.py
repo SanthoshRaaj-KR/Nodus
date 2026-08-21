@@ -323,11 +323,21 @@ def cmd_snapshot(args) -> int:
 
     print()
     try:
+        cfg = snapshot.s3_config()
         if args.action == "save":
             snapshot.save(args.path)
-            print()
-            print("  publish it with:")
-            print(f"    aws s3 cp {args.path} s3://{'{bucket}'}/snapshots/")
+        elif args.action == "publish":
+            uri = snapshot.publish()
+            print(f"  {uri}")
+        elif args.action == "push":
+            print(f"  {snapshot.push(args.path)}")
+        elif args.action == "pull":
+            snapshot.pull(args.path)
+        elif args.action == "where":
+            print(f"  bucket      {cfg['bucket']}")
+            print(f"  key         {cfg['prefix'].strip('/')}/{cfg['name']}")
+            print(f"  region      {cfg['region']}")
+            print(f"  after build {'publishes automatically' if cfg['auto'] else 'stays local'}")
         elif args.action == "load":
             meta = snapshot.load(args.path)
             print(f"  store {meta['store_bytes'] / 1e6:.1f} MB, "
@@ -1012,8 +1022,14 @@ def main(argv: list[str] | None = None) -> int:
         "snapshot",
         help="save/load the graph + id map as one archive, for hosting",
     )
-    snap.add_argument("action", choices=("save", "load", "show"))
-    snap.add_argument("path", help="the .tar.gz to write, read or inspect")
+    snap.add_argument(
+        "action",
+        choices=("save", "load", "show", "publish", "push", "pull", "where"),
+        help="save/load a local archive; publish builds one and uploads it; "
+             "push/pull move an existing file; where prints the configured target",
+    )
+    snap.add_argument("path", nargs="?", default="graph-snapshot.tar.gz",
+                      help="the .tar.gz to write, read or inspect")
     snap.set_defaults(func=cmd_snapshot)
 
     args = parser.parse_args(argv)

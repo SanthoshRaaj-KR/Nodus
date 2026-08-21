@@ -13,3 +13,8 @@ openai-agents>=0.17
 # Reads .env at startup -- for the chat agent's key, and for the HYDRA_* vars
 # that .env.example has always documented but nothing actually loaded.
 python-dotenv>=1.0
+
+# Publishing a built graph to S3. Optional in spirit -- nothing imports it
+# until SNAPSHOT_BUCKET is set -- but pinned here so a host that is meant to
+# publish does not discover the gap at the end of a ten-minute ingest.
+boto3>=1.34
