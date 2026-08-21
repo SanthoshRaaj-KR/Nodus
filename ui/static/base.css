@@ -77,6 +77,17 @@
   --ident-1: #8f6108;  --ident-2: #c2850f;  --ident-3: #d9a83c;
   --threat-1:#a3241f;  --threat-2:#cf332e;
 
+  /* A drill is not a breach. A simulated compromise is written by the user
+     pressing a button, and painting it in the reserved red made a rehearsal
+     indistinguishable from an advisory that a real researcher filed against a
+     version really in the lockfile.
+
+     High-chroma yellow, deliberately brighter than the earthy --ident-2 gold
+     the maintainer/repo family uses: those sit at 5px and below and are never
+     haloed, where this is a 12px node that breathes, so the two read apart on
+     size and motion as well as on chroma. */
+  --sim-1: #c79a00;  --sim-2: #f5c518;  --sim-glow: #ffe14d;
+
   /* family anchors, for chrome that is not a data mark */
   --accent:  var(--fleet-2);
   --deps:    var(--deps-2);
@@ -135,6 +146,7 @@
     --ident-1: #9a7020;  --ident-2: #bd8a22;  --ident-3: #d8b055;
     --threat-1:#b02b26;  --threat-2:#d2332e;
     --threat-glow: #ff6b63;
+    --sim-1: #d4aa14;  --sim-2: #ffd426;  --sim-glow: #fff06a;
 
     --ok:      #3fca8e;
     --warn:    #d9a83c;
@@ -152,6 +164,7 @@
   --deps-1:  #157f92;  --deps-2:  #1f9fb5;  --deps-3:  #57c0d2;
   --ident-1: #9a7020;  --ident-2: #bd8a22;  --ident-3: #d8b055;
   --threat-1:#b02b26;  --threat-2:#d2332e;  --threat-glow: #ff6b63;
+  --sim-1: #d4aa14;  --sim-2: #ffd426;  --sim-glow: #fff06a;
   --ok: #3fca8e; --warn: #d9a83c; --serious: #e07a3a;
   --shadow-1: 0 1px 2px rgba(0,0,0,.5);
   --shadow-2: 0 10px 30px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
@@ -164,6 +177,7 @@
   --deps-1:  #0a6b7c;  --deps-2:  #0f8fa6;  --deps-3:  #4fbdd1;
   --ident-1: #8f6108;  --ident-2: #c2850f;  --ident-3: #d9a83c;
   --threat-1:#a3241f;  --threat-2:#cf332e;  --threat-glow: #ff4d45;
+  --sim-1: #c79a00;  --sim-2: #f5c518;  --sim-glow: #ffe14d;
   --ok: #10794f; --warn: #a8760a; --serious: #c2540f;
 }
 
@@ -592,6 +606,59 @@ input[type=text]:focus, input[type=search]:focus {
 .legend .dot { border-radius: 50%; flex: none; }
 .legend .lrow b { font: 600 11px var(--mono); color: var(--ink-1); flex: none; }
 .legend .lrow span { color: var(--ink-3); }
+
+/* The key rows that are also filter buttons. Styled to stay a key first: no
+   button chrome at rest, so the block still reads as a legend, with the
+   affordance arriving on hover and the state held in aria-pressed. */
+.legend button.lrow {
+  width: 100%; text-align: left; background: none; border: 0;
+  border-radius: var(--r-sm); padding: 3px 6px; margin-left: -6px;
+  cursor: pointer; font: inherit;
+  transition: background .12s ease, opacity .12s ease;
+}
+.legend button.lrow:hover:not(:disabled) { background: var(--surface-2); }
+.legend button.lrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.legend button.lrow .cnt {
+  margin-left: auto; font: 600 10px var(--mono); color: var(--ink-3);
+  flex: none; padding-left: 8px;
+}
+.legend button.lrow[aria-pressed="true"] {
+  background: var(--tint-accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.legend button.lrow[aria-pressed="true"] b { color: var(--accent); }
+.legend button.lrow:disabled { opacity: .38; cursor: default; }
+
+.legend .pickbar {
+  display: flex; align-items: center; gap: 8px; margin-top: 10px;
+  padding-top: 9px; border-top: 1px solid var(--line-soft);
+  font: 10px var(--mono); color: var(--ink-3);
+}
+.legend .pickbar.on { color: var(--accent); }
+.legend .pickbar button {
+  margin-left: auto; cursor: pointer; font: 10px var(--mono);
+  color: var(--ink-2); background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: var(--r-sm); padding: 3px 8px;
+}
+.legend .pickbar button:hover:not(:disabled) { color: var(--ink-1); background: var(--surface-3); }
+.legend .pickbar button:disabled { opacity: .4; cursor: default; }
+
+/* ---- search results -------------------------------------------------
+   Shaped like .wrongrow, the other jump list on this page, so the two read
+   as the same kind of control: a row you press to go somewhere on the
+   canvas. Bordered on the accent rather than the threat colour, because a
+   search hit is not a finding. */
+.hitrow {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  border: 1px solid var(--line); border-left: 3px solid var(--accent);
+  border-radius: var(--r-sm); background: var(--surface-0);
+  padding: 7px 9px; cursor: pointer; text-align: left;
+  font: 11.5px var(--mono); color: var(--ink-1);
+}
+.hitrow:hover { background: var(--tint-accent); }
+.hitrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.hitrow .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hitrow .cnt { font: 600 10px var(--mono); color: var(--ink-3); flex: none; }
 
 /* ------------------------------------------------------------------ */
 /* Utilities                                                           */

@@ -248,6 +248,21 @@ details.keybox .body { padding: 0 14px 14px; }
 </header>
 
 <aside>
+  <!-- Search sits above the scan controls because it is the thing you reach
+       for most often once a graph exists: finding one package among 4,500
+       circles is not a job the eye can do, and the jump list below only
+       covers what is already known to be wrong. -->
+  <div class="panel">
+    <h2 class="panel-title">Find</h2>
+    <label class="field">
+      <span>Package, service, maintainer or advisory</span>
+      <input type="search" id="find" placeholder="lodash · express@4 · CVE-2026"
+             spellcheck="false" autocomplete="off">
+    </label>
+    <div id="findNote" class="note" style="display:none"></div>
+    <div class="stack" id="findHits"></div>
+  </div>
+
   <div class="panel">
     <h2 class="panel-title"><span class="step">1</span> Point at a repo</h2>
     <label class="field">
@@ -400,6 +415,17 @@ const S = {
   wrong: new Set(),        // node ids the graph already knows are bad
   hot: new Map(),          // node id -> heat 0..1, decays
   marked: new Set(),       // node ids from a simulation; cleared explicitly
+  sim: new Set(),          // drill-written nodes: their own colour, never red
+  /* Labels the reader has asked to see, from the key. Empty means "no filter",
+     which is not the same as "all selected": the difference matters because an
+     empty set draws everything at full strength, where a full set would still
+     be a filter and would still say so in the HUD. */
+  pick: new Set(),
+  /* The search. `q` is what was typed, `hits` the node ids it matched. Kept
+     apart from `pick` because they answer different questions and compose:
+     "PackageVersion" AND "lodash" is a reasonable thing to ask for. */
+  q: "",
+  hits: new Set(),
   animateWrong: true,      // dropped when there are too many to animate
   selected: null, hovered: null,
   frozen: false, alpha: 1,
@@ -463,6 +489,117 @@ const STYLE = {
                        what: "did publish a version" },
 };
 
+/* Delegated: buildLegend() replaces the whole subtree on every theme change,
+   graph load and press, so a listener bound to the rows themselves would be
+   thrown away the first time any of those happened. */
+function togglePick(label) {
+  if (S.pick.has(label)) S.pick.delete(label);
+  else S.pick.add(label);
+  buildLegend();
+  updateHud();
+  S.alpha = Math.max(S.alpha, 0.02);   // nudge the loop so the repaint lands
+  draw();
+}
+
+document.addEventListener("click", (ev) => {
+  const row = ev.target.closest?.("[data-pick]");
+  if (row && !row.disabled) return togglePick(row.dataset.pick);
+  if (ev.target.closest?.("#pickClear")) {
+    S.pick.clear(); buildLegend(); updateHud(); draw();
+  }
+});
+
+/* ---- search ---------------------------------------------------------
+   Matched against the fields a person would actually type: the display name,
+   the package name, and the version, joined so `express@4` matches the way it
+   reads on screen. Scored rather than merely filtered, because with 2,500
+   PackageVersions a substring match on "lo" returns hundreds and the one you
+   meant should still be first: exact beats prefix beats contained, and a
+   shorter name beats a longer one at equal rank. */
+function haystack(n) {
+  const m = n.meta || {};
+  return [n.name, m.name, m.version, m.advisory_id, m.username, m.path,
+          m.name && m.version ? `${m.name}@${m.version}` : ""]
+    .filter(Boolean).join(" ").toLowerCase();
+}
+
+function scoreNode(n, q) {
+  const hay = haystack(n);
+  const at = hay.indexOf(q);
+  if (at < 0) return -1;
+  const name = String((n.meta && n.meta.name) || n.name || "").toLowerCase();
+  if (name === q) return 1000;
+  if (name.startsWith(q)) return 500 - Math.min(name.length, 99);
+  if (at === 0) return 300 - Math.min(hay.length, 199) / 10;
+  return 100 - Math.min(hay.length, 199) / 10;
+}
+
+function runSearch(raw) {
+  S.q = (raw || "").trim().toLowerCase();
+  S.hits = new Set();
+  const box = el("findHits");
+  if (!S.q) {
+    box.innerHTML = "";
+    note("findNote", "");
+    buildLegend(); updateHud(); draw();
+    return;
+  }
+
+  const scored = [];
+  for (const n of S.nodes) {
+    const sc = scoreNode(n, S.q);
+    if (sc >= 0) { S.hits.add(n.id); scored.push([sc, n]); }
+  }
+  scored.sort((a, b) => b[0] - a[0]);
+
+  if (!scored.length) {
+    box.innerHTML = "";
+    note("findNote", `No node matches <b>${esc(S.q)}</b>.`, "bad");
+  } else {
+    note("findNote",
+      `<b>${scored.length.toLocaleString()}</b> match${scored.length === 1 ? "" : "es"}` +
+      (scored.length > 8 ? " — showing the closest 8" : "") +
+      ". <span class=\"muted\">Enter frames them all.</span>");
+    box.innerHTML = scored.slice(0, 8).map(([, n]) =>
+      `<button type="button" class="hitrow" data-hit="${n.id}">
+         <span class="lbl">${esc(n.name)}</span>
+         <span class="cnt">${esc(n.label)}</span></button>`).join("");
+  }
+  buildLegend(); updateHud(); draw();
+}
+
+let findTimer = null;
+document.addEventListener("input", (ev) => {
+  if (ev.target.id !== "find") return;
+  // Debounced: every keystroke otherwise re-scores 4,500 nodes and repaints.
+  clearTimeout(findTimer);
+  const v = ev.target.value;
+  findTimer = setTimeout(() => runSearch(v), 120);
+});
+
+document.addEventListener("keydown", (ev) => {
+  if (ev.target.id !== "find") return;
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    clearTimeout(findTimer);
+    runSearch(ev.target.value);
+    if (S.hits.size) focusOn([...S.hits]);
+  } else if (ev.key === "Escape") {
+    ev.target.value = "";
+    runSearch("");
+  }
+});
+
+document.addEventListener("click", (ev) => {
+  const row = ev.target.closest?.("[data-hit]");
+  if (!row) return;
+  const n = S.byId.get(Number(row.dataset.hit));
+  if (!n) return;
+  selectNode(n);
+  focusOn([n.id]);
+  closeRails();
+});
+
 const cssVar = (n) => getComputedStyle(document.documentElement)
   .getPropertyValue("--" + n).trim() || "#888";
 let PALETTE = {};
@@ -473,6 +610,7 @@ function refreshPalette() {
     "deps-1","deps-2","deps-3",
     "ident-1","ident-2","ident-3",
     "threat-1","threat-2","threat-glow",
+    "sim-1","sim-2","sim-glow",
     "accent","deps","ident","critical","warn","ok",
     "line","ink-1","ink-2","ink-3","surface-0","surface-1",
   ]) PALETTE[k] = cssVar(k);
@@ -499,9 +637,25 @@ const GROUPS = [
   ["ident",  "who could publish the next one"],
 ];
 
+/* The key doubles as the filter.
+
+   A separate toolbar would have restated the same twelve names and the same
+   twelve colours a second time, and the two would drift apart the first time
+   a label was added. Here the swatch you are reading to decode a colour is the
+   control that isolates it, so there is one list of node types on the page and
+   pressing it does the obvious thing. Rows for labels the current graph holds
+   none of are still shown, disabled and counted zero, because "there are no
+   Incidents" is an answer and a missing row is not. */
+function countsByLabel() {
+  const c = new Map();
+  for (const n of S.nodes) c.set(n.label, (c.get(n.label) || 0) + 1);
+  return c;
+}
+
 function buildLegend() {
   const box = el("legend");
   if (!box) return;
+  const counts = countsByLabel();
   box.innerHTML = GROUPS.map(([group, caption]) => {
     const rows = Object.entries(STYLE)
       .filter(([, st]) => st.group === group)
@@ -513,13 +667,24 @@ function buildLegend() {
         const style = st.ring
           ? `width:${d}px;height:${d}px;background:transparent;border:2px solid ${colour}`
           : `width:${d}px;height:${d}px;background:${colour}`;
-        return `<div class="lrow">
+        const n = counts.get(label) || 0;
+        const on = S.pick.has(label);
+        return `<button type="button" class="lrow pick" data-pick="${label}"
+            aria-pressed="${on}" ${n ? "" : "disabled"}
+            title="${n ? `Show only ${label} nodes` : `No ${label} nodes in this graph`}">
           <span class="swatch"><i class="dot" style="${style}"></i></span>
-          <b>${label}</b><span>${st.what}</span></div>`;
+          <b>${label}</b><span>${st.what}</span>
+          <span class="cnt">${n ? n.toLocaleString() : "—"}</span></button>`;
       }).join("");
     return `<span class="grp">${caption}</span>${rows}`;
   }).join("") +
-  `<span class="grp">three overlays, three different claims</span>
+  `<div class="pickbar${S.pick.size ? " on" : ""}">
+     <span>${S.pick.size
+       ? `isolating ${S.pick.size} type${S.pick.size === 1 ? "" : "s"}`
+       : "click a type to isolate it"}</span>
+     <button type="button" id="pickClear" ${S.pick.size ? "" : "disabled"}>show all</button>
+   </div>` +
+  `<span class="grp">four overlays, four different claims</span>
    <div class="lrow"><span class="swatch"><i class="dot"
      style="width:11px;height:11px;background:var(--threat-2);
             box-shadow:0 0 0 3px color-mix(in srgb,var(--threat-glow) 35%,transparent)"></i></span>
@@ -527,11 +692,18 @@ function buildLegend() {
      incident names <em>this</em> node. It is repainted, enlarged, labelled
      and it breathes, so it is findable without reading anything.</span></div>
    <div class="lrow"><span class="swatch"><i class="dot"
+     style="width:11px;height:11px;background:var(--sim-2);
+            box-shadow:0 0 0 3px color-mix(in srgb,var(--sim-glow) 35%,transparent)"></i></span>
+     <span><b style="color:var(--sim-2)">yellow + halo</b> — a
+     <em>simulated</em> compromise you ran, and the version it names. Never
+     red: a drill you started must not read as a breach somebody found.</span></div>
+   <div class="lrow"><span class="swatch"><i class="dot"
      style="width:11px;height:11px;background:var(--deps-2);
-            box-shadow:0 0 0 2px var(--threat-2)"></i></span>
-     <span><b>red collar</b> — inside the blast radius of the simulation.
-     The node keeps its own colour: the point is <em>which</em> of your
-     services, and repainting them all red would destroy that.</span></div>
+            box-shadow:0 0 0 2px var(--sim-2)"></i></span>
+     <span><b style="color:var(--sim-2)">yellow collar</b> — inside the blast
+     radius of that simulation. The node keeps its own colour: the point is
+     <em>which</em> of your services, and repainting them all would destroy
+     that.</span></div>
    <div class="lrow"><span class="swatch"><i class="dot"
      style="width:11px;height:11px;background:transparent;border:2px solid var(--warn)"></i></span>
      <span><b>amber ring</b> — a version was just published to it. News,
@@ -728,12 +900,16 @@ function draw() {
     // and carry their weight through opacity instead.
     ctx.lineWidth = Math.min(1.1, 0.6 * k);
     ctx.strokeStyle = PALETTE["ink-3"];
-    ctx.globalAlpha = focus ? 0.1 : 0.22;
+    ctx.globalAlpha = (S.pick.size || S.q) ? 0.07 : focus ? 0.1 : 0.22;
     ctx.beginPath();
     for (const e of S.edges) {
       if (e.type === "TYPOSQUAT_OF") continue;   // drawn separately, below
       const a = S.byId.get(e.source), b = S.byId.get(e.target);
       if (!a || !b) continue;
+      // While a filter is on, an edge earns its ink only by touching a type
+      // that was asked for. Otherwise the wash stays and hides the answer.
+      if (S.pick.size && !S.pick.has(a.label) && !S.pick.has(b.label)) continue;
+      if (S.q !== "" && !S.hits.has(a.id) && !S.hits.has(b.id)) continue;
       const pa = worldToScreen(a), pb = worldToScreen(b);
       if ((pa.x < -60 && pb.x < -60) || (pa.x > S.w + 60 && pb.x > S.w + 60)) continue;
       if ((pa.y < -60 && pb.y < -60) || (pa.y > S.h + 60 && pb.y > S.h + 60)) continue;
@@ -806,8 +982,17 @@ function draw() {
        is never dimmed that far: what is broken must stay visible while
        you go looking at something else, which is the whole reason it is
        drawn loudly in the first place. */
-    const dimmed = focus && !near.has(n.id);
-    const dim = wrong ? 0.5 : 0.16;
+    /* Two different reasons to recede, and they do not dim by the same
+       amount. Hovering is a question about a neighbourhood, so a finding
+       elsewhere is held at 0.5 -- what is broken stays visible while you look
+       at something else. An explicit type filter is a different request: the
+       reader has said which types they want, so everything else drops to a
+       trace, findings included. Overriding that would answer a question they
+       did not ask. */
+    const off = (S.pick.size > 0 && !S.pick.has(n.label))
+      || (S.q !== "" && !S.hits.has(n.id));
+    const dimmed = off || (focus && !near.has(n.id));
+    const dim = off ? 0.06 : wrong ? 0.5 : 0.16;
     ctx.globalAlpha = dimmed ? dim : 1;
 
     /* THE ONE override of the family hue. A node is repainted only when
@@ -823,7 +1008,10 @@ function draw() {
        the radius is meant to show, which is WHICH of your services. So
        reach is drawn as a red RING around the node's own colour: the
        identity survives, the membership is unmistakable. */
-    const fill = wrong ? PALETTE["threat-2"] : (PALETTE[st.hue] || PALETTE["deps-2"]);
+    const drill = S.sim.has(n.id);
+    const fill = drill ? PALETTE["sim-2"]
+      : wrong ? PALETTE["threat-2"]
+      : (PALETTE[st.hue] || PALETTE["deps-2"]);
 
     /* THE STANDING HALO. Red alone is one of four hues under
        colour-vision deficiency and this is an all-pairs surface, so the
@@ -843,7 +1031,7 @@ function draw() {
       ctx.globalAlpha = dimmed ? dim : 0.25 + breathe * 0.55;
       ctx.beginPath();
       ctx.arc(p.x, p.y, r + 3 + breathe * 7, 0, Math.PI * 2);
-      ctx.strokeStyle = PALETTE["threat-glow"];
+      ctx.strokeStyle = PALETTE[drill ? "sim-glow" : "threat-glow"];
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.globalAlpha = dimmed ? dim : 1;
@@ -864,18 +1052,21 @@ function draw() {
        to the node, plus a slow breath. Tight rather than a wide halo so
        it survives a dense cluster, and the fill underneath is untouched
        so the node is still legibly a Service or a Package. */
+    /* S.marked is only ever written by a simulation, so the collar is always
+       the drill colour. It used to be threat-2, which put the reach of a
+       rehearsal in the same red as the findings it was rehearsing against. */
     if (marked && !wrong) {
       const breathe = 0.55 + 0.45 * Math.sin(now / 430 + (n.id % 13) * 0.5);
       ctx.globalAlpha = dimmed ? dim : 1;
       ctx.beginPath();
       ctx.arc(p.x, p.y, r + 2.5, 0, Math.PI * 2);
-      ctx.strokeStyle = PALETTE["threat-2"];
+      ctx.strokeStyle = PALETTE["sim-2"];
       ctx.lineWidth = 2.2;
       ctx.stroke();
       ctx.globalAlpha = dimmed ? dim : breathe * 0.5;
       ctx.beginPath();
       ctx.arc(p.x, p.y, r + 6 + breathe * 6, 0, Math.PI * 2);
-      ctx.strokeStyle = PALETTE["threat-glow"];
+      ctx.strokeStyle = PALETTE["sim-glow"];
       ctx.lineWidth = 1.6;
       ctx.stroke();
       ctx.globalAlpha = dimmed ? dim : 1;
@@ -1248,8 +1439,14 @@ function renderDetail(n, detail) {
 }
 
 function updateHud() {
-  el("hud").textContent =
+  const base =
     `${S.nodes.length.toLocaleString()} nodes · ${S.edges.length.toLocaleString()} edges · ${(S.cam.k).toFixed(2)}x`;
+  if (!S.pick.size && !S.q) { el("hud").textContent = base; return; }
+  const shown = S.nodes.reduce((t, n) => t + (
+    (!S.pick.size || S.pick.has(n.label)) && (!S.q || S.hits.has(n.id)) ? 1 : 0), 0);
+  const why = [S.q ? `"${S.q}"` : "", [...S.pick].join(", ")].filter(Boolean).join(" · ");
+  el("hud").textContent =
+    `${shown.toLocaleString()} of ${S.nodes.length.toLocaleString()} shown · ${why}`;
 }
 
 /* ==================================================================
@@ -1273,6 +1470,10 @@ function clearGraph(headline, detail) {
   el("wrongN").textContent = "0";
   el("wrongList").innerHTML = '<div class="muted">Nothing on record yet.</div>';
   el("omitted").innerHTML = "";
+  S.q = ""; S.hits.clear();
+  if (el("find")) el("find").value = "";
+  el("findHits").innerHTML = ""; note("findNote", "");
+  buildLegend();          // every count is now zero, and the key should say so
   renderDetail(null);
   el("overlay").hidden = false;
   el("overlay").querySelector("h3").textContent = headline;
@@ -1340,6 +1541,12 @@ async function loadGraph({ progressive = false, quiet = false } = {}) {
       setTimeout(openingView, 1200);
       setTimeout(openingView, 4000);
     }
+    // The per-type counts on the filter buttons come from the node set, so
+    // the key is rebuilt here rather than only at boot, where it would have
+    // rendered every type as "—" and disabled.
+    buildLegend();
+    // Hit ids belong to the node set they were found in.
+    if (S.q) runSearch(el("find") ? el("find").value : "");
     el("gNodes").textContent = g.stats.nodes.toLocaleString();
     el("gEdges").textContent = g.stats.edges.toLocaleString();
     el("omitted").innerHTML = (g.omitted || [])
@@ -1382,14 +1589,36 @@ const WRONG_EDGES = new Set(["AFFECTS", "COMPROMISES"]);
    it -- and the count in the bar never lies about how many there are. */
 const ANIMATE_CEILING = 60;
 
+/* A drill, told apart from a real finding by what the store already records
+   rather than by anything this page remembers. `create_incident()` writes
+   `status: "SIMULATED_COMPROMISED"` and an id prefixed `SIM-`, so a simulated
+   incident is still recognisably simulated after a reload, tomorrow, and in a
+   tab that never saw the button pressed. Recency is not the property that
+   matters here -- provenance is. */
+function isSimulated(n) {
+  if (!n || n.label !== "Incident") return false;
+  const m = n.meta || {};
+  return m.status === "SIMULATED_COMPROMISED"
+    || String(m.incident_id || "").startsWith("SIM-");
+}
+
 function markWhatIsWrong() {
   S.wrong = new Set();
-  for (const n of S.nodes) if (WRONG_LABELS.has(n.label)) S.wrong.add(n.id);
+  S.sim = new Set();
+  for (const n of S.nodes) {
+    if (WRONG_LABELS.has(n.label)) S.wrong.add(n.id);
+    if (isSimulated(n)) S.sim.add(n.id);
+  }
   for (const e of S.edges) {
     if (!WRONG_EDGES.has(e.type)) continue;
     // Both ends: the advisory itself, and the exact version it names.
     if (S.byId.has(e.source)) S.wrong.add(e.source);
     if (S.byId.has(e.target)) S.wrong.add(e.target);
+    // The version a drill compromises is part of the drill, not a finding
+    // in its own right -- it carries the simulated colour with the incident.
+    if (e.type === "COMPROMISES" && S.sim.has(e.source) && S.byId.has(e.target)) {
+      S.sim.add(e.target);
+    }
   }
   S.animateWrong = S.wrong.size <= ANIMATE_CEILING;
   setStat("sWrong", S.wrong.size.toLocaleString());
