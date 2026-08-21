@@ -152,16 +152,13 @@ def test_the_node_ceiling_is_reported_not_silent():
     assert "40" in dropped[0]["why"]
 
 
-def test_a_label_that_fails_to_scan_does_not_abort_the_build():
-    """One empty or unknown label must not cost the whole map."""
+def test_an_absent_label_is_zero_rows_not_an_error():
+    """The case the old swallow was written for does not raise in the first place.
 
-    class Flaky(FakeClient):
-        def query(self, statement, parameters=None):
-            if f"(n:{schema.ADVISORY})" in statement:
-                raise RuntimeError("label scan exploded")
-            return super().query(statement, parameters)
-
-    client = Flaky(
+    A scan of a label the graph has never held comes back empty, so nothing has
+    to be caught for it -- which is why the catch is gone.
+    """
+    client = FakeClient(
         nodes={schema.SERVICE: [{"id": 1, "name": "svc"}]}, edges={}
     )
     g = build_full_graph(
@@ -169,6 +166,43 @@ def test_a_label_that_fails_to_scan_does_not_abort_the_build():
     )
     assert g["stats"]["nodes"] == 1
     assert g["stats"]["by_label"][schema.ADVISORY] == 0
+
+
+def test_a_failed_sweep_raises_rather_than_drawing_an_empty_graph():
+    """A silent empty map reads as "you are not exposed", which is the worst lie.
+
+    Every sweep used to be wrapped in a bare `except`, so one stale token turned
+    twelve 401s into `{"nodes": [], "edges": []}` with a 200 on it. The failure
+    has to reach the caller, which turns it into a 503 that names the cause.
+    """
+
+    class Flaky(FakeClient):
+        def query(self, statement, parameters=None):
+            if f"(n:{schema.ADVISORY})" in statement:
+                raise RuntimeError("HTTP 401 from HydraDB")
+            return super().query(statement, parameters)
+
+    client = Flaky(
+        nodes={schema.SERVICE: [{"id": 1, "name": "svc"}]}, edges={}
+    )
+    with pytest.raises(RuntimeError, match="401"):
+        build_full_graph(client, GraphSpec(labels=(schema.SERVICE, schema.ADVISORY)))
+
+
+def test_a_failed_edge_sweep_raises_too():
+    """Nodes without their edges is a map of unconnected dots, not a smaller map."""
+
+    class Flaky(FakeClient):
+        def query(self, statement, parameters=None):
+            if f"[e:{schema.HAS_VERSION}]" in statement:
+                raise RuntimeError("HTTP 401 from HydraDB")
+            return super().query(statement, parameters)
+
+    client = Flaky(
+        nodes={schema.PACKAGE: [{"id": 1, "name": "p"}]}, edges={}
+    )
+    with pytest.raises(RuntimeError, match="401"):
+        build_full_graph(client, GraphSpec(labels=(schema.PACKAGE,)))
 
 
 def test_display_name_falls_back_rather_than_showing_an_id():

@@ -22,6 +22,18 @@ encodes *possibility*, not installation, so it would dominate the picture with
 exactly the range-only signal the rest of the project exists to keep separate
 from the truth. Both are available on request, and the counts always report
 what was omitted.
+
+**Why a failed sweep is not caught here.** Each sweep used to be wrapped in a
+bare ``except Exception: found = []``, on the theory that a label with no nodes
+is not an error. It is not -- a scan of an absent label returns zero rows and
+raises nothing -- so that clause never caught the case it was written for. What
+it did catch was every real failure: a stale ``HYDRA_TOKEN`` makes all twelve
+sweeps 401, and the caller was handed ``{"nodes": [], "edges": []}`` with a 200
+and a full stats block reading zero. The browser then drew "Graph is empty --
+nothing has been ingested yet" over a graph that was fully populated. For a tool
+whose whole output is "here is what you are exposed to", a silent empty answer
+is the one failure mode worth crashing over, so the error now reaches
+``/api/graph/full`` and comes back as a 503 that names the cause.
 """
 
 from __future__ import annotations
@@ -189,10 +201,7 @@ def build_full_graph(
     nodes: list[dict] = []
     per_label: dict[str, int] = {}
     for label in labels:
-        try:
-            found = _sweep_nodes(client, label)
-        except Exception:  # noqa: BLE001 - a label with no nodes is not an error
-            found = []
+        found = _sweep_nodes(client, label)
         per_label[label] = len(found)
         nodes.extend(found)
 
@@ -212,10 +221,7 @@ def build_full_graph(
     edges: list[dict] = []
     per_edge: dict[str, int] = {}
     for etype, src, dst in sweeps:
-        try:
-            pairs = _sweep_edges(client, etype, src, dst)
-        except Exception:  # noqa: BLE001
-            pairs = []
+        pairs = _sweep_edges(client, etype, src, dst)
         # An edge to a node that was not drawn would be a line to nowhere.
         kept = [p for p in pairs if p[0] in known and p[1] in known]
         per_edge[etype] = per_edge.get(etype, 0) + len(kept)

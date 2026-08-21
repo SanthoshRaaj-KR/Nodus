@@ -251,8 +251,9 @@ details.keybox .body { padding: 0 14px 14px; }
   <div class="panel">
     <h2 class="panel-title"><span class="step">1</span> Point at a repo</h2>
     <label class="field">
-      <span>Any checkout with a package-lock.json or requirements.txt</span>
-      <input type="text" id="repoPath" placeholder="/path/to/your/repo" spellcheck="false">
+      <span>A GitHub URL, or any checkout with a package-lock.json or requirements.txt</span>
+      <input type="text" id="repoPath"
+             placeholder="github.com/owner/name  ·  or /path/to/your/repo" spellcheck="false">
     </label>
     <div class="btn-row">
       <button class="btn" id="btnInspect">Inspect</button>
@@ -569,13 +570,17 @@ function seedLayout() {
   const n = S.nodes.length || 1;
   const R = Math.max(260, Math.sqrt(n) * 26);
   S.nodes.forEach((node, i) => {
+    node.deg = 0;
+    // Set by a progressive reload for a node that was already on screen. It
+    // keeps the position it had, and the simulation absorbs the new arrivals
+    // around it.
+    if (node.placed) return;
     // Golden-angle spiral: an even starting spread, so the simulation
     // untangles a graph rather than exploding a random pile.
     const a = i * 2.39996, rad = R * Math.sqrt(i / n);
     node.x = Math.cos(a) * rad;
     node.y = Math.sin(a) * rad;
     node.vx = 0; node.vy = 0;
-    node.deg = 0;
   });
   for (const e of S.edges) {
     const a = S.byId.get(e.source), b = S.byId.get(e.target);
@@ -1250,21 +1255,74 @@ function updateHud() {
 /* ==================================================================
    Data
    ================================================================== */
-async function loadGraph() {
-  el("overlay").hidden = true;
-  el("hud").textContent = "loading graph…";
+/* Wipe the canvas back to nothing and say why.
+
+   Called the moment a scan is accepted. The old graph describes the previous
+   repository, and `reset=true` is about to drop the store it came from, so
+   leaving it up shows a picture of something that no longer exists -- which is
+   what it did until you navigated away and back, because `loadGraph()` only
+   ran on `done`. */
+function clearGraph(headline, detail) {
+  S.nodes = []; S.edges = []; S.byId = new Map();
+  S.wrong = new Set(); S.hot = new Map(); S.marked = new Set();
+  S.selected = null; S.hovered = null;
+  S.loaded = false; S.alpha = 0;
+  el("gNodes").textContent = "0";
+  el("gEdges").textContent = "0";
+  setStat("sWrong", "0");
+  el("wrongN").textContent = "0";
+  el("wrongList").innerHTML = '<div class="muted">Nothing on record yet.</div>';
+  el("omitted").innerHTML = "";
+  renderDetail(null);
+  el("overlay").hidden = false;
+  el("overlay").querySelector("h3").textContent = headline;
+  el("overlay").querySelector("p").textContent = detail;
+  el("hud").textContent = "waiting for the scan…";
+}
+
+/* `progressive` means "this is a mid-scan refresh": keep the camera and the
+   positions of nodes already on screen, so the graph grows in place instead of
+   being re-seeded and re-framed under the cursor every time a stage lands.
+   `quiet` means a failure is expected and uninteresting -- the reset stage
+   drops the store and restarts the node, and a request that lands in that
+   window should not paint "could not load the graph" over a scan that is
+   proceeding normally. */
+async function loadGraph({ progressive = false, quiet = false } = {}) {
+  const hadNodes = S.nodes.length > 0;
+  if (!progressive) el("overlay").hidden = true;
+  el("hud").textContent = progressive ? "building graph…" : "loading graph…";
   try {
     const r = await fetch("/api/graph/full");
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) {
+      /* The server says *why* -- an unreachable node, a token that does not
+         match the one it was started with -- and "HTTP 503" threw that away.
+         Reading the detail is the difference between a fixable message and
+         an empty canvas that looks like a clean bill of health. */
+      let detail = `HTTP ${r.status}`;
+      try {
+        const d = await r.json();
+        if (d && d.detail) detail = String(d.detail);
+      } catch (_) { /* not JSON -- the status is all there is */ }
+      throw new Error(detail);
+    }
     const g = await r.json();
-    S.nodes = g.nodes.map((n) => ({ ...n, x: 0, y: 0, vx: 0, vy: 0, deg: 0 }));
+    /* A node that was already on screen keeps where it was. Without this a
+       mid-scan refresh re-seeds every position, and the graph appears to jump
+       to a new layout each time a stage completes rather than growing. */
+    const held = progressive ? S.byId : new Map();
+    S.nodes = g.nodes.map((n) => {
+      const was = held.get(n.id);
+      return was
+        ? { ...n, x: was.x, y: was.y, vx: was.vx, vy: was.vy, deg: 0, placed: true }
+        : { ...n, x: 0, y: 0, vx: 0, vy: 0, deg: 0, placed: false };
+    });
     S.edges = g.edges;
     S.byId = new Map(S.nodes.map((n) => [n.id, n]));
     S.loaded = true;
     markWhatIsWrong();
     seedLayout();
     S.alpha = 1;
-    S.cam = { x: 0, y: 0, k: 0.6 };
+    if (!progressive || !hadNodes) S.cam = { x: 0, y: 0, k: 0.6 };
     /* Fit once the layout has had a moment to open out, so the first
        view frames the whole graph instead of the seed spiral.
 
@@ -1276,20 +1334,29 @@ async function loadGraph() {
       if (S.w < 620 && S.wrong.size) focusOn([...S.wrong]);
       else fitToView();
     };
-    setTimeout(openingView, 1200);
-    setTimeout(openingView, 4000);
+    /* Frame it on the first paint of a run, then leave the camera alone: a
+       mid-scan refit every few seconds fights whoever is panning. */
+    if (!progressive || !hadNodes) {
+      setTimeout(openingView, 1200);
+      setTimeout(openingView, 4000);
+    }
     el("gNodes").textContent = g.stats.nodes.toLocaleString();
     el("gEdges").textContent = g.stats.edges.toLocaleString();
     el("omitted").innerHTML = (g.omitted || [])
       .map((o) => `not drawn: <b>${esc(o.what)}</b> — ${esc(o.why)}`).join("<br>");
     updateHud();
-    if (!S.nodes.length) {
+    if (S.nodes.length) {
+      el("overlay").hidden = true;
+    } else if (!quiet) {
       el("overlay").hidden = false;
       el("overlay").querySelector("h3").textContent = "Graph is empty";
       el("overlay").querySelector("p").textContent =
         "Nothing has been ingested yet. Point at a repository above and press Scan & build.";
     }
   } catch (err) {
+    // Mid-scan the store is being dropped and rebuilt underneath us, so a
+    // failure here is the expected shape of "not ready yet", not a fault.
+    if (quiet) { el("hud").textContent = "building graph…"; return; }
     el("hud").textContent = "graph failed to load";
     el("overlay").hidden = false;
     el("overlay").querySelector("h3").textContent = "Could not load the graph";
@@ -1444,16 +1511,48 @@ el("btnInspect").onclick = async () => {
   } catch (e) { note("repoNote", esc(String(e)), "bad"); }
 };
 
+/* A GitHub URL and a local checkout are the same scan with a different first
+   stage, and the server already has both entry points -- `/api/repo/from-github`
+   clones and then runs the identical pipeline. Deciding here rather than making
+   the user pick means a pasted link works in the field that already exists. */
+function ingestRequest(raw) {
+  /* Rebuilt from the captured owner/name rather than passed through, because
+     the server accepts exactly `https://github.com/owner/name`: a `www.`, an
+     `http://` or a trailing `.git` that reads fine to a person is a 400 there.
+     Normalising here means every form someone might paste arrives canonical. */
+  const web = raw.match(
+    /^(?:https?:\/\/)?(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+  const ssh = raw.match(/^git@github\.com:([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+  const hit = web || ssh;
+  if (hit) {
+    const url = `https://github.com/${hit[1]}/${hit[2]}`;
+    return { url: `/api/repo/from-github?url=${encodeURIComponent(url)}`, what: url };
+  }
+  return {
+    url: `/api/repo/ingest?path=${encodeURIComponent(raw)}&reset=true`,
+    what: raw,
+  };
+}
+
 el("btnIngest").onclick = async () => {
   const p = el("repoPath").value.trim();
-  if (!p) return note("repoNote", "Type a path first.", "bad");
+  if (!p) return note("repoNote", "Type a path or paste a GitHub URL first.", "bad");
+  const req = ingestRequest(p);
   el("btnIngest").disabled = true;
-  note("repoNote", "Scanning — this drops the current graph and rebuilds it.");
+  note("repoNote", "Starting…");
   try {
-    const r = await fetch(
-      `/api/repo/ingest?path=${encodeURIComponent(p)}&reset=true`, { method: "POST" });
+    const r = await fetch(req.url, { method: "POST" });
     const d = await r.json();
-    if (!r.ok) { note("repoNote", esc(d.detail || "failed"), "bad"); el("btnIngest").disabled = false; }
+    if (!r.ok) {
+      note("repoNote", esc(d.detail || "failed"), "bad");
+      el("btnIngest").disabled = false;
+      return;
+    }
+    /* The job was accepted, so the graph on screen is now the previous
+       repository's. Drop it here rather than waiting for `done`. */
+    note("repoNote", `Scanning ${esc(req.what)} — the graph rebuilds as each stage lands.`);
+    beginScan();
+    applyJob(d);
   } catch (e) { note("repoNote", esc(String(e)), "bad"); el("btnIngest").disabled = false; }
 };
 
@@ -1605,21 +1704,84 @@ async function refreshBursts() {
   } catch (_) { /* the feed is the primary surface */ }
 }
 
+/* Progress bookkeeping for the running job.
+
+   `scanning` gates the quiet mid-scan reloads, and `donePips` is how many
+   stages had finished the last time we looked -- the trigger for pulling the
+   graph again is a stage *completing*, which is the only moment new rows are
+   guaranteed to be in the store. */
+let scanning = false;
+let donePips = 0;
+let stageRefresh = null;
+
+/* Which finished stages are worth a refetch. `reset` drops the store, so
+   reloading after it would only confirm that it is empty, and `clone` has not
+   touched the graph at all. The two ingest stages are where nodes appear, and
+   `verify` is where the advisory edges land. */
+const GRAPH_STAGES = ["package tier ingest", "pypi tier ingest", "verify"];
+
+function beginScan() {
+  scanning = true;
+  donePips = 0;
+  el("btnIngest").disabled = true;
+  clearGraph(
+    "Building the graph",
+    "The previous repository has been dropped. Nodes appear as each stage completes."
+  );
+}
+
+function endScan() {
+  scanning = false;
+  el("btnIngest").disabled = false;
+  if (stageRefresh) { clearTimeout(stageRefresh); stageRefresh = null; }
+}
+
 function applyJob(job) {
+  const stages = job.stages || [];
   const box = el("stages");
-  box.innerHTML = (job.stages || []).map((s) =>
+  box.innerHTML = stages.map((s) =>
     `<div class="stage ${esc(s.status)}"><i class="pip"></i>
        <span>${esc(s.name)}</span><span class="secs">${s.seconds ? s.seconds + "s" : ""}</span></div>`
   ).join("");
+
+  /* A job can also be started from another tab, from the console, or from the
+     CLI. The first frame that says "running" is the signal to drop the old
+     graph here too, so this page never shows a repository the store no longer
+     holds. */
+  if (job.status === "running" && !scanning) beginScan();
+
+  if (scanning) {
+    const finished = stages.filter((s) => s.status === "ok");
+    if (finished.length > donePips) {
+      donePips = finished.length;
+      const last = finished[finished.length - 1];
+      if (GRAPH_STAGES.includes(last.name)) {
+        /* Debounced: two stages can close within a few ms of each other, and
+           /api/graph/full is a whole-graph read. */
+        if (stageRefresh) clearTimeout(stageRefresh);
+        stageRefresh = setTimeout(
+          () => loadGraph({ progressive: true, quiet: true }), 250);
+      }
+    }
+  }
+
+  /* Only a run this page actually watched earns a final reload. The stream
+     replays the last job in its opening snapshot, so without this every page
+     load would fetch the whole graph twice: once from boot, once from a job
+     that finished before the tab was even open. */
+  const wasScanning = scanning;
   if (job.status === "done") {
-    el("btnIngest").disabled = false;
+    endScan();
     note("repoNote",
       `Built in ${job.elapsed_s}s — ${(job.services || []).length} service(s), ` +
       `${job.advisories} advisory link(s).`, "good");
-    loadGraph();
+    if (wasScanning) loadGraph({ progressive: true });
   } else if (job.status === "failed") {
-    el("btnIngest").disabled = false;
+    endScan();
     note("repoNote", esc(job.error || "pipeline failed"), "bad");
+    // Whatever the stages that did succeed managed to write is still worth
+    // drawing, and it is the evidence for where the run stopped.
+    if (wasScanning) loadGraph({ progressive: true });
   }
 }
 
@@ -1683,16 +1845,54 @@ function renderSimReport(sim, r) {
   note("simNote", parts.join("<br>"), exposed.length ? "bad" : "good");
 }
 
-function applySim(sim) {
-  if (!sim) { S.marked.clear(); return; }
+/* An incident is not only a highlight. `create_incident()` writes an Incident
+   node and the edge naming the version it compromises, so the moment a run
+   finishes the copy of the graph in this browser is missing rows. Lighting up
+   `hot_nodes` against the old node set drew the blast radius but not the
+   incident itself, and it only appeared on the next full page load -- which is
+   why adding a threat looked like it needed a reload.
+
+   `simRunning` is "this page watched the run start", so the stream replaying a
+   finished simulation in its opening snapshot does not refetch a graph that
+   boot has already loaded. `simDrawn` is "an incident is on the canvas", so a
+   retraction knows whether it has anything to take away. */
+let simRunning = false;
+let simDrawn = false;
+
+async function applySim(sim) {
+  if (!sim) {
+    S.marked.clear();
+    // Retraction deletes the incident node. Drop it from the canvas too,
+    // otherwise "the graph is back as it was" is not true yet.
+    if (simDrawn) {
+      simDrawn = false;
+      await loadGraph({ progressive: true, quiet: true });
+    }
+    return;
+  }
   if (sim.status === "running") {
+    simRunning = true;
     note("simNote", `${esc(sim.stage || "working")}…`);
     return;
   }
-  if (sim.status === "failed") return note("simNote", esc(sim.error || "failed"), "bad");
+  if (sim.status === "failed") {
+    simRunning = false;
+    return note("simNote", esc(sim.error || "failed"), "bad");
+  }
 
   const r = sim.result || {};
   renderSimReport(sim, r);
+
+  /* Pull in the incident the run just wrote, then light up the radius.
+     The order matters: focusOn() frames node ids, and the new ones are only
+     in S.byId after the refetch. markWhatIsWrong() runs inside loadGraph, so
+     the incident also lands in the "known to be wrong" list and the app-bar
+     count without anything here doing it by hand. */
+  simDrawn = true;
+  if (simRunning) {
+    simRunning = false;
+    await loadGraph({ progressive: true, quiet: true });
+  }
 
   S.marked = new Set(r.hot_nodes || []);
   S.alpha = Math.max(S.alpha, 0.25);

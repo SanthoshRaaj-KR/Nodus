@@ -39,6 +39,7 @@ from queue import Empty, Full, Queue
 from typing import Any
 
 from blastradius import schema
+from blastradius.chat.config import load_env
 from blastradius.hydra_client import (
     DEFAULT_GRAPH,
     DEFAULT_HTTP,
@@ -46,6 +47,18 @@ from blastradius.hydra_client import (
     DEFAULT_TOKEN,
     HydraClient,
 )
+
+# Loaded here rather than relying on `ui.server`, which calls it too. This
+# module builds its client at import time (`state = LiveState()` at the foot of
+# the file), and `ui/server.py` imports this module *above* its own `load_env()`
+# call -- so by the time `LiveState.__init__` reads `os.environ`, nothing had
+# read `.env` yet and every HYDRA_* here silently fell back to its localhost
+# default. That is invisible in local dev, where the defaults happen to be
+# right, and fatal in docker-compose, where `HYDRA_HTTP=http://hydradb:8443`
+# lives only in the environment this never saw. `load_env` never overrides an
+# already-set variable, so calling it from both places is safe and order does
+# not matter.
+load_env()
 
 #: Ingest is slower against HydraDB's S3 backend than against local-filesystem
 #: storage -- enough that the client's default 25s timeout is marginal there.
